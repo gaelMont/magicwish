@@ -7,7 +7,7 @@ import { db } from '@/lib/firebase';
 import { collection, onSnapshot, deleteDoc, doc, updateDoc, increment } from 'firebase/firestore';
 import toast from 'react-hot-toast';
 import ImportModal from '@/components/ImportModal';
-import ConfirmModal from '@/components/ConfirmModal'; // <--- 1. On importe le nouveau composant
+import ConfirmModal from '@/components/ConfirmModal'; 
 
 type WishlistCard = {
   id: string;
@@ -22,10 +22,7 @@ export default function WishlistPage() {
   const { user, loading } = useAuth();
   const [cards, setCards] = useState<WishlistCard[]>([]);
   
-  // États pour les Modals
   const [isImportOpen, setIsImportOpen] = useState(false);
-  
-  // 2. État pour savoir QUELLE carte on veut supprimer (si null, pas de suppression en cours)
   const [cardToDelete, setCardToDelete] = useState<string | null>(null);
 
   useEffect(() => {
@@ -47,29 +44,27 @@ export default function WishlistPage() {
     return () => unsubscribe();
   }, [user]);
 
-  // Gestion quantité
   const updateQuantity = async (cardId: string, amount: number, currentQuantity: number) => {
     if (!user) return;
     const cardRef = doc(db, 'users', user.uid, 'wishlist', cardId);
 
+    // Si on arrive à 0, on propose de supprimer
     if (currentQuantity + amount <= 0) {
-      // 3. Au lieu de confirm(), on ouvre notre Modal en stockant l'ID de la carte
       setCardToDelete(cardId);
     } else {
       await updateDoc(cardRef, { quantity: increment(amount) });
     }
   };
 
-  // 4. La fonction qui supprime VRAIMENT (appelée par le Modal)
   const confirmDelete = async () => {
     if (!user || !cardToDelete) return;
     try {
       await deleteDoc(doc(db, 'users', user.uid, 'wishlist', cardToDelete));
-      toast.success('Carte retirée', { icon: '🗑️' });
+      toast.success('Carte supprimée', { icon: '🗑️' });
     } catch (error) {
-      toast.error("Erreur lors de la suppression");
+      toast.error("Erreur suppression");
     } finally {
-      setCardToDelete(null); // On ferme le modal
+      setCardToDelete(null);
     }
   };
 
@@ -111,17 +106,21 @@ export default function WishlistPage() {
       {cards.length === 0 ? (
         <div className="text-center py-20 bg-gray-50 dark:bg-gray-800/50 rounded-xl border-2 border-dashed border-gray-200 dark:border-gray-700">
           <p className="text-xl text-gray-500 mb-4">Votre wishlist est vide.</p>
-          <button 
-             onClick={() => setIsImportOpen(true)}
-             className="text-blue-600 hover:underline"
-          >
-            Importer une collection CSV ?
-          </button>
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {cards.map((card) => (
-            <div key={card.id} className="flex bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden p-3 gap-4 items-center border border-gray-100 dark:border-gray-700">
+            <div key={card.id} className="relative group flex bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden p-3 gap-4 items-center border border-gray-100 dark:border-gray-700 hover:border-blue-300 dark:hover:border-blue-500 transition-colors">
+              
+              {/* BOUTON POUBELLE (Visible au survol ou tout le temps sur mobile) */}
+              <button
+                onClick={() => setCardToDelete(card.id)}
+                className="absolute top-2 right-2 p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-full transition opacity-100 md:opacity-0 md:group-hover:opacity-100"
+                title="Supprimer la carte"
+              >
+                🗑️
+              </button>
+
               <img
                 src={card.imageUrl}
                 alt={card.name}
@@ -129,7 +128,7 @@ export default function WishlistPage() {
               />
               
               <div className="flex-1 min-w-0">
-                <h3 className="font-bold text-lg truncate" title={card.name}>{card.name}</h3>
+                <h3 className="font-bold text-lg truncate pr-6" title={card.name}>{card.name}</h3>
                 
                 {card.setName && (
                   <p className="text-xs text-blue-600 dark:text-blue-400 mb-1 truncate font-medium">
@@ -172,18 +171,15 @@ export default function WishlistPage() {
         </div>
       )}
 
-      {/* --- LES MODALS --- */}
-      
-      {/* Modal d'import */}
+      {/* MODALS */}
       <ImportModal isOpen={isImportOpen} onClose={() => setIsImportOpen(false)} />
 
-      {/* 5. Modal de Confirmation de suppression */}
       <ConfirmModal 
-        isOpen={!!cardToDelete} // Ouvert si on a une carte à supprimer
+        isOpen={!!cardToDelete} 
         onClose={() => setCardToDelete(null)}
         onConfirm={confirmDelete}
-        title="Retirer la carte ?"
-        message="Cette action retirera définitivement cet exemplaire de votre liste."
+        title="Supprimer la carte ?"
+        message="Voulez-vous vraiment retirer cette carte de votre liste ?"
       />
 
     </main>
