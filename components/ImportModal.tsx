@@ -46,7 +46,7 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
     const qtyString = normalizedRow['quantity'] || normalizedRow['count'] || normalizedRow['qty'] || normalizedRow['qte'] || '1';
     const quantity = parseInt(qtyString) || 1;
     
-    // ID unique : on nettoie bien le nom pour l'ID aussi (on garde que la 1ère partie avant //)
+    // ID : On nettoie le nom pour l'ID
     const cleanNameID = name.split(' // ')[0];
     const id = `${cleanNameID}-${setCode}`.toLowerCase().replace(/[^a-z0-9]/g, '-');
 
@@ -102,12 +102,10 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
             const batch = writeBatch(db);
 
             chunk.forEach(inputCard => {
-              // --- CORRECTION MAJEURE ICI ---
-              // On cherche une correspondance "souple" pour gérer les cartes Double Face
+              // Recherche souple (A inclut B ou B inclut A)
               const found = foundData.find((f: any) => {
                 const scryfallName = f.name.toLowerCase();
                 const csvName = inputCard.name.toLowerCase();
-                // On vérifie si l'un est inclus dans l'autre (ex: "Ludevic" dans "Ludevic // Olag")
                 return scryfallName.includes(csvName) || csvName.includes(scryfallName);
               });
 
@@ -117,7 +115,6 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
                 const price = found.prices?.eur ? parseFloat(found.prices.eur) : 0;
                 let imageUrl = "https://cards.scryfall.io/large/front/a/6/a6984342-f723-4e80-8e69-902d287a915f.jpg";
                 
-                // Gestion Image Recto-Verso
                 if (found.image_uris?.normal) {
                     imageUrl = found.image_uris.normal;
                 } else if (found.card_faces?.[0]?.image_uris?.normal) {
@@ -125,7 +122,8 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
                 }
 
                 batch.set(cardRef, {
-                  name: found.name, // On enregistre le vrai nom complet officiel
+                  // CORRECTION : On ne garde que le recto pour le nom
+                  name: found.name.split(' // ')[0], 
                   quantity: increment(inputCard.quantity),
                   imageUrl: imageUrl,
                   price: price,
@@ -134,7 +132,6 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
                   addedAt: new Date()
                 }, { merge: true });
               } else {
-                // Pas trouvé : on enregistre quand même
                 batch.set(cardRef, {
                   name: inputCard.name,
                   quantity: increment(inputCard.quantity),
