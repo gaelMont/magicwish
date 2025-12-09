@@ -10,6 +10,7 @@ import toast from 'react-hot-toast';
 // --- TYPES ---
 type ScryfallCard = {
   id: string;
+  oracle_id: string; // <--- C'est la clé magique pour le groupement
   name: string;
   set_name: string;
   set: string;
@@ -44,7 +45,7 @@ const getCardImage = (card: ScryfallCard): string => {
 const CardGroup = ({ name, versions }: { name: string, versions: ScryfallCard[] }) => {
   const { user } = useAuth();
   
-  // On sélectionne par défaut la première version
+  // Par défaut, on prend la version la plus récente (souvent la 1ère de la liste renvoyée)
   const [selectedCard, setSelectedCard] = useState<ScryfallCard>(versions[0]);
 
   const handleVersionChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
@@ -62,6 +63,9 @@ const CardGroup = ({ name, versions }: { name: string, versions: ScryfallCard[] 
     const wishlistRef = doc(db, 'users', user.uid, 'wishlist', card.id);
     const validImageUrl = getCardImage(card);
     const priceNumber = card.prices?.eur ? parseFloat(card.prices.eur) : 0;
+    
+    // On nettoie le nom pour la sauvegarde aussi
+    const cleanName = card.name.split(' // ')[0];
 
     try {
       const docSnap = await getDoc(wishlistRef);
@@ -73,7 +77,7 @@ const CardGroup = ({ name, versions }: { name: string, versions: ScryfallCard[] 
         toast.success(`+1 exemplaire (${card.set_name})`);
       } else {
         await setDoc(wishlistRef, {
-          name: card.name, // On garde le nom complet ici, ou tu peux mettre 'name' nettoyé si tu préfères
+          name: cleanName, // On sauvegarde le nom propre
           imageUrl: validImageUrl,
           quantity: 1,
           price: priceNumber,
@@ -92,11 +96,11 @@ const CardGroup = ({ name, versions }: { name: string, versions: ScryfallCard[] 
   return (
     <div className="relative group flex flex-col h-full bg-white dark:bg-gray-800 rounded-xl shadow-md border border-gray-100 dark:border-gray-700 overflow-hidden">
       {/* Image qui change selon la sélection */}
-      <div className="relative w-full min-h-[250px] bg-gray-200 dark:bg-gray-900">
+      <div className="relative w-full min-h-[250px] bg-gray-200 dark:bg-gray-900 flex items-center justify-center p-2">
         <img
           src={getCardImage(selectedCard)}
           alt={name}
-          className="w-full h-full object-contain p-2"
+          className="w-full h-full object-contain max-h-[350px]"
         />
       </div>
 
@@ -156,24 +160,30 @@ export default function HomePage() {
       const data = await response.json();
       const rawCards: ScryfallCard[] = data.data || [];
 
-      // --- ALGORITHME DE GROUPEMENT NETTOYÉ ---
+      // --- NOUVEL ALGORITHME DE GROUPEMENT (PAR ORACLE_ID) ---
+      // C'est beaucoup plus robuste : toutes les variantes d'une carte partagent le même oracle_id
       const groups = new Map<string, ScryfallCard[]>();
 
       rawCards.forEach(card => {
-        // --- MODIFICATION ICI : On nettoie le nom avant de grouper ---
-        // "Sol Ring // Sol Ring" devient "Sol Ring"
-        const cleanName = card.name.split(' // ')[0]; 
+        // Si oracle_id n'existe pas (rare, cartes spéciales), on utilise le nom comme secours
+        const groupKey = card.oracle_id || card.name; 
 
-        if (!groups.has(cleanName)) {
-          groups.set(cleanName, []);
+        if (!groups.has(groupKey)) {
+          groups.set(groupKey, []);
         }
-        groups.get(cleanName)?.push(card);
+        groups.get(groupKey)?.push(card);
       });
 
-      const resultsArray = Array.from(groups.entries()).map(([name, versions]) => ({
-        name,
-        versions
-      }));
+      // On transforme le Map en tableau pour l'afficher
+      const resultsArray = Array.from(groups.values()).map((versions) => {
+        // Pour le nom d'affichage, on prend le nom de la première carte 
+        // et on le nettoie (on retire " // ...") pour que ce soit joli
+        const displayName = versions[0].name.split(' // ')[0];
+        return {
+          name: displayName,
+          versions: versions
+        };
+      });
 
       setGroupedResults(resultsArray);
 
@@ -211,7 +221,7 @@ export default function HomePage() {
       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
         {groupedResults.map((group) => (
           <CardGroup 
-            key={group.name} 
+            key={group.name} // React demande une clé unique
             name={group.name} 
             versions={group.versions} 
           />
