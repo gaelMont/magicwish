@@ -4,7 +4,6 @@
 import { useEffect, useState } from 'react';
 import { useAuth } from '@/lib/AuthContext';
 import { db } from '@/lib/firebase';
-// On ajoute 'runTransaction' aux imports
 import { collection, onSnapshot, deleteDoc, doc, updateDoc, increment, runTransaction } from 'firebase/firestore';
 import toast from 'react-hot-toast';
 import ImportModal from '@/components/ImportModal';
@@ -18,8 +17,11 @@ type WishlistCard = {
   quantity: number;
   price?: number;
   setName?: string;
-  setCode?: string; // J'ai ajouté ça pour être sûr de bien transférer le code set
+  setCode?: string;
 };
+
+// URL du dos de carte par défaut (si image manquante)
+const CARD_BACK_URL = "https://cards.scryfall.io/large/front/a/6/a6984342-f723-4e80-8e69-902d287a915f.jpg";
 
 export default function WishlistPage() {
   const { user, loading } = useAuth();
@@ -71,46 +73,35 @@ export default function WishlistPage() {
     }
   };
 
-  // --- NOUVELLE FONCTION : DÉPLACEMENT VERS COLLECTION ---
+  // Déplacement vers la Collection (Transaction sécurisée)
   const moveToCollection = async (card: WishlistCard) => {
     if (!user) return;
-    
-    // Feedback immédiat pour l'utilisateur
     const toastId = toast.loading("Déplacement vers la collection...");
 
     try {
       const wishlistRef = doc(db, 'users', user.uid, 'wishlist', card.id);
       const collectionRef = doc(db, 'users', user.uid, 'collection', card.id);
 
-      // La Transaction assure que la suppression et l'ajout se font en même temps (atomique)
       await runTransaction(db, async (transaction) => {
-        // 1. On vérifie si la carte existe déjà dans la collection
         const collectionDoc = await transaction.get(collectionRef);
 
         if (collectionDoc.exists()) {
-          // Si oui : on augmente juste la quantité (+ quantité de la wishlist)
-          transaction.update(collectionRef, {
-            quantity: increment(card.quantity)
-          });
+          transaction.update(collectionRef, { quantity: increment(card.quantity) });
         } else {
-          // Si non : on crée la carte dans la collection avec toutes ses infos
           transaction.set(collectionRef, {
             name: card.name,
             imageUrl: card.imageUrl,
-            quantity: card.quantity, // On transfère TOUTE la quantité
+            quantity: card.quantity,
             price: card.price || 0,
             setName: card.setName || null,
             setCode: card.setCode || null,
             addedAt: new Date()
           });
         }
-
-        // 2. On supprime de la wishlist
         transaction.delete(wishlistRef);
       });
 
       toast.success("Carte ajoutée à votre collection ! 📦", { id: toastId });
-
     } catch (error) {
       console.error(error);
       toast.error("Erreur lors du déplacement", { id: toastId });
@@ -137,17 +128,13 @@ export default function WishlistPage() {
             </span>
           </h1>
 
-          <button
-            onClick={() => setIsImportOpen(true)}
-            className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition flex items-center gap-2 shadow-sm"
-          >
+          <button onClick={() => setIsImportOpen(true)} className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition flex items-center gap-2 shadow-sm">
             📂 Importer CSV
           </button>
         </div>
         
         <div className="flex items-center gap-4">
            <DeleteAllButton targetCollection="wishlist" />
-           
            <div className="bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-100 px-6 py-3 rounded-xl shadow-sm border border-green-200 dark:border-green-700">
              <span className="text-sm uppercase tracking-wide opacity-80">Estimation Total</span>
              <div className="text-2xl font-bold">{totalPrice.toFixed(2)} €</div>
@@ -165,28 +152,30 @@ export default function WishlistPage() {
           {cards.map((card) => (
             <div key={card.id} className="relative group flex bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden p-3 gap-4 items-center border border-gray-100 dark:border-gray-700 hover:border-blue-300 dark:hover:border-blue-500 transition-colors">
               
-              {/* --- BOUTON DÉPLACEMENT (HAUT GAUCHE) --- */}
+              {/* Bouton Acheter */}
               <button
                 onClick={() => moveToCollection(card)}
                 className="absolute top-2 left-2 p-1.5 bg-green-100 text-green-700 hover:bg-green-600 hover:text-white rounded-full transition opacity-100 md:opacity-0 md:group-hover:opacity-100 shadow-sm z-10"
-                title="J'ai acheté cette carte ! (Déplacer vers Collection)"
+                title="Déplacer vers Collection"
               >
                 📦
               </button>
 
-              {/* BOUTON POUBELLE (HAUT DROITE) */}
+              {/* Bouton Poubelle */}
               <button
                 onClick={() => setCardToDelete(card.id)}
                 className="absolute top-2 right-2 p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-full transition opacity-100 md:opacity-0 md:group-hover:opacity-100 z-10"
-                title="Supprimer la carte"
+                title="Supprimer"
               >
                 🗑️
               </button>
 
+              {/* IMAGE ROBUSTE */}
               <img
-                src={card.imageUrl}
+                src={card.imageUrl || CARD_BACK_URL}
                 alt={card.name}
                 className="w-20 h-28 object-cover rounded shadow-sm bg-gray-200"
+                onError={(e) => { e.currentTarget.src = CARD_BACK_URL; }}
               />
               
               <div className="flex-1 min-w-0">
@@ -204,21 +193,9 @@ export default function WishlistPage() {
                 
                 <div className="flex justify-between items-end mt-2">
                   <div className="flex items-center gap-3">
-                    <button 
-                      onClick={() => updateQuantity(card.id, -1, card.quantity)}
-                      className="bg-gray-200 dark:bg-gray-700 w-8 h-8 rounded hover:bg-gray-300 dark:hover:bg-gray-600 flex items-center justify-center font-bold transition-colors"
-                    >
-                      -
-                    </button>
-                    
+                    <button onClick={() => updateQuantity(card.id, -1, card.quantity)} className="bg-gray-200 dark:bg-gray-700 w-8 h-8 rounded hover:bg-gray-300 font-bold">-</button>
                     <span className="font-mono text-xl w-6 text-center">{card.quantity}</span>
-                    
-                    <button 
-                      onClick={() => updateQuantity(card.id, 1, card.quantity)}
-                      className="bg-blue-100 dark:bg-blue-900 text-blue-600 dark:text-blue-300 w-8 h-8 rounded hover:bg-blue-200 dark:hover:bg-blue-800 flex items-center justify-center font-bold transition-colors"
-                    >
-                      +
-                    </button>
+                    <button onClick={() => updateQuantity(card.id, 1, card.quantity)} className="bg-blue-100 dark:bg-blue-900 text-blue-600 font-bold">+</button>
                   </div>
 
                   {card.price && card.price > 0 && (
@@ -235,15 +212,7 @@ export default function WishlistPage() {
 
       {/* MODALS */}
       <ImportModal isOpen={isImportOpen} onClose={() => setIsImportOpen(false)} targetCollection="wishlist" />
-
-      <ConfirmModal 
-        isOpen={!!cardToDelete} 
-        onClose={() => setCardToDelete(null)}
-        onConfirm={confirmDelete}
-        title="Supprimer la carte ?"
-        message="Voulez-vous vraiment retirer cette carte de votre liste ?"
-      />
-
+      <ConfirmModal isOpen={!!cardToDelete} onClose={() => setCardToDelete(null)} onConfirm={confirmDelete} title="Supprimer la carte ?" message="Voulez-vous vraiment retirer cette carte ?" />
     </main>
   );
 }
