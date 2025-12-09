@@ -11,26 +11,25 @@ type WishlistCard = {
   id: string;
   name: string;
   imageUrl: string;
-  quantity: number; // On ajoute le type quantity
+  quantity: number;
+  price?: number; // On ajoute le champ prix (optionnel pour les vieilles cartes)
 };
 
 export default function WishlistPage() {
   const { user, loading } = useAuth();
   const [cards, setCards] = useState<WishlistCard[]>([]);
 
-  // On utilise onSnapshot pour une mise à jour EN TEMPS RÉEL
   useEffect(() => {
     if (!user) return;
 
-    // Écoute permanente de la base de données
     const unsubscribe = onSnapshot(collection(db, 'users', user.uid, 'wishlist'), (snapshot) => {
       const items = snapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data(),
-        quantity: doc.data().quantity || 1 // Sécurité pour les anciennes cartes
+        quantity: doc.data().quantity || 1,
+        price: doc.data().price || 0 // Si pas de prix, on met 0 par défaut
       })) as WishlistCard[];
       
-      // Tri par nom
       items.sort((a, b) => a.name.localeCompare(b.name));
       setCards(items);
     });
@@ -38,60 +37,87 @@ export default function WishlistPage() {
     return () => unsubscribe();
   }, [user]);
 
-  // Fonction pour changer la quantité (+1 ou -1)
   const updateQuantity = async (cardId: string, amount: number, currentQuantity: number) => {
     if (!user) return;
     const cardRef = doc(db, 'users', user.uid, 'wishlist', cardId);
 
     if (currentQuantity + amount <= 0) {
-      // Si on arrive à 0, on demande confirmation pour supprimer
       if (confirm('Voulez-vous retirer cette carte de la liste ?')) {
         await deleteDoc(cardRef);
         toast('Carte retirée', { icon: '🗑️' });
       }
     } else {
-      // Sinon on met à jour (+1 ou -1)
       await updateDoc(cardRef, { quantity: increment(amount) });
     }
   };
+
+  // --- CALCUL DU TOTAL ---
+  const totalPrice = cards.reduce((acc, card) => {
+    return acc + (card.price || 0) * card.quantity;
+  }, 0);
 
   if (loading) return <p className="text-center p-10">Chargement...</p>;
   if (!user) return <p className="text-center p-10">Connectez-vous pour voir votre liste.</p>;
 
   return (
     <main className="container mx-auto p-4">
-      <h1 className="text-3xl font-bold mb-8 text-center">Ma Wishlist ({cards.reduce((acc, c) => acc + c.quantity, 0)} cartes)</h1>
+      <div className="flex flex-col md:flex-row justify-between items-center mb-8 gap-4">
+        <h1 className="text-3xl font-bold text-center md:text-left">
+          Ma Wishlist 
+          <span className="ml-3 text-lg font-normal text-gray-500">
+            ({cards.reduce((acc, c) => acc + c.quantity, 0)} cartes)
+          </span>
+        </h1>
+        
+        {/* LE GRAND TOTAL EN HAUT À DROITE */}
+        <div className="bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-100 px-6 py-3 rounded-xl shadow-sm border border-green-200 dark:border-green-700">
+          <span className="text-sm uppercase tracking-wide opacity-80">Estimation Total</span>
+          <div className="text-2xl font-bold">{totalPrice.toFixed(2)} €</div>
+        </div>
+      </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {cards.map((card) => (
           <div key={card.id} className="flex bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden p-3 gap-4 items-center">
-            {/* Image miniature */}
             <img
               src={card.imageUrl}
               alt={card.name}
-              className="w-20 h-28 object-cover rounded shadow-sm"
+              className="w-20 h-28 object-cover rounded shadow-sm bg-gray-200"
             />
             
-            {/* Info et contrôles */}
-            <div className="flex-1">
-              <h3 className="font-bold text-lg mb-2">{card.name}</h3>
+            <div className="flex-1 min-w-0"> {/* min-w-0 aide pour le truncate */}
+              <h3 className="font-bold text-lg truncate">{card.name}</h3>
               
-              <div className="flex items-center gap-3">
-                <button 
-                  onClick={() => updateQuantity(card.id, -1, card.quantity)}
-                  className="bg-gray-200 dark:bg-gray-700 w-8 h-8 rounded hover:bg-gray-300 dark:hover:bg-gray-600 flex items-center justify-center font-bold"
-                >
-                  -
-                </button>
-                
-                <span className="font-mono text-xl w-8 text-center">{card.quantity}</span>
-                
-                <button 
-                  onClick={() => updateQuantity(card.id, 1, card.quantity)}
-                  className="bg-blue-100 dark:bg-blue-900 text-blue-600 dark:text-blue-300 w-8 h-8 rounded hover:bg-blue-200 flex items-center justify-center font-bold"
-                >
-                  +
-                </button>
+              {/* Affichage du prix unitaire */}
+              <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">
+                Prix unit. : {card.price ? `${card.price} €` : 'N/A'}
+              </p>
+              
+              <div className="flex justify-between items-end">
+                <div className="flex items-center gap-3">
+                  <button 
+                    onClick={() => updateQuantity(card.id, -1, card.quantity)}
+                    className="bg-gray-200 dark:bg-gray-700 w-8 h-8 rounded hover:bg-gray-300 dark:hover:bg-gray-600 flex items-center justify-center font-bold"
+                  >
+                    -
+                  </button>
+                  
+                  <span className="font-mono text-xl w-6 text-center">{card.quantity}</span>
+                  
+                  <button 
+                    onClick={() => updateQuantity(card.id, 1, card.quantity)}
+                    className="bg-blue-100 dark:bg-blue-900 text-blue-600 dark:text-blue-300 w-8 h-8 rounded hover:bg-blue-200 flex items-center justify-center font-bold"
+                  >
+                    +
+                  </button>
+                </div>
+
+                {/* Prix Total pour cette carte (Qté * Prix) */}
+                {card.price && card.price > 0 && (
+                   <div className="font-bold text-lg text-right">
+                     {(card.price * card.quantity).toFixed(2)} €
+                   </div>
+                )}
               </div>
             </div>
           </div>
