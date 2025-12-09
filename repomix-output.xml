@@ -49,6 +49,7 @@ app/login/page.tsx
 app/page.tsx
 app/wishlist/page.tsx
 components/Header.tsx
+components/ImportModal.tsx
 eslint.config.mjs
 lib/AuthContext.tsx
 lib/firebase.ts
@@ -66,6 +67,179 @@ tsconfig.json
 
 <files>
 This section contains the contents of the repository's files.
+
+<file path="components/ImportModal.tsx">
+// components/ImportModal.tsx
+'use client';
+
+import { useState } from 'react';
+import Papa from 'papaparse';
+import { useAuth } from '@/lib/AuthContext';
+import { db } from '@/lib/firebase';
+import { doc, setDoc, updateDoc, getDoc, increment, writeBatch } from 'firebase/firestore';
+import toast from 'react-hot-toast';
+
+type ImportModalProps = {
+  isOpen: boolean;
+  onClose: () => void;
+};
+
+// Types pour mapper les colonnes variables des fichiers CSV
+type CSVRow = {
+  [key: string]: string | undefined;
+};
+
+export default function ImportModal({ isOpen, onClose }: ImportModalProps) {
+  const { user } = useAuth();
+  const [isImporting, setIsImporting] = useState(false);
+  const [progress, setProgress] = useState(0);
+
+  if (!isOpen) return null;
+
+  // --- LOGIQUE INTELLIGENTE DE DÉTECTION ---
+  const mapRowToCard = (row: CSVRow) => {
+    // 1. Normaliser les clés (minuscules) pour éviter les problèmes de casse
+    const normalizedRow: { [key: string]: string } = {};
+    Object.keys(row).forEach(key => {
+      normalizedRow[key.toLowerCase().trim()] = (row[key] || '').trim();
+    });
+
+    // 2. Trouver le NOM (Manabox: "Name", Moxfield: "Count", etc.)
+    const name = normalizedRow['name'] || normalizedRow['card name'] || normalizedRow['card'];
+    
+    // 3. Trouver le CODE SET (Edition, Set, Set Code)
+    // Manabox utilise 'Set code', Moxfield 'Edition', Archidekt 'Edition'
+    const setCode = normalizedRow['set code'] || normalizedRow['edition'] || normalizedRow['set'] || '';
+
+    // 4. Trouver la QUANTITÉ
+    const qtyString = normalizedRow['quantity'] || normalizedRow['count'] || normalizedRow['qty'] || normalizedRow['qte'] || '1';
+    const quantity = parseInt(qtyString) || 1;
+
+    // 5. Trouver si FOIL (Optionnel)
+    const foilString = normalizedRow['foil'] || normalizedRow['finish'] || '';
+    const isFoil = foilString.toLowerCase().includes('foil') || foilString.toLowerCase() === 'true';
+
+    return { name, setCode, quantity, isFoil };
+  };
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !user) return;
+
+    setIsImporting(true);
+    setProgress(0);
+
+    Papa.parse(file, {
+      header: true, // Lit la première ligne comme entêtes
+      skipEmptyLines: true,
+      complete: async (results) => {
+        const rows = results.data as CSVRow[];
+        const total = rows.length;
+        let processed = 0;
+        
+        // On utilise un "Batch" Firestore pour écrire par paquets (plus rapide et sûr)
+        // Note: Firestore limite les batchs à 500 opérations. Pour simplifier ici, on fait un par un 
+        // ou on pourrait grouper, mais vu la logique "merge", le un par un avec feedback est bien.
+        
+        // Pour éviter de bloquer l'UI, on traite ça proprement
+        let successCount = 0;
+
+        for (const row of rows) {
+          const cardData = mapRowToCard(row);
+
+          if (cardData.name) {
+            // Création d'un ID unique basé sur Nom + Set (pour éviter les doublons)
+            // On nettoie le nom pour l'ID (pas d'espaces bizarres)
+            const cleanId = `${cardData.name}-${cardData.setCode}`.replace(/[^a-zA-Z0-9]/g, '-').toLowerCase();
+            
+            const cardRef = doc(db, 'users', user.uid, 'wishlist', cleanId);
+
+            try {
+              // On essaie de récupérer l'image via Scryfall plus tard ou on met un placeholder
+              // Pour l'import massif, on met l'image par défaut pour ne pas spammer l'API Scryfall 500 fois en 1 seconde
+              
+              const docSnap = await getDoc(cardRef);
+
+              if (docSnap.exists()) {
+                await updateDoc(cardRef, {
+                  quantity: increment(cardData.quantity)
+                });
+              } else {
+                await setDoc(cardRef, {
+                  name: cardData.name,
+                  quantity: cardData.quantity,
+                  setName: cardData.setCode, // On stocke le code en attendant d'avoir le nom complet
+                  imageUrl: "https://cards.scryfall.io/large/front/a/6/a6984342-f723-4e80-8e69-902d287a915f.jpg", // Dos de carte par défaut
+                  imported: true, // Marqueur pour savoir qu'il faudra peut-être mettre à jour l'image plus tard
+                  addedAt: new Date()
+                });
+              }
+              successCount++;
+            } catch (err) {
+              console.error("Erreur import ligne:", row);
+            }
+          }
+          
+          processed++;
+          setProgress(Math.round((processed / total) * 100));
+        }
+
+        toast.success(`${successCount} cartes importées avec succès !`);
+        setIsImporting(false);
+        onClose();
+      },
+      error: (error) => {
+        toast.error("Erreur de lecture du fichier CSV");
+        console.error(error);
+        setIsImporting(false);
+      }
+    });
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white dark:bg-gray-800 rounded-xl p-6 max-w-md w-full shadow-2xl">
+        <h2 className="text-xl font-bold mb-4">Importer une collection</h2>
+        
+        <p className="text-sm text-gray-600 dark:text-gray-300 mb-6">
+          Accepte les fichiers CSV de <strong>Manabox, Archidekt, Moxfield</strong>.
+          <br/>
+          <span className="text-xs opacity-70">Les colonnes détectées : Name, Quantity, Set Code/Edition.</span>
+        </p>
+
+        {isImporting ? (
+          <div className="text-center py-4">
+            <div className="text-2xl font-bold text-blue-600 mb-2">{progress}%</div>
+            <div className="w-full bg-gray-200 rounded-full h-2.5 dark:bg-gray-700">
+              <div className="bg-blue-600 h-2.5 rounded-full" style={{ width: `${progress}%` }}></div>
+            </div>
+            <p className="text-sm mt-2">Traitement des cartes...</p>
+          </div>
+        ) : (
+          <div className="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg p-8 text-center hover:bg-gray-50 dark:hover:bg-gray-700/50 transition cursor-pointer relative">
+            <input 
+              type="file" 
+              accept=".csv"
+              onChange={handleFileUpload}
+              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+            />
+            <span className="text-4xl mb-2 block">📂</span>
+            <span className="font-medium">Cliquez ou glissez un fichier CSV ici</span>
+          </div>
+        )}
+
+        <button 
+          onClick={onClose}
+          disabled={isImporting}
+          className="mt-6 w-full py-2 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+        >
+          Annuler
+        </button>
+      </div>
+    </div>
+  );
+}
+</file>
 
 <file path=".gitignore">
 # See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
@@ -454,8 +628,10 @@ export default nextConfig;
     "lint": "eslint"
   },
   "dependencies": {
+    "@types/papaparse": "^5.5.1",
     "firebase": "^12.5.0",
     "next": "^16.0.8",
+    "papaparse": "^5.5.3",
     "react": "^19.2.1",
     "react-dom": "^19.2.1",
     "react-hot-toast": "^2.6.0"
@@ -633,35 +809,37 @@ import { useAuth } from '@/lib/AuthContext';
 import { db } from '@/lib/firebase';
 import { collection, onSnapshot, deleteDoc, doc, updateDoc, increment } from 'firebase/firestore';
 import toast from 'react-hot-toast';
+import ImportModal from '@/components/ImportModal'; // <--- 1. On importe le composant
 
-// Mise à jour du Type pour inclure le nom de l'édition (setName)
 type WishlistCard = {
   id: string;
   name: string;
   imageUrl: string;
   quantity: number;
   price?: number;
-  setName?: string; // <--- Nouveau champ optionnel
+  setName?: string;
 };
 
 export default function WishlistPage() {
   const { user, loading } = useAuth();
   const [cards, setCards] = useState<WishlistCard[]>([]);
+  
+  // 2. État pour gérer l'ouverture/fermeture du modal
+  const [isImportOpen, setIsImportOpen] = useState(false);
 
   useEffect(() => {
     if (!user) return;
 
-    // Écoute en temps réel de la collection Wishlist
     const unsubscribe = onSnapshot(collection(db, 'users', user.uid, 'wishlist'), (snapshot) => {
       const items = snapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data(),
         quantity: doc.data().quantity || 1,
         price: doc.data().price || 0,
-        setName: doc.data().setName || null // On récupère l'édition si elle existe
+        setName: doc.data().setName || null
       })) as WishlistCard[];
       
-      // Tri par nom alphabétique
+      // Tri alphabétique
       items.sort((a, b) => a.name.localeCompare(b.name));
       setCards(items);
     });
@@ -669,13 +847,11 @@ export default function WishlistPage() {
     return () => unsubscribe();
   }, [user]);
 
-  // Gestion des quantités (+ / -) et suppression
   const updateQuantity = async (cardId: string, amount: number, currentQuantity: number) => {
     if (!user) return;
     const cardRef = doc(db, 'users', user.uid, 'wishlist', cardId);
 
     if (currentQuantity + amount <= 0) {
-      // Demande de confirmation avant suppression
       if (confirm('Voulez-vous retirer cette carte de la liste ?')) {
         await deleteDoc(cardRef);
         toast('Carte retirée', { icon: '🗑️' });
@@ -685,7 +861,6 @@ export default function WishlistPage() {
     }
   };
 
-  // Calcul du Grand Total
   const totalPrice = cards.reduce((acc, card) => {
     return acc + (card.price || 0) * card.quantity;
   }, 0);
@@ -694,30 +869,49 @@ export default function WishlistPage() {
   if (!user) return <p className="text-center p-10">Connectez-vous pour voir votre liste.</p>;
 
   return (
-    <main className="container mx-auto p-4">
-      {/* En-tête avec Titre et Total */}
+    <main className="container mx-auto p-4 pb-20"> {/* pb-20 pour laisser de la place au cas où */}
+      
+      {/* EN-TÊTE */}
       <div className="flex flex-col md:flex-row justify-between items-center mb-8 gap-4">
-        <h1 className="text-3xl font-bold text-center md:text-left">
-          Ma Wishlist 
-          <span className="ml-3 text-lg font-normal text-gray-500">
-            ({cards.reduce((acc, c) => acc + c.quantity, 0)} cartes)
-          </span>
-        </h1>
+        <div className="flex items-center gap-4">
+          <h1 className="text-3xl font-bold text-center md:text-left">
+            Ma Wishlist 
+            <span className="ml-3 text-lg font-normal text-gray-500">
+              ({cards.reduce((acc, c) => acc + c.quantity, 0)} cartes)
+            </span>
+          </h1>
+
+          {/* 3. LE BOUTON D'IMPORTATION */}
+          <button
+            onClick={() => setIsImportOpen(true)}
+            className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition flex items-center gap-2 shadow-sm"
+          >
+            📂 Importer CSV
+          </button>
+        </div>
         
+        {/* TOTAL PRIX */}
         <div className="bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-100 px-6 py-3 rounded-xl shadow-sm border border-green-200 dark:border-green-700">
           <span className="text-sm uppercase tracking-wide opacity-80">Estimation Total</span>
           <div className="text-2xl font-bold">{totalPrice.toFixed(2)} €</div>
         </div>
       </div>
 
-      {/* Grille des cartes */}
+      {/* LISTE DES CARTES */}
       {cards.length === 0 ? (
-        <p className="text-center text-gray-500 mt-10">Votre wishlist est vide.</p>
+        <div className="text-center py-20 bg-gray-50 dark:bg-gray-800/50 rounded-xl border-2 border-dashed border-gray-200 dark:border-gray-700">
+          <p className="text-xl text-gray-500 mb-4">Votre wishlist est vide.</p>
+          <button 
+             onClick={() => setIsImportOpen(true)}
+             className="text-blue-600 hover:underline"
+          >
+            Importer une collection CSV ?
+          </button>
+        </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {cards.map((card) => (
             <div key={card.id} className="flex bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden p-3 gap-4 items-center border border-gray-100 dark:border-gray-700">
-              {/* Image Miniature */}
               <img
                 src={card.imageUrl}
                 alt={card.name}
@@ -727,19 +921,16 @@ export default function WishlistPage() {
               <div className="flex-1 min-w-0">
                 <h3 className="font-bold text-lg truncate" title={card.name}>{card.name}</h3>
                 
-                {/* --- NOUVEAU : Affichage de l'édition --- */}
                 {card.setName && (
                   <p className="text-xs text-blue-600 dark:text-blue-400 mb-1 truncate font-medium">
                     {card.setName}
                   </p>
                 )}
                 
-                {/* Prix unitaire */}
                 <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">
                   Prix unit. : {card.price && card.price > 0 ? `${card.price} €` : 'N/A'}
                 </p>
                 
-                {/* Contrôles Quantité et Prix Total ligne */}
                 <div className="flex justify-between items-end mt-2">
                   <div className="flex items-center gap-3">
                     <button 
@@ -759,7 +950,6 @@ export default function WishlistPage() {
                     </button>
                   </div>
 
-                  {/* Prix total de la ligne (Qté * Prix) */}
                   {card.price && card.price > 0 && (
                      <div className="font-bold text-lg text-right text-gray-700 dark:text-gray-200">
                        {(card.price * card.quantity).toFixed(2)} €
@@ -771,6 +961,10 @@ export default function WishlistPage() {
           ))}
         </div>
       )}
+
+      {/* 4. LE MODAL (Invisible par défaut) */}
+      <ImportModal isOpen={isImportOpen} onClose={() => setIsImportOpen(false)} />
+
     </main>
   );
 }
@@ -789,7 +983,7 @@ import toast from 'react-hot-toast';
 // --- TYPES ---
 type ScryfallCard = {
   id: string;
-  oracle_id: string; // <--- C'est la clé magique pour le groupement
+  oracle_id: string;
   name: string;
   set_name: string;
   set: string;
@@ -824,7 +1018,7 @@ const getCardImage = (card: ScryfallCard): string => {
 const CardGroup = ({ name, versions }: { name: string, versions: ScryfallCard[] }) => {
   const { user } = useAuth();
   
-  // Par défaut, on prend la version la plus récente (souvent la 1ère de la liste renvoyée)
+  // Par défaut, on prend la première version de la liste
   const [selectedCard, setSelectedCard] = useState<ScryfallCard>(versions[0]);
 
   const handleVersionChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
@@ -843,7 +1037,7 @@ const CardGroup = ({ name, versions }: { name: string, versions: ScryfallCard[] 
     const validImageUrl = getCardImage(card);
     const priceNumber = card.prices?.eur ? parseFloat(card.prices.eur) : 0;
     
-    // On nettoie le nom pour la sauvegarde aussi
+    // On nettoie le nom pour la sauvegarde (pour que "Sol Ring // Sol Ring" devienne "Sol Ring" dans ta liste)
     const cleanName = card.name.split(' // ')[0];
 
     try {
@@ -856,7 +1050,7 @@ const CardGroup = ({ name, versions }: { name: string, versions: ScryfallCard[] 
         toast.success(`+1 exemplaire (${card.set_name})`);
       } else {
         await setDoc(wishlistRef, {
-          name: cleanName, // On sauvegarde le nom propre
+          name: cleanName, // Nom propre
           imageUrl: validImageUrl,
           quantity: 1,
           price: priceNumber,
@@ -939,27 +1133,24 @@ export default function HomePage() {
       const data = await response.json();
       const rawCards: ScryfallCard[] = data.data || [];
 
-      // --- NOUVEL ALGORITHME DE GROUPEMENT (PAR ORACLE_ID) ---
-      // C'est beaucoup plus robuste : toutes les variantes d'une carte partagent le même oracle_id
+      // --- ALGORITHME DE GROUPEMENT PAR NOM NETTOYÉ ---
+      // On ignore oracle_id et on force le groupement par le nom (sans le " // ")
       const groups = new Map<string, ScryfallCard[]>();
 
       rawCards.forEach(card => {
-        // Si oracle_id n'existe pas (rare, cartes spéciales), on utilise le nom comme secours
-        const groupKey = card.oracle_id || card.name; 
+        // "Sol Ring // Sol Ring" -> devient "Sol Ring"
+        const cleanName = card.name.split(' // ')[0];
 
-        if (!groups.has(groupKey)) {
-          groups.set(groupKey, []);
+        if (!groups.has(cleanName)) {
+          groups.set(cleanName, []);
         }
-        groups.get(groupKey)?.push(card);
+        groups.get(cleanName)?.push(card);
       });
 
       // On transforme le Map en tableau pour l'afficher
-      const resultsArray = Array.from(groups.values()).map((versions) => {
-        // Pour le nom d'affichage, on prend le nom de la première carte 
-        // et on le nettoie (on retire " // ...") pour que ce soit joli
-        const displayName = versions[0].name.split(' // ')[0];
+      const resultsArray = Array.from(groups.entries()).map(([cleanName, versions]) => {
         return {
-          name: displayName,
+          name: cleanName, // On utilise le nom nettoyé pour l'affichage (ex: juste "Sol Ring")
           versions: versions
         };
       });
@@ -1000,7 +1191,7 @@ export default function HomePage() {
       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
         {groupedResults.map((group) => (
           <CardGroup 
-            key={group.name} // React demande une clé unique
+            key={group.name} 
             name={group.name} 
             versions={group.versions} 
           />
