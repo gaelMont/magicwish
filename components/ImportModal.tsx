@@ -14,7 +14,8 @@ type ImportModalProps = {
   targetCollection?: string;
 };
 
-// On accepte n'importe quelle structure pour le debug
+// On utilise cette ligne spéciale pour autoriser 'any' juste pour cette ligne
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 type CSVRow = any; 
 
 type CardInput = { 
@@ -171,7 +172,8 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
         skipEmptyLines: true,
         delimiter: detectedDelimiter,
         complete: async (results) => {
-          const rows = results.data as CSVRow[];
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const rows = results.data as any[]; // On utilise any ici aussi pour être tranquille
           
           console.log(`📊 Lignes trouvées par PapaParse : ${rows.length}`);
 
@@ -206,15 +208,13 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
           } else {
             // ECHEC
             console.error("❌ ECHEC : Aucune carte extraite.");
-            console.log("Structure d'une ligne brute (Row 0):", rows[0]);
+            if (rows.length > 0) console.log("Structure d'une ligne brute (Row 0):", rows[0]);
             
             alert(`
               ECHEC DE LECTURE ❌
               -------------------
               0 cartes trouvées sur ${rows.length} lignes lues.
-              
               Le séparateur détecté était : "${detectedDelimiter}"
-              
               Ouvrez la console (F12) pour voir les détails bruts.
             `);
             setIsImporting(false);
@@ -322,6 +322,7 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
           setIsImporting(false);
           onClose();
         },
+        // --- C'EST ICI QUE J'AI CORRIGÉ LE 'any' PAR 'unknown' ---
         error: (err: unknown) => {
           console.error(err);
           toast.error("Erreur lecture CSV");
