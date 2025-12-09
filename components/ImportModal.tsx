@@ -77,19 +77,22 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
     return Array.from(map.values());
   };
 
-  // --- LOGIQUE PAR POSITION (Index) ---
-  // On ignore les noms de colonnes qui buggent. On prend la 3ème case, la 4ème, etc.
+  // --- LOGIQUE ROBUSTE (Position/Index) ---
   const mapRowToCard = (row: unknown[]): CardInput | null => {
+    // On vérifie qu'on a bien une ligne avec assez de colonnes
     if (!Array.isArray(row) || row.length < 3) return null;
 
-    // Fonction sécurisée pour récupérer du texte
+    // Fonction pour récupérer le texte proprement
     const getString = (index: number) => (row[index] ? String(row[index]).trim() : '');
 
-    // Index 2 = Nom de la carte (ManaBox standard)
+    // MANABOX CSV FORMAT :
+    // 0: Binder Name, 1: Binder Type, 2: Name, 3: Set Code ... 8: Quantity ... 10: Scryfall ID
+    
+    // Index 2 = Nom de la carte
     const name = getString(2); 
     if (!name) return null; 
 
-    // Index 3 = Code du set
+    // Index 3 = Set Code
     const setCode = getString(3);
     
     // Index 8 = Quantité
@@ -131,10 +134,13 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
     setStatusMessage(`Lecture du fichier...`);
 
     Papa.parse(file, {
-      header: false, // <--- ON FORCE 'FALSE' POUR LIRE LIGNE PAR LIGNE SANS ANALYSE D'EN-TÊTE
+      header: false, // ON DÉSACTIVE LES EN-TÊTES (Lecture brute)
       skipEmptyLines: true,
+      delimiter: ",", // ON FORCE LA VIRGULE (Crucial pour votre fichier)
+      quoteChar: '"', // Gère les guillemets dans les noms
       complete: async (results) => {
-        // On force le type ici pour éviter les erreurs TypeScript
+        // --- CORRECTION TYPE ---
+        // On utilise 'unknown[][]' pour satisfaire TypeScript
         const rows = results.data as unknown[][];
 
         if (!rows || rows.length < 2) {
@@ -143,9 +149,7 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
           return;
         }
 
-        console.log("Lecture brute réussie :", rows.length, "lignes trouvées.");
-
-        // On enlève la 1ère ligne (les titres)
+        // On ignore la première ligne (les titres)
         const dataRows = rows.slice(1);
         
         let allCards: CardInput[] = [];
@@ -155,18 +159,18 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
         });
 
         if (allCards.length === 0) {
-          console.error("Echec parsing. Ligne 1 brute :", dataRows[0]);
-          toast.error("Aucune carte identifiée. Vérifiez le format ManaBox.");
+          console.error("Erreur lecture. Ligne 1 brute :", dataRows[0]);
+          toast.error("Aucune carte trouvée. Vérifiez le format.");
           setIsImporting(false);
           return;
         }
 
-        // --- SUITE STANDARD ---
+        // --- TRAITEMENT STANDARD ---
         allCards = optimizeCardList(allCards);
-        const optimizedCount = allCards.length;
         const chunks = chunkArray(allCards, 75);
         let successCount = 0;
         let processedCards = 0;
+        const totalCards = allCards.length;
 
         for (let i = 0; i < chunks.length; i++) {
           const chunk = chunks[i];
@@ -251,7 +255,7 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
           }
 
           processedCards += chunk.length;
-          setProgress(Math.round((processedCards / optimizedCount) * 100));
+          setProgress(Math.round((processedCards / totalCards) * 100));
           setStatusMessage(`Traitement...`);
           await new Promise(r => setTimeout(r, 100));
         }
@@ -260,8 +264,7 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
         setIsImporting(false);
         onClose();
       },
-      // --- C'EST ICI LA CORRECTION CRUCIALE ---
-      // On utilise 'unknown' au lieu de 'any' pour valider TypeScript
+      // --- CORRECTION FINALE : unknown au lieu de any ---
       error: (err: unknown) => {
         console.error(err);
         toast.error("Erreur lecture CSV");

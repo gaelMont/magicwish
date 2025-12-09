@@ -1460,13 +1460,11 @@ type ImportModalProps = {
   targetCollection?: string;
 };
 
-type CSVRow = { [key: string]: string | undefined };
-
 type CardInput = { 
   name: string; 
   setCode: string; 
   quantity: number; 
-  scryfallIdFromCsv?: string; // L'ID unique (ManaBox)
+  scryfallIdFromCsv?: string;
   tempId: string;
   signature: string;
 };
@@ -1497,7 +1495,6 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
     return result;
   }
 
-  // Fonction de secours (Fallback)
   const applyFallback = (batch: WriteBatch, uid: string, collection: string, card: CardInput) => {
     const cardRef = doc(db, 'users', uid, collection, card.tempId);
     batch.set(cardRef, {
@@ -1515,9 +1512,7 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
   const optimizeCardList = (rawCards: CardInput[]): CardInput[] => {
     const map = new Map<string, CardInput>();
     rawCards.forEach(card => {
-      // Priorité à l'ID pour la déduplication
       const key = card.scryfallIdFromCsv || card.signature;
-      
       if (map.has(key)) {
         const existing = map.get(key)!;
         existing.quantity += card.quantity;
@@ -1528,37 +1523,49 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
     return Array.from(map.values());
   };
 
-  const mapRowToCard = (row: CSVRow): CardInput | null => {
-    const normalizedRow: { [key: string]: string } = {};
-    
-    // --- CORRECTIF BOM (CRUCIAL POUR MANABOX) ---
-    // On nettoie les clés du CSV pour enlever les caractères invisibles
-    Object.keys(row).forEach(key => {
-      if (key) {
-        let cleanKey = key.trim().toLowerCase();
-        // Supprime le BOM (\uFEFF) s'il est au début
-        cleanKey = cleanKey.replace(/^\ufeff/, '');
-        normalizedRow[cleanKey] = (row[key] || '').trim();
-      }
-    });
+  // --- LOGIQUE PAR POSITION (Index) ---
+  // On ignore les noms de colonnes qui buggent. On prend la 3ème case, la 4ème, etc.
+  const mapRowToCard = (row: unknown[]): CardInput | null => {
+    if (!Array.isArray(row) || row.length < 3) return null;
 
-    // Détection des colonnes (y compris celles nettoyées)
-    const name = normalizedRow['name'] || normalizedRow['card name'] || normalizedRow['card'] || normalizedRow['nom'];
-    if (!name) return null;
+    // Fonction sécurisée pour récupérer du texte
+    const getString = (index: number) => (row[index] ? String(row[index]).trim() : '');
 
-    const setCode = normalizedRow['set code'] || normalizedRow['set'] || normalizedRow['edition'] || normalizedRow['extension'] || '';
-    const qtyString = normalizedRow['quantity'] || normalizedRow['count'] || normalizedRow['qty'] || normalizedRow['qte'] || '1';
-    const quantity = parseInt(qtyString) || 1;
+    // Index 2 = Nom de la carte (ManaBox standard)
+    const name = getString(2); 
+    if (!name) return null; 
+
+    // Index 3 = Code du set
+    const setCode = getString(3);
     
-    // Récupération de l'ID Scryfall
-    const scryfallIdFromCsv = normalizedRow['scryfall id'] || normalizedRow['scryfallid'] || undefined;
+    // Index 8 = Quantité
+    let qty = 1;
+    const qtyStr = getString(8);
+    if (qtyStr) {
+      const parsed = parseInt(qtyStr);
+      if (!isNaN(parsed) && parsed > 0) qty = parsed;
+    }
+
+    // Index 10 = ID Scryfall
+    let scryfallId = undefined;
+    const idStr = getString(10);
+    if (idStr && idStr.length > 10) {
+      scryfallId = idStr;
+    }
 
     const cleanName = name.split(' // ')[0].toLowerCase();
     const cleanSet = setCode.toLowerCase();
     const tempId = `${cleanName}-${cleanSet}`.replace(/[^a-z0-9]/g, '-');
     const signature = `${cleanName}|${cleanSet}`;
 
-    return { name, setCode, quantity, tempId, signature, scryfallIdFromCsv };
+    return { 
+      name: name, 
+      setCode: setCode, 
+      quantity: qty, 
+      tempId, 
+      signature, 
+      scryfallIdFromCsv: scryfallId 
+    };
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1570,40 +1577,49 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
     setStatusMessage(`Lecture du fichier...`);
 
     Papa.parse(file, {
-      header: true,
+      header: false, // <--- ON FORCE 'FALSE' POUR LIRE LIGNE PAR LIGNE SANS ANALYSE D'EN-TÊTE
       skipEmptyLines: true,
-      delimiter: "", // <--- CORRECTION ICI : Force la détection auto (virgule ou point-virgule)
       complete: async (results) => {
-        const rows = results.data as CSVRow[];
-        let allCards: CardInput[] = [];
+        // On force le type ici pour éviter les erreurs TypeScript
+        const rows = results.data as unknown[][];
+
+        if (!rows || rows.length < 2) {
+          toast.error("Fichier vide ou illisible.");
+          setIsImporting(false);
+          return;
+        }
+
+        console.log("Lecture brute réussie :", rows.length, "lignes trouvées.");
+
+        // On enlève la 1ère ligne (les titres)
+        const dataRows = rows.slice(1);
         
-        rows.forEach(row => {
+        let allCards: CardInput[] = [];
+        dataRows.forEach(row => {
           const card = mapRowToCard(row);
           if (card) allCards.push(card);
         });
 
         if (allCards.length === 0) {
-          toast.error("Aucune carte trouvée. Vérifiez le format (BOM détecté ?).");
+          console.error("Echec parsing. Ligne 1 brute :", dataRows[0]);
+          toast.error("Aucune carte identifiée. Vérifiez le format ManaBox.");
           setIsImporting(false);
           return;
         }
 
+        // --- SUITE STANDARD ---
         allCards = optimizeCardList(allCards);
         const optimizedCount = allCards.length;
-        
         const chunks = chunkArray(allCards, 75);
-        let processedCards = 0;
         let successCount = 0;
+        let processedCards = 0;
 
         for (let i = 0; i < chunks.length; i++) {
           const chunk = chunks[i];
           
           try {
-            // PRÉPARATION REQUÊTE : Utilisation de l'ID en priorité
             const identifiers = chunk.map(c => {
-                if (c.scryfallIdFromCsv) {
-                    return { id: c.scryfallIdFromCsv }; // Le Graal
-                }
+                if (c.scryfallIdFromCsv) return { id: c.scryfallIdFromCsv };
                 return (c.setCode && c.setCode.length >= 2) 
                     ? { name: c.name, set: c.setCode } 
                     : { name: c.name };
@@ -1617,19 +1633,15 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
 
             const scryfallResult = await response.json();
             const foundData = (scryfallResult.data || []) as ScryfallData[];
-            
             const resultsMap = new Map<string, ScryfallData>();
             
             foundData.forEach((f) => {
                 const fName = f.name.toLowerCase();
                 const fSet = f.set.toLowerCase();
                 const fNameClean = fName.split(' // ')[0];
-
-                // Indexation multiple (ID > Nom+Set > Nom)
                 resultsMap.set(f.id, f);
                 resultsMap.set(`${fName}|${fSet}`, f);
                 resultsMap.set(`${fNameClean}|${fSet}`, f);
-                
                 if (!resultsMap.has(fName)) resultsMap.set(fName, f);
                 if (!resultsMap.has(fNameClean)) resultsMap.set(fNameClean, f);
             });
@@ -1639,27 +1651,17 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
             chunk.forEach(inputCard => {
               const inputName = inputCard.name.toLowerCase();
               const inputSet = inputCard.setCode.toLowerCase();
-              
               let found = null;
               
-              // 1. Match par ID (ManaBox)
-              if (inputCard.scryfallIdFromCsv) {
-                  found = resultsMap.get(inputCard.scryfallIdFromCsv);
-              }
-
-              // 2. Match par Nom + Set
+              if (inputCard.scryfallIdFromCsv) found = resultsMap.get(inputCard.scryfallIdFromCsv);
               if (!found && inputSet) found = resultsMap.get(`${inputName}|${inputSet}`);
-              
-              // 3. Match par Nom seul
               if (!found) found = resultsMap.get(inputName);
 
               if (found) {
-                // Validation de la trouvaille
                 const isIdMatch = inputCard.scryfallIdFromCsv === found.id;
                 const setMatches = inputSet ? (found.set === inputSet) : true;
-                const nameMatches = found.name.toLowerCase() === inputName || found.name.split(' // ')[0].toLowerCase() === inputName;
+                const nameMatches = found.name.toLowerCase().includes(inputName);
 
-                // On sauvegarde si : ID OK -OU- Set OK -OU- Nom exact OK
                 if (isIdMatch || setMatches || nameMatches) {
                     const cardRef = doc(db, 'users', user.uid, targetCollection, found.id);
                     const price = found.prices?.eur ? parseFloat(found.prices.eur) : 0;
@@ -1678,7 +1680,6 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
                       scryfallId: found.id,
                       lastUpdated: new Date()
                     }, { merge: true });
-                    
                     successCount++;
                 } else {
                     applyFallback(batch, user.uid, targetCollection, inputCard);
@@ -1698,7 +1699,6 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
           processedCards += chunk.length;
           setProgress(Math.round((processedCards / optimizedCount) * 100));
           setStatusMessage(`Traitement...`);
-          
           await new Promise(r => setTimeout(r, 100));
         }
 
@@ -1706,8 +1706,11 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
         setIsImporting(false);
         onClose();
       },
-      error: () => {
-        toast.error("Erreur CSV");
+      // --- C'EST ICI LA CORRECTION CRUCIALE ---
+      // On utilise 'unknown' au lieu de 'any' pour valider TypeScript
+      error: (err: unknown) => {
+        console.error(err);
+        toast.error("Erreur lecture CSV");
         setIsImporting(false);
       }
     });
@@ -1734,7 +1737,7 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
               <input type="file" accept=".csv" onChange={handleFileUpload} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" />
               <div className="text-5xl mb-3 group-hover:scale-110 transition-transform">📦</div>
               <span className="font-medium text-gray-700 dark:text-gray-200">Choisir un fichier CSV</span>
-              <p className="text-xs text-gray-400 mt-2">Format: ManaBox (recommandé), Name, Set...</p>
+              <p className="text-xs text-gray-400 mt-2">Format: ManaBox (recommandé)</p>
             </div>
           </div>
         )}
