@@ -14,7 +14,8 @@ type ImportModalProps = {
   targetCollection?: string;
 };
 
-type CSVRow = { [key: string]: string | undefined };
+// On utilise un type plus souple pour gérer les accès par index
+type CSVRow = { [key: string]: string | undefined } | string[];
 
 type CardInput = { 
   name: string; 
@@ -80,27 +81,48 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
   };
 
   const mapRowToCard = (row: CSVRow): CardInput | null => {
+    // 1. Convertir la ligne en tableau de valeurs pour accéder par INDEX
+    // Si c'est un objet (header: true), on prend les values. Si c'est déjà un array, on le garde.
+    const values = Array.isArray(row) ? row : Object.values(row);
+    
+    // Pour la recherche par nom de colonne (si dispo)
     const normalizedRow: { [key: string]: string } = {};
-    
-    // Nettoyage des clés (BOM + trim)
-    Object.keys(row).forEach(key => {
-      if (key) {
-        let cleanKey = key.trim().toLowerCase();
-        cleanKey = cleanKey.replace(/^\ufeff/, ''); // Supprime le BOM
-        normalizedRow[cleanKey] = (row[key] || '').trim();
-      }
-    });
+    if (!Array.isArray(row)) {
+      Object.keys(row).forEach(key => {
+        if (key) {
+          let cleanKey = key.trim().toLowerCase().replace(/^\ufeff/, '');
+          normalizedRow[cleanKey] = (row[key] || '').trim();
+        }
+      });
+    }
 
-    // Détection flexible du nom de la colonne
-    const name = normalizedRow['name'] || normalizedRow['card name'] || normalizedRow['card'] || normalizedRow['nom'];
-    
-    if (!name) return null;
+    // --- LOGIQUE HYBRIDE (Nom OU Position) ---
 
-    const setCode = normalizedRow['set code'] || normalizedRow['set'] || normalizedRow['edition'] || normalizedRow['extension'] || '';
-    const qtyString = normalizedRow['quantity'] || normalizedRow['count'] || normalizedRow['qty'] || normalizedRow['qte'] || '1';
+    // A. NOM :
+    let name = normalizedRow['name'] || normalizedRow['card name'] || normalizedRow['nom'];
+    
+    // B. POSITION (Correspondance stricte ManaBox) :
+    // Index 2 = Name
+    if (!name && values[2]) {
+        name = values[2].trim();
+    }
+    
+    if (!name) return null; // Si toujours rien, on abandonne la ligne
+
+    // SET CODE (Index 3 dans ManaBox)
+    let setCode = normalizedRow['set code'] || normalizedRow['set'] || normalizedRow['edition'] || '';
+    if (!setCode && values[3]) setCode = values[3].trim();
+
+    // QUANTITÉ (Index 8 dans ManaBox)
+    let qtyString = normalizedRow['quantity'] || normalizedRow['qty'] || normalizedRow['qte'] || '1';
+    if (!normalizedRow['quantity'] && values[8]) qtyString = values[8];
     const quantity = parseInt(qtyString) || 1;
     
-    const scryfallIdFromCsv = normalizedRow['scryfall id'] || normalizedRow['scryfallid'] || undefined;
+    // SCRYFALL ID (Index 10 dans ManaBox)
+    let scryfallIdFromCsv = normalizedRow['scryfall id'] || normalizedRow['scryfallid'] || undefined;
+    if (!scryfallIdFromCsv && values[10] && values[10].length > 10) {
+        scryfallIdFromCsv = values[10].trim();
+    }
 
     const cleanName = name.split(' // ')[0].toLowerCase();
     const cleanSet = setCode.toLowerCase();
@@ -123,30 +145,26 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
     reader.onload = async (event) => {
       const csvText = event.target?.result as string;
       if (!csvText) {
-        toast.error("Fichier vide ou illisible.");
+        toast.error("Fichier vide");
         setIsImporting(false);
         return;
       }
 
-      // --- DÉTECTION MANUELLE DU SÉPARATEUR ---
+      // Détection séparateur (Virgule vs Point-Virgule)
       const firstLine = csvText.split('\n')[0];
       const semiCount = (firstLine.match(/;/g) || []).length;
       const commaCount = (firstLine.match(/,/g) || []).length;
       const detectedDelimiter = semiCount > commaCount ? ';' : ',';
 
-      console.log(`Délimiteur détecté : "${detectedDelimiter}"`);
+      console.log(`Séparateur utilisé : "${detectedDelimiter}"`);
 
       Papa.parse(csvText, {
-        header: true,
+        header: true, // On garde true, mais on convertira en tableau si besoin
         skipEmptyLines: true,
-        delimiter: detectedDelimiter, // On force le séparateur gagnant
+        delimiter: detectedDelimiter,
         complete: async (results) => {
           const rows = results.data as CSVRow[];
           
-          if (results.errors.length > 0) {
-            console.warn("Erreurs CSV:", results.errors);
-          }
-
           let allCards: CardInput[] = [];
           rows.forEach(row => {
             const card = mapRowToCard(row);
@@ -154,10 +172,7 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
           });
 
           if (allCards.length === 0) {
-            // Message d'erreur détaillé pour le débogage
-            const foundColumns = rows.length > 0 ? Object.keys(rows[0]).join(', ') : 'Aucune';
-            console.error("Colonnes trouvées :", foundColumns);
-            toast.error(`Aucune carte trouvée. Colonnes lues : ${foundColumns}`);
+            toast.error("Format non reconnu. Vérifiez que c'est bien un export ManaBox.");
             setIsImporting(false);
             return;
           }
@@ -257,11 +272,11 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
             await new Promise(r => setTimeout(r, 100));
           }
 
-          toast.success(`Import terminé ! (${successCount} cartes identifiées)`);
+          toast.success(`Import terminé ! (${successCount} cartes)`);
           setIsImporting(false);
           onClose();
         },
-        // --- CORRECTION : 'unknown' est accepté par le linter en mode strict ---
+        // --- CORRECTION DU TYPE ANY ICI AUSSI ---
         error: (err: unknown) => {
           console.error(err);
           toast.error("Erreur lecture CSV");
@@ -294,7 +309,7 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
               <input type="file" accept=".csv" onChange={handleFileUpload} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" />
               <div className="text-5xl mb-3 group-hover:scale-110 transition-transform">📦</div>
               <span className="font-medium text-gray-700 dark:text-gray-200">Choisir un fichier CSV</span>
-              <p className="text-xs text-gray-400 mt-2">Format: ManaBox (recommandé), Name, Set...</p>
+              <p className="text-xs text-gray-400 mt-2">Format: ManaBox (recommandé)</p>
             </div>
           </div>
         )}
