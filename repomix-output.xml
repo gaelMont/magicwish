@@ -47,6 +47,8 @@ app/globals.css
 app/layout.tsx
 app/login/page.tsx
 app/page.tsx
+app/wishlist/page.tsx
+components/Header.tsx
 eslint.config.mjs
 lib/AuthContext.tsx
 lib/firebase.ts
@@ -109,51 +111,6 @@ yarn-error.log*
 next-env.d.ts
 </file>
 
-<file path="app/api/search/route.ts">
-import { NextResponse } from 'next/server';
-
-export async function GET(request: Request) {
-
-
-  const { searchParams } = new URL(request.url);
-  const query = searchParams.get('q'); 
-
-  if (!query) {
-    return NextResponse.json(
-      { error: 'Aucun terme de recherche fourni.' }, 
-      { status: 400 } 
-    );
-  }
-
-
-  const scryfallUrl = `https://api.scryfall.com/cards/search?q=${query}&unique=cards`;
-
-  try {
-    const scryfallResponse = await fetch(scryfallUrl);
-
-    if (!scryfallResponse.ok) {
-      const errorData = await scryfallResponse.json();
-      console.error('Erreur Scryfall:', errorData);
-      return NextResponse.json(
-        { error: errorData.details || 'Carte non trouvée' }, 
-        { status: scryfallResponse.status }
-      );
-    }
-
-    const data = await scryfallResponse.json();
-
-    return NextResponse.json(data);
-
-  } catch (error) {
-    console.error('Erreur interne du serveur:', error);
-    return NextResponse.json(
-      { error: 'Une erreur est survenue sur le serveur.' }, 
-      { status: 500 }
-    );
-  }
-}
-</file>
-
 <file path="app/globals.css">
 @import "tailwindcss";
 
@@ -184,14 +141,13 @@ body {
 </file>
 
 <file path="app/layout.tsx">
-// Fichier : app/layout.tsx
-
+// app/layout.tsx
 import type { Metadata } from 'next';
 import { Inter } from 'next/font/google';
 import './globals.css';
-
-// 1. IMPORTER L'ENVELOPPE
-import { AuthProvider } from '@/lib/AuthContext'; // '@/' est un raccourci pour la racine
+import { AuthProvider } from '@/lib/AuthContext';
+import Header from '@/components/Header'; 
+import { Toaster } from 'react-hot-toast'; // <--- IMPORT ICI
 
 const inter = Inter({ subsets: ['latin'] });
 
@@ -208,9 +164,10 @@ export default function RootLayout({
   return (
     <html lang="fr">
       <body className={inter.className}>
-        {/* 2. ENVELOPPER 'children' (vos pages) AVEC LE PROVIDER */}
         <AuthProvider>
+          <Header />
           {children}
+          <Toaster position="bottom-right" /> {/* <--- AJOUTE ÇA ICI */}
         </AuthProvider>
       </body>
     </html>
@@ -263,99 +220,64 @@ export default function LoginPage() {
 }
 </file>
 
-<file path="app/page.tsx">
-'use client'; 
+<file path="components/Header.tsx">
+// components/Header.tsx
+'use client';
 
-import { useState } from 'react';
+import Link from 'next/link';
+import { useAuth } from '@/lib/AuthContext';
 
-// C'est une "bonne pratique" de définir le type des données qu'on attend.
-// Vous pouvez ignorer ça pour l'instant si c'est trop complexe, 
-// mais TypeScript vous remerciera plus tard.
-type ScryfallCard = {
-  id: string;
-  name: string;
-  image_uris?: {
-    small: string;
-  };
-};
+export default function Header() {
+  const { user, logOut } = useAuth();
 
-export default function HomePage() {
-  // 1. Les "états" de notre composant
-  const [query, setQuery] = useState(''); // L'état pour le texte de la barre de recherche
-  const [results, setResults] = useState<ScryfallCard[]>([]); // L'état pour la liste des résultats
-  const [isLoading, setIsLoading] = useState(false); // Pour afficher un "chargement..."
-  const [error, setError] = useState<string | null>(null); // Pour afficher les erreurs
-
-  // 2. La fonction qui se déclenche quand on clique sur le bouton
-  const handleSearch = async (e: React.FormEvent) => {
-    e.preventDefault(); // Empêche la page de se recharger
-    
-    setIsLoading(true); // On commence le chargement
-    setError(null);
-    setResults([]); // On vide les anciens résultats
-
-    try {
-      // 3. ON APPELLE NOTRE PROPRE API !
-      const response = await fetch(`/api/search?q=${query}`);
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Une erreur est survenue');
-      }
-
-      const data = await response.json();
-      
-      // Scryfall renvoie un objet avec une clé 'data' qui contient la liste
-      setResults(data.data); 
-
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Erreur inconnue');
-    } finally {
-      setIsLoading(false); // On arrête le chargement
-    }
-  };
-
-  // 4. Le JSX : ce que l'utilisateur voit (le HTML)
-  // (J'utilise Tailwind CSS, que vous avez installé, pour le style)
   return (
-    <main className="container mx-auto p-4">
-      <h1 className="text-3xl font-bold mb-4">Rechercher une carte Magic</h1>
+    <header className="bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-700 p-4 shadow-sm">
+      <div className="container mx-auto flex justify-between items-center">
+        <Link href="/" className="text-xl font-bold text-blue-600 dark:text-blue-400 hover:opacity-80">
+          ✨ MagicWish
+        </Link>
 
-      {/* Le formulaire de recherche */}
-      <form onSubmit={handleSearch} className="flex gap-2 mb-4">
-        <input
-          type="text"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Entrez un nom de carte (ex: Sol Ring)"
-          className="flex-grow p-2 border rounded text-black"
-        />
-        <button 
-          type="submit" 
-          disabled={isLoading}
-          className="bg-blue-500 text-white p-2 rounded disabled:bg-gray-400"
-        >
-          {isLoading ? 'Recherche...' : 'Rechercher'}
-        </button>
-      </form>
+        <div>
+          {user ? (
+            <div className="flex items-center gap-4">
+              {/* LIEN WISHLIST AJOUTÉ ICI */}
+              <Link 
+                href="/wishlist" 
+                className="font-medium text-gray-700 dark:text-gray-200 hover:text-blue-600 dark:hover:text-blue-400"
+              >
+                Ma Wishlist
+              </Link>
 
-      {/* Affichage des erreurs */}
-      {error && <p className="text-red-500">Erreur : {error}</p>}
+              <div className="h-6 w-px bg-gray-300 dark:bg-gray-600 mx-1 hidden md:block"></div>
 
-      {/* Affichage des résultats */}
-      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
-        {results.map((card) => (
-          <div key={card.id}>
-            <img
-              src={card.image_uris?.small || ''} // Utilise l'image "small"
-              alt={card.name}
-              className="rounded"
-            />
-            <p className="text-center text-sm mt-1">{card.name}</p>
-          </div>
-        ))}
+              {/* Avatar */}
+              {user.photoURL && (
+                <img 
+                  src={user.photoURL} 
+                  alt="Avatar" 
+                  className="w-8 h-8 rounded-full border border-gray-300"
+                  title={user.displayName || ''}
+                />
+              )}
+
+              <button
+                onClick={logOut}
+                className="text-sm bg-red-50 text-red-600 dark:bg-red-900/30 dark:text-red-400 px-3 py-1 rounded hover:opacity-80 transition"
+              >
+                Déconnexion
+              </button>
+            </div>
+          ) : (
+            <Link
+              href="/login"
+              className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 transition"
+            >
+              Se connecter
+            </Link>
+          )}
+        </div>
       </div>
-    </main>
+    </header>
   );
 }
 </file>
@@ -533,9 +455,10 @@ export default nextConfig;
   },
   "dependencies": {
     "firebase": "^12.5.0",
-    "next": "16.0.3",
-    "react": "19.2.0",
-    "react-dom": "19.2.0"
+    "next": "^16.0.8",
+    "react": "^19.2.1",
+    "react-dom": "^19.2.1",
+    "react-hot-toast": "^2.6.0"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
@@ -654,6 +577,437 @@ Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/bui
     "**/*.mts"
   ],
   "exclude": ["node_modules"]
+}
+</file>
+
+<file path="app/api/search/route.ts">
+// app/api/search/route.ts
+import { NextResponse } from 'next/server';
+
+export async function GET(request: Request) {
+  const { searchParams } = new URL(request.url);
+  const query = searchParams.get('q'); 
+
+  if (!query) {
+    return NextResponse.json(
+      { error: 'Aucun terme de recherche fourni.' }, 
+      { status: 400 } 
+    );
+  }
+
+  // --- MODIFICATION ICI : Ajout des guillemets "${query}" ---
+  // Cela force la recherche exacte de l'expression
+  const scryfallUrl = `https://api.scryfall.com/cards/search?q="${query}"&unique=prints`;
+
+  try {
+    const scryfallResponse = await fetch(scryfallUrl);
+
+    if (!scryfallResponse.ok) {
+      const errorData = await scryfallResponse.json();
+      console.error('Erreur Scryfall:', errorData);
+      return NextResponse.json(
+        { error: errorData.details || 'Carte non trouvée' }, 
+        { status: scryfallResponse.status }
+      );
+    }
+
+    const data = await scryfallResponse.json();
+    return NextResponse.json(data);
+
+  } catch (error) {
+    console.error('Erreur interne du serveur:', error);
+    return NextResponse.json(
+      { error: 'Une erreur est survenue sur le serveur.' }, 
+      { status: 500 }
+    );
+  }
+}
+</file>
+
+<file path="app/wishlist/page.tsx">
+// app/wishlist/page.tsx
+'use client';
+
+import { useEffect, useState } from 'react';
+import { useAuth } from '@/lib/AuthContext';
+import { db } from '@/lib/firebase';
+import { collection, onSnapshot, deleteDoc, doc, updateDoc, increment } from 'firebase/firestore';
+import toast from 'react-hot-toast';
+
+// Mise à jour du Type pour inclure le nom de l'édition (setName)
+type WishlistCard = {
+  id: string;
+  name: string;
+  imageUrl: string;
+  quantity: number;
+  price?: number;
+  setName?: string; // <--- Nouveau champ optionnel
+};
+
+export default function WishlistPage() {
+  const { user, loading } = useAuth();
+  const [cards, setCards] = useState<WishlistCard[]>([]);
+
+  useEffect(() => {
+    if (!user) return;
+
+    // Écoute en temps réel de la collection Wishlist
+    const unsubscribe = onSnapshot(collection(db, 'users', user.uid, 'wishlist'), (snapshot) => {
+      const items = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data(),
+        quantity: doc.data().quantity || 1,
+        price: doc.data().price || 0,
+        setName: doc.data().setName || null // On récupère l'édition si elle existe
+      })) as WishlistCard[];
+      
+      // Tri par nom alphabétique
+      items.sort((a, b) => a.name.localeCompare(b.name));
+      setCards(items);
+    });
+
+    return () => unsubscribe();
+  }, [user]);
+
+  // Gestion des quantités (+ / -) et suppression
+  const updateQuantity = async (cardId: string, amount: number, currentQuantity: number) => {
+    if (!user) return;
+    const cardRef = doc(db, 'users', user.uid, 'wishlist', cardId);
+
+    if (currentQuantity + amount <= 0) {
+      // Demande de confirmation avant suppression
+      if (confirm('Voulez-vous retirer cette carte de la liste ?')) {
+        await deleteDoc(cardRef);
+        toast('Carte retirée', { icon: '🗑️' });
+      }
+    } else {
+      await updateDoc(cardRef, { quantity: increment(amount) });
+    }
+  };
+
+  // Calcul du Grand Total
+  const totalPrice = cards.reduce((acc, card) => {
+    return acc + (card.price || 0) * card.quantity;
+  }, 0);
+
+  if (loading) return <p className="text-center p-10">Chargement...</p>;
+  if (!user) return <p className="text-center p-10">Connectez-vous pour voir votre liste.</p>;
+
+  return (
+    <main className="container mx-auto p-4">
+      {/* En-tête avec Titre et Total */}
+      <div className="flex flex-col md:flex-row justify-between items-center mb-8 gap-4">
+        <h1 className="text-3xl font-bold text-center md:text-left">
+          Ma Wishlist 
+          <span className="ml-3 text-lg font-normal text-gray-500">
+            ({cards.reduce((acc, c) => acc + c.quantity, 0)} cartes)
+          </span>
+        </h1>
+        
+        <div className="bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-100 px-6 py-3 rounded-xl shadow-sm border border-green-200 dark:border-green-700">
+          <span className="text-sm uppercase tracking-wide opacity-80">Estimation Total</span>
+          <div className="text-2xl font-bold">{totalPrice.toFixed(2)} €</div>
+        </div>
+      </div>
+
+      {/* Grille des cartes */}
+      {cards.length === 0 ? (
+        <p className="text-center text-gray-500 mt-10">Votre wishlist est vide.</p>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {cards.map((card) => (
+            <div key={card.id} className="flex bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden p-3 gap-4 items-center border border-gray-100 dark:border-gray-700">
+              {/* Image Miniature */}
+              <img
+                src={card.imageUrl}
+                alt={card.name}
+                className="w-20 h-28 object-cover rounded shadow-sm bg-gray-200"
+              />
+              
+              <div className="flex-1 min-w-0">
+                <h3 className="font-bold text-lg truncate" title={card.name}>{card.name}</h3>
+                
+                {/* --- NOUVEAU : Affichage de l'édition --- */}
+                {card.setName && (
+                  <p className="text-xs text-blue-600 dark:text-blue-400 mb-1 truncate font-medium">
+                    {card.setName}
+                  </p>
+                )}
+                
+                {/* Prix unitaire */}
+                <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">
+                  Prix unit. : {card.price && card.price > 0 ? `${card.price} €` : 'N/A'}
+                </p>
+                
+                {/* Contrôles Quantité et Prix Total ligne */}
+                <div className="flex justify-between items-end mt-2">
+                  <div className="flex items-center gap-3">
+                    <button 
+                      onClick={() => updateQuantity(card.id, -1, card.quantity)}
+                      className="bg-gray-200 dark:bg-gray-700 w-8 h-8 rounded hover:bg-gray-300 dark:hover:bg-gray-600 flex items-center justify-center font-bold transition-colors"
+                    >
+                      -
+                    </button>
+                    
+                    <span className="font-mono text-xl w-6 text-center">{card.quantity}</span>
+                    
+                    <button 
+                      onClick={() => updateQuantity(card.id, 1, card.quantity)}
+                      className="bg-blue-100 dark:bg-blue-900 text-blue-600 dark:text-blue-300 w-8 h-8 rounded hover:bg-blue-200 dark:hover:bg-blue-800 flex items-center justify-center font-bold transition-colors"
+                    >
+                      +
+                    </button>
+                  </div>
+
+                  {/* Prix total de la ligne (Qté * Prix) */}
+                  {card.price && card.price > 0 && (
+                     <div className="font-bold text-lg text-right text-gray-700 dark:text-gray-200">
+                       {(card.price * card.quantity).toFixed(2)} €
+                     </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </main>
+  );
+}
+</file>
+
+<file path="app/page.tsx">
+// app/page.tsx
+'use client'; 
+
+import { useState } from 'react';
+import { useAuth } from '@/lib/AuthContext';
+import { db } from '@/lib/firebase';
+import { doc, setDoc, updateDoc, getDoc, increment } from 'firebase/firestore'; 
+import toast from 'react-hot-toast';
+
+// --- TYPES ---
+type ScryfallCard = {
+  id: string;
+  oracle_id: string; // <--- C'est la clé magique pour le groupement
+  name: string;
+  set_name: string;
+  set: string;
+  released_at: string;
+  image_uris?: {
+    small: string;
+    normal: string;
+  };
+  card_faces?: {
+    image_uris?: {
+      small: string;
+      normal: string;
+    };
+  }[];
+  prices?: {
+    eur?: string;
+  };
+};
+
+const CARD_BACK_URL = "https://cards.scryfall.io/large/front/a/6/a6984342-f723-4e80-8e69-902d287a915f.jpg";
+
+// --- FONCTION UTILITAIRE IMAGE ---
+const getCardImage = (card: ScryfallCard): string => {
+  if (card.image_uris?.normal) return card.image_uris.normal;
+  if (card.card_faces && card.card_faces[0]?.image_uris?.normal) {
+    return card.card_faces[0].image_uris.normal;
+  }
+  return CARD_BACK_URL;
+};
+
+// --- SOUS-COMPOSANT : Gère l'affichage d'une carte et ses versions ---
+const CardGroup = ({ name, versions }: { name: string, versions: ScryfallCard[] }) => {
+  const { user } = useAuth();
+  
+  // Par défaut, on prend la version la plus récente (souvent la 1ère de la liste renvoyée)
+  const [selectedCard, setSelectedCard] = useState<ScryfallCard>(versions[0]);
+
+  const handleVersionChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const newVersion = versions.find(v => v.id === e.target.value);
+    if (newVersion) setSelectedCard(newVersion);
+  };
+
+  const addToWishlist = async () => {
+    if (!user) {
+      toast.error("Connectez-vous pour ajouter des cartes !");
+      return;
+    }
+
+    const card = selectedCard; 
+    const wishlistRef = doc(db, 'users', user.uid, 'wishlist', card.id);
+    const validImageUrl = getCardImage(card);
+    const priceNumber = card.prices?.eur ? parseFloat(card.prices.eur) : 0;
+    
+    // On nettoie le nom pour la sauvegarde aussi
+    const cleanName = card.name.split(' // ')[0];
+
+    try {
+      const docSnap = await getDoc(wishlistRef);
+      if (docSnap.exists()) {
+        await updateDoc(wishlistRef, { 
+          quantity: increment(1),
+          price: priceNumber
+        });
+        toast.success(`+1 exemplaire (${card.set_name})`);
+      } else {
+        await setDoc(wishlistRef, {
+          name: cleanName, // On sauvegarde le nom propre
+          imageUrl: validImageUrl,
+          quantity: 1,
+          price: priceNumber,
+          setName: card.set_name,
+          setCode: card.set,
+          addedAt: new Date()
+        });
+        toast.success(`Ajoutée : ${card.set_name}`);
+      }
+    } catch (error) {
+      console.error(error);
+      toast.error("Erreur sauvegarde");
+    }
+  };
+
+  return (
+    <div className="relative group flex flex-col h-full bg-white dark:bg-gray-800 rounded-xl shadow-md border border-gray-100 dark:border-gray-700 overflow-hidden">
+      {/* Image qui change selon la sélection */}
+      <div className="relative w-full min-h-[250px] bg-gray-200 dark:bg-gray-900 flex items-center justify-center p-2">
+        <img
+          src={getCardImage(selectedCard)}
+          alt={name}
+          className="w-full h-full object-contain max-h-[350px]"
+        />
+      </div>
+
+      <div className="p-3 flex flex-col flex-grow gap-2">
+        <h3 className="font-bold text-center truncate" title={name}>{name}</h3>
+
+        {/* --- SÉLECTEUR D'ÉDITION --- */}
+        <select 
+          value={selectedCard.id}
+          onChange={handleVersionChange}
+          className="w-full p-2 text-xs border rounded bg-gray-50 dark:bg-gray-700 dark:border-gray-600 text-gray-900 dark:text-white outline-none cursor-pointer"
+        >
+          {versions.map((v) => (
+            <option key={v.id} value={v.id}>
+              {v.set_name} ({v.set.toUpperCase()}) - {v.prices?.eur ? `${v.prices.eur}€` : "N/A"}
+            </option>
+          ))}
+        </select>
+
+        {/* PRIX et BOUTON */}
+        <div className="flex justify-between items-center mt-auto pt-2 border-t border-gray-100 dark:border-gray-700">
+          <span className="font-bold text-blue-600 dark:text-blue-400">
+             {selectedCard.prices?.eur ? `${selectedCard.prices.eur} €` : "Prix N/A"}
+          </span>
+
+          {user && (
+            <button
+              onClick={addToWishlist}
+              className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-1.5 rounded-full text-sm font-medium transition shadow-sm"
+            >
+              Ajouter +
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+
+// --- COMPOSANT PRINCIPAL ---
+export default function HomePage() {
+  const [query, setQuery] = useState('');
+  const [groupedResults, setGroupedResults] = useState<{ name: string, versions: ScryfallCard[] }[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+
+  const handleSearch = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!query.trim()) return;
+
+    setIsLoading(true);
+    setGroupedResults([]); 
+
+    try {
+      const response = await fetch(`/api/search?q=${query}`);
+      if (!response.ok) throw new Error('Erreur');
+      const data = await response.json();
+      const rawCards: ScryfallCard[] = data.data || [];
+
+      // --- NOUVEL ALGORITHME DE GROUPEMENT (PAR ORACLE_ID) ---
+      // C'est beaucoup plus robuste : toutes les variantes d'une carte partagent le même oracle_id
+      const groups = new Map<string, ScryfallCard[]>();
+
+      rawCards.forEach(card => {
+        // Si oracle_id n'existe pas (rare, cartes spéciales), on utilise le nom comme secours
+        const groupKey = card.oracle_id || card.name; 
+
+        if (!groups.has(groupKey)) {
+          groups.set(groupKey, []);
+        }
+        groups.get(groupKey)?.push(card);
+      });
+
+      // On transforme le Map en tableau pour l'afficher
+      const resultsArray = Array.from(groups.values()).map((versions) => {
+        // Pour le nom d'affichage, on prend le nom de la première carte 
+        // et on le nettoie (on retire " // ...") pour que ce soit joli
+        const displayName = versions[0].name.split(' // ')[0];
+        return {
+          name: displayName,
+          versions: versions
+        };
+      });
+
+      setGroupedResults(resultsArray);
+
+    } catch (err) {
+      toast.error("Aucune carte trouvée.");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return (
+    <main className="container mx-auto p-4 max-w-7xl">
+      <h1 className="text-3xl font-bold mb-8 text-center mt-8">MagicWish ✨</h1>
+
+      <form onSubmit={handleSearch} className="flex gap-2 mb-10 max-w-xl mx-auto">
+        <input
+          type="text"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Rechercher (ex: Sol Ring)..."
+          className="flex-grow p-3 border rounded-lg shadow-sm outline-none transition-colors
+            bg-white text-gray-900 border-gray-300 placeholder-gray-500
+            dark:bg-gray-800 dark:text-white dark:border-gray-600 dark:placeholder-gray-400"
+        />
+        <button 
+          type="submit" 
+          disabled={isLoading}
+          className="bg-blue-600 hover:bg-blue-700 text-white px-6 rounded-lg font-semibold disabled:opacity-50 transition"
+        >
+          {isLoading ? '...' : '🔍'}
+        </button>
+      </form>
+
+      {/* GRILLE D'AFFICHAGE */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
+        {groupedResults.map((group) => (
+          <CardGroup 
+            key={group.name} // React demande une clé unique
+            name={group.name} 
+            versions={group.versions} 
+          />
+        ))}
+      </div>
+    </main>
+  );
 }
 </file>
 

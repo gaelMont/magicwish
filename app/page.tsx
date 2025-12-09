@@ -10,7 +10,7 @@ import toast from 'react-hot-toast';
 // --- TYPES ---
 type ScryfallCard = {
   id: string;
-  oracle_id: string; // <--- C'est la clé magique pour le groupement
+  oracle_id: string;
   name: string;
   set_name: string;
   set: string;
@@ -45,7 +45,7 @@ const getCardImage = (card: ScryfallCard): string => {
 const CardGroup = ({ name, versions }: { name: string, versions: ScryfallCard[] }) => {
   const { user } = useAuth();
   
-  // Par défaut, on prend la version la plus récente (souvent la 1ère de la liste renvoyée)
+  // Par défaut, on prend la première version de la liste
   const [selectedCard, setSelectedCard] = useState<ScryfallCard>(versions[0]);
 
   const handleVersionChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
@@ -64,7 +64,7 @@ const CardGroup = ({ name, versions }: { name: string, versions: ScryfallCard[] 
     const validImageUrl = getCardImage(card);
     const priceNumber = card.prices?.eur ? parseFloat(card.prices.eur) : 0;
     
-    // On nettoie le nom pour la sauvegarde aussi
+    // On nettoie le nom pour la sauvegarde (pour que "Sol Ring // Sol Ring" devienne "Sol Ring" dans ta liste)
     const cleanName = card.name.split(' // ')[0];
 
     try {
@@ -77,7 +77,7 @@ const CardGroup = ({ name, versions }: { name: string, versions: ScryfallCard[] 
         toast.success(`+1 exemplaire (${card.set_name})`);
       } else {
         await setDoc(wishlistRef, {
-          name: cleanName, // On sauvegarde le nom propre
+          name: cleanName, // Nom propre
           imageUrl: validImageUrl,
           quantity: 1,
           price: priceNumber,
@@ -160,27 +160,24 @@ export default function HomePage() {
       const data = await response.json();
       const rawCards: ScryfallCard[] = data.data || [];
 
-      // --- NOUVEL ALGORITHME DE GROUPEMENT (PAR ORACLE_ID) ---
-      // C'est beaucoup plus robuste : toutes les variantes d'une carte partagent le même oracle_id
+      // --- ALGORITHME DE GROUPEMENT PAR NOM NETTOYÉ ---
+      // On ignore oracle_id et on force le groupement par le nom (sans le " // ")
       const groups = new Map<string, ScryfallCard[]>();
 
       rawCards.forEach(card => {
-        // Si oracle_id n'existe pas (rare, cartes spéciales), on utilise le nom comme secours
-        const groupKey = card.oracle_id || card.name; 
+        // "Sol Ring // Sol Ring" -> devient "Sol Ring"
+        const cleanName = card.name.split(' // ')[0];
 
-        if (!groups.has(groupKey)) {
-          groups.set(groupKey, []);
+        if (!groups.has(cleanName)) {
+          groups.set(cleanName, []);
         }
-        groups.get(groupKey)?.push(card);
+        groups.get(cleanName)?.push(card);
       });
 
       // On transforme le Map en tableau pour l'afficher
-      const resultsArray = Array.from(groups.values()).map((versions) => {
-        // Pour le nom d'affichage, on prend le nom de la première carte 
-        // et on le nettoie (on retire " // ...") pour que ce soit joli
-        const displayName = versions[0].name.split(' // ')[0];
+      const resultsArray = Array.from(groups.entries()).map(([cleanName, versions]) => {
         return {
-          name: displayName,
+          name: cleanName, // On utilise le nom nettoyé pour l'affichage (ex: juste "Sol Ring")
           versions: versions
         };
       });
@@ -221,7 +218,7 @@ export default function HomePage() {
       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
         {groupedResults.map((group) => (
           <CardGroup 
-            key={group.name} // React demande une clé unique
+            key={group.name} 
             name={group.name} 
             versions={group.versions} 
           />
