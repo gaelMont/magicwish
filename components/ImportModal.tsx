@@ -11,6 +11,7 @@ import toast from 'react-hot-toast';
 type ImportModalProps = {
   isOpen: boolean;
   onClose: () => void;
+  targetCollection?: string;
 };
 
 type CSVRow = {
