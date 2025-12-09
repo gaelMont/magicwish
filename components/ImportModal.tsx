@@ -14,8 +14,8 @@ type ImportModalProps = {
   targetCollection?: string;
 };
 
-// On utilise un type plus souple pour gérer les accès par index
-type CSVRow = { [key: string]: string | undefined } | string[];
+// On accepte n'importe quelle structure pour le debug
+type CSVRow = any; 
 
 type CardInput = { 
   name: string; 
@@ -80,45 +80,48 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
     return Array.from(map.values());
   };
 
-  const mapRowToCard = (row: CSVRow): CardInput | null => {
-    // 1. Convertir la ligne en tableau de valeurs pour accéder par INDEX
-    // Si c'est un objet (header: true), on prend les values. Si c'est déjà un array, on le garde.
+  const mapRowToCard = (row: CSVRow, rowIndex: number): CardInput | null => {
+    // Conversion en tableau pour accès par index (sécurité)
     const values = Array.isArray(row) ? row : Object.values(row);
     
-    // Pour la recherche par nom de colonne (si dispo)
+    // Tentative de récupération par clés (si header reconnu)
     const normalizedRow: { [key: string]: string } = {};
     if (!Array.isArray(row)) {
       Object.keys(row).forEach(key => {
         if (key) {
           let cleanKey = key.trim().toLowerCase().replace(/^\ufeff/, '');
-          normalizedRow[cleanKey] = (row[key] || '').trim();
+          normalizedRow[cleanKey] = (row[key] || '').toString().trim();
         }
       });
     }
 
-    // --- LOGIQUE HYBRIDE (Nom OU Position) ---
+    // --- LOGS DE DEBUG POUR LA PREMIÈRE LIGNE ---
+    if (rowIndex === 0) {
+      console.log("🔍 --- INSPECTION LIGNE 1 ---");
+      console.log("Données brutes:", row);
+      console.log("Clés détectées:", Object.keys(normalizedRow));
+      console.log("Valeurs (Tableau):", values);
+    }
 
-    // A. NOM :
+    // A. Recherche par NOM
     let name = normalizedRow['name'] || normalizedRow['card name'] || normalizedRow['nom'];
     
-    // B. POSITION (Correspondance stricte ManaBox) :
-    // Index 2 = Name
-    if (!name && values[2]) {
-        name = values[2].trim();
-    }
+    // B. Recherche par INDEX (ManaBox position 2 = Name)
+    if (!name && values[2]) name = values[2].trim();
     
-    if (!name) return null; // Si toujours rien, on abandonne la ligne
+    // Si toujours pas de nom, c'est une ligne vide ou invalide
+    if (!name) return null;
 
-    // SET CODE (Index 3 dans ManaBox)
+    // Set Code (ManaBox position 3)
     let setCode = normalizedRow['set code'] || normalizedRow['set'] || normalizedRow['edition'] || '';
     if (!setCode && values[3]) setCode = values[3].trim();
 
-    // QUANTITÉ (Index 8 dans ManaBox)
+    // Quantité (ManaBox position 8)
     let qtyString = normalizedRow['quantity'] || normalizedRow['qty'] || normalizedRow['qte'] || '1';
     if (!normalizedRow['quantity'] && values[8]) qtyString = values[8];
     const quantity = parseInt(qtyString) || 1;
     
-    // SCRYFALL ID (Index 10 dans ManaBox)
+    // Scryfall ID (ManaBox position 10)
     let scryfallIdFromCsv = normalizedRow['scryfall id'] || normalizedRow['scryfallid'] || undefined;
     if (!scryfallIdFromCsv && values[10] && values[10].length > 10) {
         scryfallIdFromCsv = values[10].trim();
@@ -150,34 +153,77 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
         return;
       }
 
-      // Détection séparateur (Virgule vs Point-Virgule)
+      // --- DEBUG : Afficher les 200 premiers caractères ---
+      console.log("📄 DÉBUT DU FICHIER CSV (RAW):");
+      console.log(csvText.substring(0, 300));
+      console.log("-----------------------------------");
+
+      // Détection séparateur
       const firstLine = csvText.split('\n')[0];
       const semiCount = (firstLine.match(/;/g) || []).length;
       const commaCount = (firstLine.match(/,/g) || []).length;
       const detectedDelimiter = semiCount > commaCount ? ';' : ',';
 
-      console.log(`Séparateur utilisé : "${detectedDelimiter}"`);
+      console.log(`🤖 Séparateur détecté : "${detectedDelimiter}" (Virgules: ${commaCount}, Point-virgules: ${semiCount})`);
 
       Papa.parse(csvText, {
-        header: true, // On garde true, mais on convertira en tableau si besoin
+        header: true, 
         skipEmptyLines: true,
         delimiter: detectedDelimiter,
         complete: async (results) => {
           const rows = results.data as CSVRow[];
           
+          console.log(`📊 Lignes trouvées par PapaParse : ${rows.length}`);
+
           let allCards: CardInput[] = [];
-          rows.forEach(row => {
-            const card = mapRowToCard(row);
+          rows.forEach((row, index) => {
+            const card = mapRowToCard(row, index);
             if (card) allCards.push(card);
           });
 
-          if (allCards.length === 0) {
-            toast.error("Format non reconnu. Vérifiez que c'est bien un export ManaBox.");
+          // --- TEST VISUEL IMMEDIAT ---
+          if (allCards.length > 0) {
+            const first = allCards[0];
+            const confirmMsg = `
+              TEST DE LECTURE RÉUSSI ✅
+              -------------------------
+              J'ai trouvé ${allCards.length} cartes.
+              
+              Exemple de la 1ère carte :
+              Nom : ${first.name}
+              Set : ${first.setCode}
+              Qté : ${first.quantity}
+              ID  : ${first.scryfallIdFromCsv || 'Non trouvé'}
+              
+              Voulez-vous lancer l'importation réelle vers Firebase ?
+            `;
+            
+            if (!window.confirm(confirmMsg)) {
+              setIsImporting(false);
+              toast("Importation annulée par l'utilisateur.");
+              return; 
+            }
+          } else {
+            // ECHEC
+            console.error("❌ ECHEC : Aucune carte extraite.");
+            console.log("Structure d'une ligne brute (Row 0):", rows[0]);
+            
+            alert(`
+              ECHEC DE LECTURE ❌
+              -------------------
+              0 cartes trouvées sur ${rows.length} lignes lues.
+              
+              Le séparateur détecté était : "${detectedDelimiter}"
+              
+              Ouvrez la console (F12) pour voir les détails bruts.
+            `);
             setIsImporting(false);
             return;
           }
 
-          // --- DÉBUT DU TRAITEMENT ---
+          // --- SI ON ARRIVE ICI, C'EST QUE LA LECTURE EST BONNE ---
+          // --- ON LANCE L'IMPORTATION FIREBASE ---
+          
           allCards = optimizeCardList(allCards);
           const optimizedCount = allCards.length;
           const chunks = chunkArray(allCards, 75);
@@ -276,7 +322,6 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
           setIsImporting(false);
           onClose();
         },
-        // --- CORRECTION DU TYPE ANY ICI AUSSI ---
         error: (err: unknown) => {
           console.error(err);
           toast.error("Erreur lecture CSV");
