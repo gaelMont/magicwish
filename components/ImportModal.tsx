@@ -14,10 +14,6 @@ type ImportModalProps = {
   targetCollection?: string;
 };
 
-// On utilise cette ligne spéciale pour autoriser 'any' juste pour cette ligne
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type CSVRow = any; 
-
 type CardInput = { 
   name: string; 
   setCode: string; 
@@ -81,51 +77,30 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
     return Array.from(map.values());
   };
 
-  const mapRowToCard = (row: CSVRow, rowIndex: number): CardInput | null => {
-    // Conversion en tableau pour accès par index (sécurité)
-    const values = Array.isArray(row) ? row : Object.values(row);
+  // --- NOUVELLE LOGIQUE : Lecture par position (Index) ---
+  const mapRowToCard = (row: string[]): CardInput | null => {
+    // Structure ManaBox attendue :
+    // 0: Binder Name | 1: Binder Type | 2: Name | 3: Set Code ... | 8: Quantity ... | 10: Scryfall ID
     
-    // Tentative de récupération par clés (si header reconnu)
-    const normalizedRow: { [key: string]: string } = {};
-    if (!Array.isArray(row)) {
-      Object.keys(row).forEach(key => {
-        if (key) {
-          let cleanKey = key.trim().toLowerCase().replace(/^\ufeff/, '');
-          normalizedRow[cleanKey] = (row[key] || '').toString().trim();
-        }
-      });
-    }
+    // Sécurité : Vérifier qu'on a assez de colonnes
+    if (!row || row.length < 3) return null;
 
-    // --- LOGS DE DEBUG POUR LA PREMIÈRE LIGNE ---
-    if (rowIndex === 0) {
-      console.log("🔍 --- INSPECTION LIGNE 1 ---");
-      console.log("Données brutes:", row);
-      console.log("Clés détectées:", Object.keys(normalizedRow));
-      console.log("Valeurs (Tableau):", values);
-    }
-
-    // A. Recherche par NOM
-    let name = normalizedRow['name'] || normalizedRow['card name'] || normalizedRow['nom'];
-    
-    // B. Recherche par INDEX (ManaBox position 2 = Name)
-    if (!name && values[2]) name = values[2].trim();
-    
-    // Si toujours pas de nom, c'est une ligne vide ou invalide
+    const name = row[2]?.trim();
     if (!name) return null;
 
-    // Set Code (ManaBox position 3)
-    let setCode = normalizedRow['set code'] || normalizedRow['set'] || normalizedRow['edition'] || '';
-    if (!setCode && values[3]) setCode = values[3].trim();
-
-    // Quantité (ManaBox position 8)
-    let qtyString = normalizedRow['quantity'] || normalizedRow['qty'] || normalizedRow['qte'] || '1';
-    if (!normalizedRow['quantity'] && values[8]) qtyString = values[8];
-    const quantity = parseInt(qtyString) || 1;
+    const setCode = row[3]?.trim() || '';
     
-    // Scryfall ID (ManaBox position 10)
-    let scryfallIdFromCsv = normalizedRow['scryfall id'] || normalizedRow['scryfallid'] || undefined;
-    if (!scryfallIdFromCsv && values[10] && values[10].length > 10) {
-        scryfallIdFromCsv = values[10].trim();
+    // Nettoyage de la quantité (parfois "1", parfois vide)
+    let qty = 1;
+    if (row[8]) {
+      const parsed = parseInt(row[8].trim());
+      if (!isNaN(parsed) && parsed > 0) qty = parsed;
+    }
+
+    // ID Scryfall (colonne 10)
+    let scryfallId = undefined;
+    if (row.length > 10 && row[10] && row[10].length > 10) {
+      scryfallId = row[10].trim();
     }
 
     const cleanName = name.split(' // ')[0].toLowerCase();
@@ -133,7 +108,14 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
     const tempId = `${cleanName}-${cleanSet}`.replace(/[^a-z0-9]/g, '-');
     const signature = `${cleanName}|${cleanSet}`;
 
-    return { name, setCode, quantity, tempId, signature, scryfallIdFromCsv };
+    return { 
+      name: name, 
+      setCode: setCode, 
+      quantity: qty, 
+      tempId, 
+      signature, 
+      scryfallIdFromCsv: scryfallId 
+    };
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -154,76 +136,48 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
         return;
       }
 
-      // --- DEBUG : Afficher les 200 premiers caractères ---
-      console.log("📄 DÉBUT DU FICHIER CSV (RAW):");
-      console.log(csvText.substring(0, 300));
-      console.log("-----------------------------------");
-
-      // Détection séparateur
+      // --- 1. DÉTECTION DU SÉPARATEUR ---
       const firstLine = csvText.split('\n')[0];
       const semiCount = (firstLine.match(/;/g) || []).length;
       const commaCount = (firstLine.match(/,/g) || []).length;
       const detectedDelimiter = semiCount > commaCount ? ';' : ',';
-
-      console.log(`🤖 Séparateur détecté : "${detectedDelimiter}" (Virgules: ${commaCount}, Point-virgules: ${semiCount})`);
+      
+      console.log(`Séparateur utilisé : "${detectedDelimiter}"`);
 
       Papa.parse(csvText, {
-        header: true, 
+        header: false, // <--- CHANGEMENT MAJEUR : On désactive la lecture des en-têtes
         skipEmptyLines: true,
         delimiter: detectedDelimiter,
         complete: async (results) => {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const rows = results.data as any[]; // On utilise any ici aussi pour être tranquille
-          
-          console.log(`📊 Lignes trouvées par PapaParse : ${rows.length}`);
+          // On récupère un tableau de tableaux de chaînes (string[][])
+          const rows = results.data as string[][];
 
-          let allCards: CardInput[] = [];
-          rows.forEach((row, index) => {
-            const card = mapRowToCard(row, index);
-            if (card) allCards.push(card);
-          });
-
-          // --- TEST VISUEL IMMEDIAT ---
-          if (allCards.length > 0) {
-            const first = allCards[0];
-            const confirmMsg = `
-              TEST DE LECTURE RÉUSSI ✅
-              -------------------------
-              J'ai trouvé ${allCards.length} cartes.
-              
-              Exemple de la 1ère carte :
-              Nom : ${first.name}
-              Set : ${first.setCode}
-              Qté : ${first.quantity}
-              ID  : ${first.scryfallIdFromCsv || 'Non trouvé'}
-              
-              Voulez-vous lancer l'importation réelle vers Firebase ?
-            `;
-            
-            if (!window.confirm(confirmMsg)) {
-              setIsImporting(false);
-              toast("Importation annulée par l'utilisateur.");
-              return; 
-            }
-          } else {
-            // ECHEC
-            console.error("❌ ECHEC : Aucune carte extraite.");
-            if (rows.length > 0) console.log("Structure d'une ligne brute (Row 0):", rows[0]);
-            
-            alert(`
-              ECHEC DE LECTURE ❌
-              -------------------
-              0 cartes trouvées sur ${rows.length} lignes lues.
-              Le séparateur détecté était : "${detectedDelimiter}"
-              Ouvrez la console (F12) pour voir les détails bruts.
-            `);
+          if (rows.length < 2) {
+            toast.error("Fichier CSV vide ou mal formé.");
             setIsImporting(false);
             return;
           }
 
-          // --- SI ON ARRIVE ICI, C'EST QUE LA LECTURE EST BONNE ---
-          // --- ON LANCE L'IMPORTATION FIREBASE ---
+          // On ignore la première ligne (les titres : "Binder Name, ...")
+          const dataRows = rows.slice(1);
           
+          let allCards: CardInput[] = [];
+          dataRows.forEach(row => {
+            const card = mapRowToCard(row);
+            if (card) allCards.push(card);
+          });
+
+          // --- LOGS DE DEBUG ---
+          if (allCards.length === 0) {
+            console.error("Aucune carte trouvée. Voici la première ligne brute :", dataRows[0]);
+            toast.error("Aucune carte détectée. Vérifiez le format (ManaBox).");
+            setIsImporting(false);
+            return;
+          }
+          
+          console.log(`✅ ${allCards.length} cartes détectées. Exemple :`, allCards[0]);
+
+          // --- IMPORTATION ---
           allCards = optimizeCardList(allCards);
           const optimizedCount = allCards.length;
           const chunks = chunkArray(allCards, 75);
@@ -318,11 +272,11 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
             await new Promise(r => setTimeout(r, 100));
           }
 
-          toast.success(`Import terminé ! (${successCount} cartes)`);
+          toast.success(`Import terminé ! (${successCount} cartes identifiées)`);
           setIsImporting(false);
           onClose();
         },
-        // --- C'EST ICI QUE J'AI CORRIGÉ LE 'any' PAR 'unknown' ---
+        // --- CORRECTION TYPESCRIPT ICI (unknown au lieu de any) ---
         error: (err: unknown) => {
           console.error(err);
           toast.error("Erreur lecture CSV");
@@ -355,7 +309,7 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
               <input type="file" accept=".csv" onChange={handleFileUpload} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" />
               <div className="text-5xl mb-3 group-hover:scale-110 transition-transform">📦</div>
               <span className="font-medium text-gray-700 dark:text-gray-200">Choisir un fichier CSV</span>
-              <p className="text-xs text-gray-400 mt-2">Format: ManaBox (recommandé)</p>
+              <p className="text-xs text-gray-400 mt-2">Format: ManaBox (recommandé), Name, Set...</p>
             </div>
           </div>
         )}
