@@ -14,6 +14,10 @@ type ImportModalProps = {
   targetCollection?: string;
 };
 
+// Types pour les données
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type CSVRow = any; // On accepte tout format venant du CSV pour la prévisualisation
+
 type CardInput = { 
   name: string; 
   setCode: string; 
@@ -36,19 +40,18 @@ interface ScryfallData {
 export default function ImportModal({ isOpen, onClose, targetCollection = 'wishlist' }: ImportModalProps) {
   const { user } = useAuth();
   
-  // États pour la prévisualisation (Le Tableau)
-  const [previewData, setPreviewData] = useState<string[][]>([]); // Les données
-  const [columns, setColumns] = useState<string[]>([]); // Les titres des colonnes
-  const [fileParsed, setFileParsed] = useState(false); // Est-ce qu'on a fini de lire le fichier ?
+  // États pour la prévisualisation
+  const [previewData, setPreviewData] = useState<CSVRow[]>([]);
+  const [columns, setColumns] = useState<string[]>([]);
+  const [step, setStep] = useState<'upload' | 'preview' | 'importing'>('upload');
 
-  // États pour l'importation réelle
-  const [isImporting, setIsImporting] = useState(false);
+  // États pour la progression
   const [progress, setProgress] = useState(0);
   const [statusMessage, setStatusMessage] = useState('');
 
   if (!isOpen) return null;
 
-  // --- 1. LECTURE DU FICHIER ET CRÉATION DU TABLEAU ---
+  // --- 1. GESTION DU FICHIER (PAPA PARSE) ---
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -56,74 +59,91 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
     // Réinitialisation
     setPreviewData([]);
     setColumns([]);
-    setFileParsed(false);
-
+    
     Papa.parse(file, {
-      header: false, // On garde false pour éviter les bugs de clés, on gère l'en-tête nous-mêmes
+      header: true, // On remet TRUE comme demandé pour avoir les objets (Clés/Valeurs)
       skipEmptyLines: true,
-      delimiter: ",", // On force la virgule (format ManaBox)
+      dynamicTyping: true, // Convertit les nombres automatiquement
       complete: (results) => {
-        const rows = results.data as string[][];
+        const rows = results.data;
+        const metaFields = results.meta.fields || [];
 
         if (rows.length > 0) {
-          console.log("Données brutes importées :", rows);
-          setColumns(rows[0]); // La première ligne devient les en-têtes
-          setPreviewData(rows.slice(1)); // Le reste devient les données
-          setFileParsed(true); // Fichier prêt !
-          toast.success(`${rows.length - 1} lignes chargées.`);
+          console.log("Aperçu des données :", rows.slice(0, 5));
+          setColumns(metaFields);
+          setPreviewData(rows);
+          setStep('preview'); // On passe à l'étape tableau
+          toast.success(`${rows.length} lignes chargées.`);
+        } else {
+            toast.error("Le fichier semble vide.");
         }
       },
-      error: (error: unknown) => {
-        console.error("Erreur parsing :", error);
-        toast.error("Erreur lors de la lecture du fichier.");
+      error: (err: unknown) => {
+        console.error("Erreur parsing :", err);
+        toast.error("Impossible de lire le fichier CSV.");
       }
     });
   };
 
-  // --- 2. ANALYSE ET IMPORTATION (Logique existante) ---
+  // --- 2. TRAITEMENT DES DONNÉES (LOGIQUE ROBUSTE) ---
   const startImport = async () => {
     if (!user || previewData.length === 0) return;
 
-    setIsImporting(true);
+    setStep('importing');
     setProgress(0);
-    setStatusMessage("Analyse des données...");
+    setStatusMessage("Préparation des cartes...");
 
-    // Conversion des données du tableau en objets CardInput
+    // Fonction pour nettoyer les clés (enlever BOM, espaces, minuscules)
+    const normalizeKey = (row: CSVRow, possibleKeys: string[]): string | undefined => {
+        const keys = Object.keys(row);
+        for (const k of keys) {
+            const cleanK = k.trim().toLowerCase().replace(/^\ufeff/, '');
+            if (possibleKeys.includes(cleanK)) return row[k];
+        }
+        return undefined;
+    };
+
     let allCards: CardInput[] = [];
-    
+
+    // Conversion des données brutes en objets CardInput propres
     previewData.forEach((row) => {
-      // LOGIQUE DE MAPPING (Index 2 = Nom, Index 10 = ID)
-      if (row.length < 3) return;
+        // Recherche intelligente des colonnes (peu importe la majuscule/minuscule)
+        const name = normalizeKey(row, ['name', 'nom', 'card name', 'card']);
+        if (!name) return; // Pas de nom = on saute
 
-      const getString = (idx: number) => (row[idx] ? String(row[idx]).trim() : '');
-      
-      const name = getString(2); // Nom
-      if (!name) return;
+        const setCode = normalizeKey(row, ['set code', 'set', 'edition', 'code']) || '';
+        
+        let quantity = 1;
+        const qtyVal = normalizeKey(row, ['quantity', 'qty', 'qte', 'count']);
+        if (qtyVal) {
+            const parsed = parseInt(String(qtyVal));
+            if (!isNaN(parsed) && parsed > 0) quantity = parsed;
+        }
 
-      const setCode = getString(3); // Set
-      
-      let qty = 1;
-      const qtyStr = getString(8); // Quantité
-      if (qtyStr) {
-        const parsed = parseInt(qtyStr);
-        if (!isNaN(parsed) && parsed > 0) qty = parsed;
-      }
+        const scryfallId = normalizeKey(row, ['scryfall id', 'scryfallid']);
 
-      let scryfallId = undefined;
-      const idStr = getString(10); // ID Scryfall
-      if (idStr && idStr.length > 10) scryfallId = idStr;
+        const cleanName = String(name).split(' // ')[0].toLowerCase();
+        const cleanSet = String(setCode).toLowerCase();
+        const tempId = `${cleanName}-${cleanSet}`.replace(/[^a-z0-9]/g, '-');
+        const signature = `${cleanName}|${cleanSet}`;
 
-      const cleanName = name.split(' // ')[0].toLowerCase();
-      const cleanSet = setCode.toLowerCase();
-      const tempId = `${cleanName}-${cleanSet}`.replace(/[^a-z0-9]/g, '-');
-      const signature = `${cleanName}|${cleanSet}`;
-
-      allCards.push({ 
-        name, setCode, quantity: qty, tempId, signature, scryfallIdFromCsv: scryfallId 
-      });
+        allCards.push({
+            name: String(name),
+            setCode: String(setCode),
+            quantity,
+            scryfallIdFromCsv: scryfallId ? String(scryfallId) : undefined,
+            tempId,
+            signature
+        });
     });
 
-    // --- DÉBUT COMMUNICATION FIREBASE/SCRYFALL (Code existant) ---
+    if (allCards.length === 0) {
+        toast.error("Aucune carte valide trouvée dans le tableau.");
+        setStep('preview');
+        return;
+    }
+
+    // --- LOGIQUE EXISTANTE (SCRYFALL + FIREBASE) ---
     const optimizeCardList = (rawCards: CardInput[]): CardInput[] => {
         const map = new Map<string, CardInput>();
         rawCards.forEach(card => {
@@ -209,7 +229,7 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
                     }, { merge: true });
                     successCount++;
                 } else {
-                    // Fallback
+                    // Fallback (Carte non trouvée sur Scryfall)
                     const cardRef = doc(db, 'users', user.uid, targetCollection, inputCard.tempId);
                     batch.set(cardRef, {
                         name: inputCard.name,
@@ -232,105 +252,122 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
 
         processedCards += chunk.length;
         setProgress(Math.round((processedCards / totalCards) * 100));
-        setStatusMessage(`Traitement...`);
+        setStatusMessage(`Traitement... (${processedCards}/${totalCards})`);
         await new Promise(r => setTimeout(r, 50));
     }
 
-    toast.success(`Succès ! ${successCount} cartes ajoutées.`);
-    setIsImporting(false);
+    toast.success(`Import réussi ! ${successCount} cartes ajoutées.`);
     onClose();
+    setStep('upload'); // Reset pour la prochaine fois
+  };
+
+  const handleReset = () => {
+    setPreviewData([]);
+    setColumns([]);
+    setStep('upload');
   };
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 backdrop-blur-sm animate-in fade-in zoom-in duration-200">
-      <div className="bg-white dark:bg-gray-800 rounded-xl p-6 max-w-4xl w-full shadow-2xl border border-gray-100 dark:border-gray-700 flex flex-col max-h-[90vh]">
+      <div className="bg-white dark:bg-gray-800 rounded-xl p-6 max-w-5xl w-full shadow-2xl border border-gray-100 dark:border-gray-700 flex flex-col max-h-[90vh]">
         
-        <div className="flex justify-between items-center mb-4">
+        {/* EN-TÊTE MODALE */}
+        <div className="flex justify-between items-center mb-4 border-b border-gray-100 dark:border-gray-700 pb-3">
             <h2 className="text-xl font-bold text-gray-900 dark:text-white">
             Importer {targetCollection === 'wishlist' ? 'Wishlist' : 'Collection'}
             </h2>
             <button onClick={onClose} className="text-gray-500 hover:text-gray-700 dark:text-gray-400">✕</button>
         </div>
         
-        {/* ÉCRAN DE CHARGEMENT */}
-        {isImporting ? (
-          <div className="text-center py-10">
+        {/* ÉTAPE 3 : IMPORTATION (BARRE DE CHARGEMENT) */}
+        {step === 'importing' && (
+          <div className="text-center py-10 flex-grow flex flex-col justify-center">
             <div className="text-5xl font-bold text-green-600 mb-4">{progress}%</div>
-            <div className="w-full bg-gray-200 rounded-full h-4 dark:bg-gray-700 overflow-hidden mb-4">
+            <div className="w-full bg-gray-200 rounded-full h-4 dark:bg-gray-700 overflow-hidden mb-4 max-w-lg mx-auto">
               <div className="bg-green-600 h-full rounded-full transition-all duration-300" style={{ width: `${progress}%` }}></div>
             </div>
             <p className="text-lg text-gray-600 dark:text-gray-300 animate-pulse">{statusMessage}</p>
           </div>
-        ) : (
-          <>
-            {/* SÉLECTION FICHIER */}
-            {!fileParsed && (
-                <div className="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-xl p-10 text-center hover:bg-gray-50 dark:hover:bg-gray-700/50 transition cursor-pointer relative group">
-                <input type="file" accept=".csv" onChange={handleFileUpload} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" />
-                <div className="text-6xl mb-4 group-hover:scale-110 transition-transform">📄</div>
-                <span className="font-bold text-lg text-gray-700 dark:text-gray-200">Cliquez pour choisir votre CSV ManaBox</span>
+        )}
+
+        {/* ÉTAPE 1 : SELECTION DU FICHIER */}
+        {step === 'upload' && (
+            <div className="flex-grow flex flex-col justify-center p-8">
+                <div className="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-xl p-16 text-center hover:bg-gray-50 dark:hover:bg-gray-700/50 transition cursor-pointer relative group">
+                    <input type="file" accept=".csv" onChange={handleFileUpload} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" />
+                    <div className="text-7xl mb-6 group-hover:scale-110 transition-transform">📂</div>
+                    <span className="font-bold text-xl text-gray-700 dark:text-gray-200">Choisir un fichier CSV</span>
+                    <p className="text-gray-400 mt-2">Compatible ManaBox, DragonShield, etc.</p>
                 </div>
-            )}
+            </div>
+        )}
 
-            {/* PRÉVISUALISATION DU TABLEAU */}
-            {fileParsed && previewData.length > 0 && (
-                <div className="flex flex-col flex-grow overflow-hidden">
-                    <div className="flex justify-between items-center mb-2">
-                        <p className="text-green-600 font-medium">✅ {previewData.length} cartes détectées</p>
-                        <button 
-                            onClick={() => { setFileParsed(false); setPreviewData([]); }}
-                            className="text-sm text-red-500 hover:underline"
-                        >
-                            Changer de fichier
-                        </button>
+        {/* ÉTAPE 2 : PRÉVISUALISATION (TABLEAU) */}
+        {step === 'preview' && (
+            <div className="flex flex-col flex-grow overflow-hidden">
+                <div className="flex justify-between items-center mb-2 px-1">
+                    <div className="flex gap-4 text-sm">
+                         <span className="text-green-600 font-bold bg-green-50 px-2 py-1 rounded">✅ {previewData.length} lignes détectées</span>
+                         <span className="text-gray-500 py-1">Vérifiez que les colonnes Name et Set sont visibles.</span>
                     </div>
+                    <button 
+                        onClick={handleReset}
+                        className="text-sm text-red-500 hover:bg-red-50 px-3 py-1 rounded transition"
+                    >
+                        🗑️ Changer de fichier
+                    </button>
+                </div>
 
-                    <div className="overflow-auto border border-gray-200 dark:border-gray-700 rounded-lg max-h-[400px]">
-                        <table className="w-full text-sm text-left text-gray-500 dark:text-gray-400">
-                            <thead className="text-xs text-gray-700 uppercase bg-gray-100 dark:bg-gray-700 dark:text-gray-200 sticky top-0">
-                                <tr>
-                                    {columns.map((col, idx) => (
-                                        <th key={idx} className="px-4 py-3 whitespace-nowrap">{col}</th>
+                <div className="overflow-auto border border-gray-200 dark:border-gray-700 rounded-lg flex-grow bg-gray-50 dark:bg-gray-900">
+                    <table className="w-full text-sm text-left text-gray-500 dark:text-gray-400">
+                        <thead className="text-xs text-gray-700 uppercase bg-gray-200 dark:bg-gray-800 dark:text-gray-200 sticky top-0 z-10">
+                            <tr>
+                                {columns.map((col, idx) => (
+                                    <th key={idx} className="px-4 py-3 whitespace-nowrap border-r border-gray-300 dark:border-gray-600 last:border-0 font-bold">
+                                        {col}
+                                    </th>
+                                ))}
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {previewData.slice(0, 50).map((row, rowIndex) => (
+                                <tr key={rowIndex} className="bg-white border-b dark:bg-gray-800 dark:border-gray-700 hover:bg-blue-50 dark:hover:bg-gray-700 transition">
+                                    {columns.map((col, colIndex) => (
+                                        <td key={colIndex} className="px-4 py-2 truncate max-w-[200px] border-r border-gray-100 dark:border-gray-700 last:border-0">
+                                            {/* Affichage sécurisé des valeurs */}
+                                            {row[col] !== null && row[col] !== undefined ? String(row[col]) : ''}
+                                        </td>
                                     ))}
                                 </tr>
-                            </thead>
-                            <tbody>
-                                {/* On affiche max 50 lignes pour la performance de l'aperçu */}
-                                {previewData.slice(0, 50).map((row, rowIndex) => (
-                                    <tr key={rowIndex} className="bg-white border-b dark:bg-gray-800 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600">
-                                        {row.map((cell, cellIndex) => (
-                                            <td key={cellIndex} className="px-4 py-2 truncate max-w-[150px] border-r border-gray-100 dark:border-gray-700 last:border-0">
-                                                {cell}
-                                            </td>
-                                        ))}
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                        {previewData.length > 50 && (
-                            <div className="p-2 text-center text-xs text-gray-400 bg-gray-50 dark:bg-gray-800">
-                                ... et {previewData.length - 50} autres lignes.
-                            </div>
-                        )}
-                    </div>
-
-                    {/* BOUTON D'ACTION FINAL */}
-                    <div className="mt-6 flex justify-end gap-3">
-                        <button 
-                            onClick={onClose}
-                            className="px-5 py-2.5 text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700 rounded-lg transition"
-                        >
-                            Annuler
-                        </button>
-                        <button 
-                            onClick={startImport}
-                            className="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg shadow-lg hover:shadow-xl transition transform hover:-translate-y-0.5"
-                        >
-                        </button>
-                    </div>
+                            ))}
+                        </tbody>
+                    </table>
+                    
+                    {/* Message si tableau tronqué */}
+                    {previewData.length > 50 && (
+                        <div className="p-3 text-center text-xs text-gray-500 bg-gray-100 dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700">
+                            (Affichage des 50 premières lignes sur {previewData.length})
+                        </div>
+                    )}
                 </div>
-            )}
-          </>
+
+                {/* BOUTONS D'ACTION */}
+                <div className="mt-6 flex justify-end gap-3 pt-2 border-t border-gray-100 dark:border-gray-700">
+                    <button 
+                        onClick={onClose}
+                        className="px-5 py-2.5 text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700 rounded-lg transition font-medium"
+                    >
+                        Annuler
+                    </button>
+                    <button 
+                        onClick={startImport}
+                        className="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg shadow-lg hover:shadow-xl transition transform hover:-translate-y-0.5 flex items-center gap-2"
+                    >
+                        <span>🚀</span>
+                        <span>Importer {previewData.length} cartes</span>
+                    </button>
+                </div>
+            </div>
         )}
       </div>
     </div>
