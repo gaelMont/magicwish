@@ -5,7 +5,6 @@ import { useState } from 'react';
 import Papa from 'papaparse';
 import { useAuth } from '@/lib/AuthContext';
 import { db } from '@/lib/firebase';
-// On importe les types nécessaires pour éviter les erreurs TypeScript
 import { doc, writeBatch, increment, WriteBatch } from 'firebase/firestore';
 import toast from 'react-hot-toast';
 
@@ -21,11 +20,12 @@ type CardInput = {
   name: string; 
   setCode: string; 
   quantity: number; 
+  scryfallIdFromCsv?: string; // On stocke l'ID unique s'il est présent
   tempId: string;
   signature: string;
 };
 
-// Interface pour les données reçues de Scryfall
+// Interface pour les données reçues de l'API Scryfall
 interface ScryfallData {
   id: string;
   name: string;
@@ -52,7 +52,7 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
     return result;
   }
 
-  // Fonction de secours si la carte n'est pas trouvée (ou rejetée)
+  // Fonction de secours (Fallback) pour enregistrer les données brutes si Scryfall ne trouve rien
   const applyFallback = (batch: WriteBatch, uid: string, collection: string, card: CardInput) => {
     const cardRef = doc(db, 'users', uid, collection, card.tempId);
     batch.set(cardRef, {
@@ -70,11 +70,14 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
   const optimizeCardList = (rawCards: CardInput[]): CardInput[] => {
     const map = new Map<string, CardInput>();
     rawCards.forEach(card => {
-      if (map.has(card.signature)) {
-        const existing = map.get(card.signature)!;
+      // On déduplique en priorité via l'ID Scryfall, sinon via la signature (Nom+Set)
+      const key = card.scryfallIdFromCsv || card.signature;
+      
+      if (map.has(key)) {
+        const existing = map.get(key)!;
         existing.quantity += card.quantity;
       } else {
-        map.set(card.signature, { ...card });
+        map.set(key, { ...card });
       }
     });
     return Array.from(map.values());
@@ -82,10 +85,19 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
 
   const mapRowToCard = (row: CSVRow): CardInput | null => {
     const normalizedRow: { [key: string]: string } = {};
+    
+    // --- ÉTAPE CRITIQUE : Nettoyage des clés (BOM Fix) ---
+    // Certains CSV (Excel/ManaBox) ajoutent un caractère invisible \uFEFF au début
     Object.keys(row).forEach(key => {
-      if (key) normalizedRow[key.toLowerCase().trim()] = (row[key] || '').trim();
+      if (key) {
+        let cleanKey = key.trim().toLowerCase();
+        // On supprime le BOM s'il est présent
+        cleanKey = cleanKey.replace(/^\ufeff/, '');
+        normalizedRow[cleanKey] = (row[key] || '').trim();
+      }
     });
 
+    // Détection flexible des colonnes
     const name = normalizedRow['name'] || normalizedRow['card name'] || normalizedRow['card'] || normalizedRow['nom'];
     if (!name) return null;
 
@@ -93,12 +105,16 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
     const qtyString = normalizedRow['quantity'] || normalizedRow['count'] || normalizedRow['qty'] || normalizedRow['qte'] || '1';
     const quantity = parseInt(qtyString) || 1;
     
+    // --- NOUVEAU : Récupération de l'ID Scryfall (ManaBox) ---
+    const scryfallIdFromCsv = normalizedRow['scryfall id'] || normalizedRow['scryfallid'] || undefined;
+
     const cleanName = name.split(' // ')[0].toLowerCase();
     const cleanSet = setCode.toLowerCase();
+    // ID temporaire (utilisé uniquement pour le fallback)
     const tempId = `${cleanName}-${cleanSet}`.replace(/[^a-z0-9]/g, '-');
     const signature = `${cleanName}|${cleanSet}`;
 
-    return { name, setCode, quantity, tempId, signature };
+    return { name, setCode, quantity, tempId, signature, scryfallIdFromCsv };
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -107,7 +123,7 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
 
     setIsImporting(true);
     setProgress(0);
-    setStatusMessage(`Analyse du fichier...`);
+    setStatusMessage(`Lecture du fichier...`);
 
     Papa.parse(file, {
       header: true,
@@ -122,7 +138,7 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
         });
 
         if (allCards.length === 0) {
-          toast.error("Aucune carte valide trouvée.");
+          toast.error("Aucune carte trouvée. Vérifiez le format du CSV.");
           setIsImporting(false);
           return;
         }
@@ -138,11 +154,16 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
           const chunk = chunks[i];
           
           try {
-            const identifiers = chunk.map(c => 
-              (c.setCode && c.setCode.length >= 2) 
-                ? { name: c.name, set: c.setCode } 
-                : { name: c.name }
-            );
+            // PRÉPARATION REQUÊTE SCRYFALL
+            // Si on a l'ID Scryfall, on l'utilise (priorité absolue), sinon on utilise Nom + Set
+            const identifiers = chunk.map(c => {
+                if (c.scryfallIdFromCsv) {
+                    return { id: c.scryfallIdFromCsv };
+                }
+                return (c.setCode && c.setCode.length >= 2) 
+                    ? { name: c.name, set: c.setCode } 
+                    : { name: c.name };
+            });
 
             const response = await fetch('https://api.scryfall.com/cards/collection', {
               method: 'POST',
@@ -153,7 +174,7 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
             const scryfallResult = await response.json();
             const foundData = (scryfallResult.data || []) as ScryfallData[];
             
-            // Création d'une Map pour recherche rapide (O(1))
+            // Indexation des résultats pour recherche rapide (O(1))
             const resultsMap = new Map<string, ScryfallData>();
             
             foundData.forEach((f) => {
@@ -161,10 +182,12 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
                 const fSet = f.set.toLowerCase();
                 const fNameClean = fName.split(' // ')[0];
 
+                // On indexe par ID (le plus fiable)
+                resultsMap.set(f.id, f);
+                // Et par combinaisons Nom/Set
                 resultsMap.set(`${fName}|${fSet}`, f);
                 resultsMap.set(`${fNameClean}|${fSet}`, f);
                 
-                // Fallback : Nom seul
                 if (!resultsMap.has(fName)) resultsMap.set(fName, f);
                 if (!resultsMap.has(fNameClean)) resultsMap.set(fNameClean, f);
             });
@@ -176,21 +199,26 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
               const inputSet = inputCard.setCode.toLowerCase();
               
               let found = null;
-              // 1. Priorité : Nom + Set exact
-              if (inputSet) found = resultsMap.get(`${inputName}|${inputSet}`);
-              // 2. Fallback : Nom seul (si set incorrect ou absent)
+              
+              // 1. RECHERCHE PAR ID (ManaBox)
+              if (inputCard.scryfallIdFromCsv) {
+                  found = resultsMap.get(inputCard.scryfallIdFromCsv);
+              }
+
+              // 2. Recherche standard (Nom + Set)
+              if (!found && inputSet) found = resultsMap.get(`${inputName}|${inputSet}`);
+              
+              // 3. Recherche simple (Nom seul)
               if (!found) found = resultsMap.get(inputName);
 
               if (found) {
-                // --- LOGIQUE CORRIGÉE ICI ---
+                // VALIDATION : Est-ce vraiment la bonne carte ?
+                const isIdMatch = inputCard.scryfallIdFromCsv === found.id;
                 const setMatches = inputSet ? (found.set === inputSet) : true;
-                
-                // On accepte si le set correspond OU si le nom est exact (même si le set diffère)
-                // Cela règle le problème "TLA" vs "SLD"
-                const nameMatchesExact = found.name.toLowerCase() === inputName || found.name.split(' // ')[0].toLowerCase() === inputName;
+                const nameMatches = found.name.toLowerCase() === inputName || found.name.split(' // ')[0].toLowerCase() === inputName;
 
-                if (setMatches || nameMatchesExact) {
-                    // Carte trouvée et validée (avec les bonnes infos Scryfall)
+                // On accepte si l'ID matche (100% sûr) OU si le set/nom matche
+                if (isIdMatch || setMatches || nameMatches) {
                     const cardRef = doc(db, 'users', user.uid, targetCollection, found.id);
                     const price = found.prices?.eur ? parseFloat(found.prices.eur) : 0;
                     
@@ -199,23 +227,21 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
                     else if (found.card_faces?.[0]?.image_uris?.normal) imageUrl = found.card_faces[0].image_uris.normal;
 
                     batch.set(cardRef, {
-                      name: found.name.split(' // ')[0],
+                      name: found.name.split(' // ')[0], // Nom propre
                       quantity: increment(inputCard.quantity),
                       imageUrl: imageUrl,
                       price: price,
                       setName: found.set_name,
-                      setCode: found.set, // On sauvegarde le VRAI set (SLD), pas celui du CSV (TLA)
+                      setCode: found.set,
                       scryfallId: found.id,
                       lastUpdated: new Date()
                     }, { merge: true });
                     
                     successCount++;
                 } else {
-                    // Correspondance trouvée mais nom trop différent -> On préfère la sécurité (Fallback)
                     applyFallback(batch, user.uid, targetCollection, inputCard);
                 }
               } else {
-                // Pas trouvée du tout -> Fallback
                 applyFallback(batch, user.uid, targetCollection, inputCard);
               }
             });
@@ -234,12 +260,12 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
           await new Promise(r => setTimeout(r, 100));
         }
 
-        toast.success(`Import terminé !`);
+        toast.success(`Import terminé ! (${successCount} cartes identifiées)`);
         setIsImporting(false);
         onClose();
       },
       error: () => {
-        toast.error("Erreur CSV");
+        toast.error("Erreur de lecture du fichier CSV");
         setIsImporting(false);
       }
     });
@@ -266,7 +292,7 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
               <input type="file" accept=".csv" onChange={handleFileUpload} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" />
               <div className="text-5xl mb-3 group-hover:scale-110 transition-transform">📦</div>
               <span className="font-medium text-gray-700 dark:text-gray-200">Choisir un fichier CSV</span>
-              <p className="text-xs text-gray-400 mt-2">Colonnes : Name, Set Code (optionnel), Quantity</p>
+              <p className="text-xs text-gray-400 mt-2">Compatible: ManaBox, Moxfield, etc.</p>
             </div>
           </div>
         )}
