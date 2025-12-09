@@ -5,7 +5,8 @@ import { useState } from 'react';
 import Papa from 'papaparse';
 import { useAuth } from '@/lib/AuthContext';
 import { db } from '@/lib/firebase';
-import { doc, writeBatch, increment } from 'firebase/firestore';
+// 1. AJOUT DE 'WriteBatch' DANS LES IMPORTS ICI 👇
+import { doc, writeBatch, increment, WriteBatch } from 'firebase/firestore';
 import toast from 'react-hot-toast';
 
 type ImportModalProps = {
@@ -15,7 +16,25 @@ type ImportModalProps = {
 };
 
 type CSVRow = { [key: string]: string | undefined };
-type CardInput = { name: string; setCode: string; quantity: number; tempId: string };
+
+type CardInput = { 
+  name: string; 
+  setCode: string; 
+  quantity: number; 
+  tempId: string;
+  signature: string;
+};
+
+// 2. NOUVEAU TYPE pour calmer TypeScript sur les données Scryfall
+interface ScryfallData {
+  id: string;
+  name: string;
+  set: string;
+  set_name: string;
+  prices?: { eur?: string };
+  image_uris?: { normal?: string };
+  card_faces?: Array<{ image_uris?: { normal?: string } }>;
+}
 
 export default function ImportModal({ isOpen, onClose, targetCollection = 'wishlist' }: ImportModalProps) {
   const { user } = useAuth();
@@ -33,13 +52,40 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
     return result;
   }
 
+  // 3. CORRECTION : Typage strict (WriteBatch) et Renommage (applyFallback)
+  const applyFallback = (batch: WriteBatch, uid: string, collection: string, card: CardInput) => {
+    const cardRef = doc(db, 'users', uid, collection, card.tempId);
+    batch.set(cardRef, {
+      name: card.name,
+      quantity: increment(card.quantity),
+      imageUrl: "https://cards.scryfall.io/large/front/a/6/a6984342-f723-4e80-8e69-902d287a915f.jpg",
+      price: 0,
+      setName: card.setCode || 'Inconnu',
+      imported: true,
+      notFound: true,
+      addedAt: new Date()
+    }, { merge: true });
+  };
+
+  const optimizeCardList = (rawCards: CardInput[]): CardInput[] => {
+    const map = new Map<string, CardInput>();
+    rawCards.forEach(card => {
+      if (map.has(card.signature)) {
+        const existing = map.get(card.signature)!;
+        existing.quantity += card.quantity;
+      } else {
+        map.set(card.signature, { ...card });
+      }
+    });
+    return Array.from(map.values());
+  };
+
   const mapRowToCard = (row: CSVRow): CardInput | null => {
     const normalizedRow: { [key: string]: string } = {};
     Object.keys(row).forEach(key => {
       if (key) normalizedRow[key.toLowerCase().trim()] = (row[key] || '').trim();
     });
 
-    // Détection des colonnes
     const name = normalizedRow['name'] || normalizedRow['card name'] || normalizedRow['card'] || normalizedRow['nom'];
     if (!name) return null;
 
@@ -47,11 +93,12 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
     const qtyString = normalizedRow['quantity'] || normalizedRow['count'] || normalizedRow['qty'] || normalizedRow['qte'] || '1';
     const quantity = parseInt(qtyString) || 1;
     
-    // ID Temporaire de secours (Nom + Set)
-    const cleanNameID = name.split(' // ')[0];
-    const tempId = `${cleanNameID}-${setCode}`.toLowerCase().replace(/[^a-z0-9]/g, '-');
+    const cleanName = name.split(' // ')[0].toLowerCase();
+    const cleanSet = setCode.toLowerCase();
+    const tempId = `${cleanName}-${cleanSet}`.replace(/[^a-z0-9]/g, '-');
+    const signature = `${cleanName}|${cleanSet}`;
 
-    return { name, setCode, quantity, tempId };
+    return { name, setCode, quantity, tempId, signature };
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -60,14 +107,14 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
 
     setIsImporting(true);
     setProgress(0);
-    setStatusMessage(`Lecture du fichier...`);
+    setStatusMessage(`Analyse du fichier...`);
 
     Papa.parse(file, {
       header: true,
       skipEmptyLines: true,
       complete: async (results) => {
         const rows = results.data as CSVRow[];
-        const allCards: CardInput[] = [];
+        let allCards: CardInput[] = [];
         
         rows.forEach(row => {
           const card = mapRowToCard(row);
@@ -80,6 +127,9 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
           return;
         }
 
+        allCards = optimizeCardList(allCards);
+        const optimizedCount = allCards.length;
+        
         const chunks = chunkArray(allCards, 75);
         let processedCards = 0;
         let successCount = 0;
@@ -88,10 +138,9 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
           const chunk = chunks[i];
           
           try {
-            // On prépare la requête Scryfall
             const identifiers = chunk.map(c => 
               (c.setCode && c.setCode.length >= 2) 
-                ? { name: c.name, set: c.setCode } // On demande spécifiquement l'édition
+                ? { name: c.name, set: c.setCode } 
                 : { name: c.name }
             );
 
@@ -102,72 +151,64 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
             });
 
             const scryfallResult = await response.json();
-            const foundData = scryfallResult.data || [];
+            // 4. Utilisation du type ScryfallData ici
+            const foundData: ScryfallData[] = scryfallResult.data || [];
             
+            // 5. Typage de la Map pour éviter le "any"
+            const resultsMap = new Map<string, ScryfallData>();
+            
+            foundData.forEach((f) => {
+                const fName = f.name.toLowerCase();
+                const fSet = f.set.toLowerCase();
+                const fNameClean = fName.split(' // ')[0];
+
+                resultsMap.set(`${fName}|${fSet}`, f);
+                resultsMap.set(`${fNameClean}|${fSet}`, f);
+                
+                if (!resultsMap.has(fName)) resultsMap.set(fName, f);
+                if (!resultsMap.has(fNameClean)) resultsMap.set(fNameClean, f);
+            });
+
             const batch = writeBatch(db);
 
-            // Pour chaque ligne du CSV...
             chunk.forEach(inputCard => {
-              const inputNameLower = inputCard.name.toLowerCase();
-              const inputSetLower = inputCard.setCode.toLowerCase();
-
-              // --- LOGIQUE DE MATCHING AMÉLIORÉE ---
-              // On cherche dans les résultats Scryfall une carte qui correspond :
-              // 1. Au NOM (exact ou split)
-              // 2. ET à l'ÉDITION (si spécifiée dans le CSV)
+              const inputName = inputCard.name.toLowerCase();
+              const inputSet = inputCard.setCode.toLowerCase();
               
-              const found = foundData.find((f: any) => {
-                 const scryfallName = f.name.toLowerCase();
-                 const scryfallSet = f.set.toLowerCase();
-
-                 const nameMatches = scryfallName === inputNameLower || scryfallName.split(' // ')[0].toLowerCase() === inputNameLower;
-                 
-                 // Si le CSV a un code set, on exige qu'il corresponde. Sinon, on prend n'importe lequel.
-                 const setMatches = inputSetLower ? (scryfallSet === inputSetLower) : true;
-
-                 return nameMatches && setMatches;
-              });
+              let found = null;
+              if (inputSet) found = resultsMap.get(`${inputName}|${inputSet}`);
+              if (!found) found = resultsMap.get(inputName);
 
               if (found) {
-                // --- CAS 1 : TROUVÉ (ID Scryfall Unique) ---
-                // C'est ici que la magie opère : found.id est unique par édition.
-                // Donc Sol Ring (LEA) aura un ID différent de Sol Ring (C20).
-                const cardRef = doc(db, 'users', user.uid, targetCollection, found.id);
+                const setMatches = inputSet ? (found.set === inputSet) : true;
 
-                const price = found.prices?.eur ? parseFloat(found.prices.eur) : 0;
-                
-                let imageUrl = "https://cards.scryfall.io/large/front/a/6/a6984342-f723-4e80-8e69-902d287a915f.jpg";
-                if (found.image_uris?.normal) imageUrl = found.image_uris.normal;
-                else if (found.card_faces?.[0]?.image_uris?.normal) imageUrl = found.card_faces[0].image_uris.normal;
+                if (setMatches) {
+                    const cardRef = doc(db, 'users', user.uid, targetCollection, found.id);
+                    const price = found.prices?.eur ? parseFloat(found.prices.eur) : 0;
+                    
+                    let imageUrl = "https://cards.scryfall.io/large/front/a/6/a6984342-f723-4e80-8e69-902d287a915f.jpg";
+                    if (found.image_uris?.normal) imageUrl = found.image_uris.normal;
+                    else if (found.card_faces?.[0]?.image_uris?.normal) imageUrl = found.card_faces[0].image_uris.normal;
 
-                batch.set(cardRef, {
-                  name: found.name.split(' // ')[0],
-                  quantity: increment(inputCard.quantity),
-                  imageUrl: imageUrl,
-                  price: price,
-                  setName: found.set_name, // Ex: "Limited Edition Alpha"
-                  setCode: found.set,      // Ex: "lea"
-                  scryfallId: found.id,
-                  lastUpdated: new Date()
-                }, { merge: true });
-                
-                successCount++;
+                    batch.set(cardRef, {
+                      name: found.name.split(' // ')[0],
+                      quantity: increment(inputCard.quantity),
+                      imageUrl: imageUrl,
+                      price: price,
+                      setName: found.set_name,
+                      setCode: found.set,
+                      scryfallId: found.id,
+                      lastUpdated: new Date()
+                    }, { merge: true });
+                    
+                    successCount++;
+                } else {
+                    // Utilisation de la fonction corrigée
+                    applyFallback(batch, user.uid, targetCollection, inputCard);
+                }
               } else {
-                // --- CAS 2 : NON TROUVÉ (Fallback) ---
-                // Si Scryfall ne trouve pas, on utilise l'ID temporaire qui contient aussi le setCode
-                // Ex ID : "sol-ring-lea" vs "sol-ring-c20" -> Ils seront séparés aussi !
-                const cardRef = doc(db, 'users', user.uid, targetCollection, inputCard.tempId);
-                
-                batch.set(cardRef, {
-                  name: inputCard.name,
-                  quantity: increment(inputCard.quantity),
-                  imageUrl: "https://cards.scryfall.io/large/front/a/6/a6984342-f723-4e80-8e69-902d287a915f.jpg",
-                  price: 0,
-                  setName: inputCard.setCode || 'Inconnu',
-                  imported: true,
-                  notFound: true,
-                  addedAt: new Date()
-                }, { merge: true });
+                // Utilisation de la fonction corrigée
+                applyFallback(batch, user.uid, targetCollection, inputCard);
               }
             });
 
@@ -179,13 +220,13 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
           }
 
           processedCards += chunk.length;
-          setProgress(Math.round((processedCards / allCards.length) * 100));
+          setProgress(Math.round((processedCards / optimizedCount) * 100));
           setStatusMessage(`Traitement...`);
           
-          await new Promise(r => setTimeout(r, 150));
+          await new Promise(r => setTimeout(r, 100));
         }
 
-        toast.success(`Import terminé ! (${successCount} cartes identifiées)`);
+        toast.success(`Import terminé !`);
         setIsImporting(false);
         onClose();
       },
@@ -217,7 +258,7 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
               <input type="file" accept=".csv" onChange={handleFileUpload} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" />
               <div className="text-5xl mb-3 group-hover:scale-110 transition-transform">📦</div>
               <span className="font-medium text-gray-700 dark:text-gray-200">Choisir un fichier CSV</span>
-              <p className="text-xs text-gray-400 mt-2">Format: Name, Set Code, Quantity</p>
+              <p className="text-xs text-gray-400 mt-2">Colonnes : Name, Set Code (optionnel), Quantity</p>
             </div>
           </div>
         )}
