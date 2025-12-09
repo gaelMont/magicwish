@@ -126,6 +126,7 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
     Papa.parse(file, {
       header: true,
       skipEmptyLines: true,
+      delimiter: "", // <--- CORRECTION ICI : Force la détection auto (virgule ou point-virgule)
       complete: async (results) => {
         const rows = results.data as CSVRow[];
         let allCards: CardInput[] = [];
@@ -227,7 +228,7 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
                       imageUrl: imageUrl,
                       price: price,
                       setName: found.set_name,
-                      setCode: found.set, // On prend le vrai set (SLD) et pas le faux (TLA)
+                      setCode: found.set, 
                       scryfallId: found.id,
                       lastUpdated: new Date()
                     }, { merge: true });
