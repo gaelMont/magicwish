@@ -6,7 +6,8 @@ import { useAuth } from '@/lib/AuthContext';
 import { db } from '@/lib/firebase';
 import { collection, onSnapshot, deleteDoc, doc, updateDoc, increment } from 'firebase/firestore';
 import toast from 'react-hot-toast';
-import ImportModal from '@/components/ImportModal'; // <--- 1. On importe le composant
+import ImportModal from '@/components/ImportModal';
+import ConfirmModal from '@/components/ConfirmModal'; // <--- 1. On importe le nouveau composant
 
 type WishlistCard = {
   id: string;
@@ -21,8 +22,11 @@ export default function WishlistPage() {
   const { user, loading } = useAuth();
   const [cards, setCards] = useState<WishlistCard[]>([]);
   
-  // 2. État pour gérer l'ouverture/fermeture du modal
+  // États pour les Modals
   const [isImportOpen, setIsImportOpen] = useState(false);
+  
+  // 2. État pour savoir QUELLE carte on veut supprimer (si null, pas de suppression en cours)
+  const [cardToDelete, setCardToDelete] = useState<string | null>(null);
 
   useEffect(() => {
     if (!user) return;
@@ -36,7 +40,6 @@ export default function WishlistPage() {
         setName: doc.data().setName || null
       })) as WishlistCard[];
       
-      // Tri alphabétique
       items.sort((a, b) => a.name.localeCompare(b.name));
       setCards(items);
     });
@@ -44,17 +47,29 @@ export default function WishlistPage() {
     return () => unsubscribe();
   }, [user]);
 
+  // Gestion quantité
   const updateQuantity = async (cardId: string, amount: number, currentQuantity: number) => {
     if (!user) return;
     const cardRef = doc(db, 'users', user.uid, 'wishlist', cardId);
 
     if (currentQuantity + amount <= 0) {
-      if (confirm('Voulez-vous retirer cette carte de la liste ?')) {
-        await deleteDoc(cardRef);
-        toast('Carte retirée', { icon: '🗑️' });
-      }
+      // 3. Au lieu de confirm(), on ouvre notre Modal en stockant l'ID de la carte
+      setCardToDelete(cardId);
     } else {
       await updateDoc(cardRef, { quantity: increment(amount) });
+    }
+  };
+
+  // 4. La fonction qui supprime VRAIMENT (appelée par le Modal)
+  const confirmDelete = async () => {
+    if (!user || !cardToDelete) return;
+    try {
+      await deleteDoc(doc(db, 'users', user.uid, 'wishlist', cardToDelete));
+      toast.success('Carte retirée', { icon: '🗑️' });
+    } catch (error) {
+      toast.error("Erreur lors de la suppression");
+    } finally {
+      setCardToDelete(null); // On ferme le modal
     }
   };
 
@@ -66,7 +81,7 @@ export default function WishlistPage() {
   if (!user) return <p className="text-center p-10">Connectez-vous pour voir votre liste.</p>;
 
   return (
-    <main className="container mx-auto p-4 pb-20"> {/* pb-20 pour laisser de la place au cas où */}
+    <main className="container mx-auto p-4 pb-20">
       
       {/* EN-TÊTE */}
       <div className="flex flex-col md:flex-row justify-between items-center mb-8 gap-4">
@@ -78,7 +93,6 @@ export default function WishlistPage() {
             </span>
           </h1>
 
-          {/* 3. LE BOUTON D'IMPORTATION */}
           <button
             onClick={() => setIsImportOpen(true)}
             className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition flex items-center gap-2 shadow-sm"
@@ -87,7 +101,6 @@ export default function WishlistPage() {
           </button>
         </div>
         
-        {/* TOTAL PRIX */}
         <div className="bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-100 px-6 py-3 rounded-xl shadow-sm border border-green-200 dark:border-green-700">
           <span className="text-sm uppercase tracking-wide opacity-80">Estimation Total</span>
           <div className="text-2xl font-bold">{totalPrice.toFixed(2)} €</div>
@@ -159,8 +172,19 @@ export default function WishlistPage() {
         </div>
       )}
 
-      {/* 4. LE MODAL (Invisible par défaut) */}
+      {/* --- LES MODALS --- */}
+      
+      {/* Modal d'import */}
       <ImportModal isOpen={isImportOpen} onClose={() => setIsImportOpen(false)} />
+
+      {/* 5. Modal de Confirmation de suppression */}
+      <ConfirmModal 
+        isOpen={!!cardToDelete} // Ouvert si on a une carte à supprimer
+        onClose={() => setCardToDelete(null)}
+        onConfirm={confirmDelete}
+        title="Retirer la carte ?"
+        message="Cette action retirera définitivement cet exemplaire de votre liste."
+      />
 
     </main>
   );
