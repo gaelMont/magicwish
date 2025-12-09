@@ -5,7 +5,7 @@ import { useState } from 'react';
 import Papa from 'papaparse';
 import { useAuth } from '@/lib/AuthContext';
 import { db } from '@/lib/firebase';
-// 1. AJOUT DE 'WriteBatch' DANS LES IMPORTS ICI 👇
+// AJOUT : Import de WriteBatch pour typer le batch correctement
 import { doc, writeBatch, increment, WriteBatch } from 'firebase/firestore';
 import toast from 'react-hot-toast';
 
@@ -25,7 +25,8 @@ type CardInput = {
   signature: string;
 };
 
-// 2. NOUVEAU TYPE pour calmer TypeScript sur les données Scryfall
+// NOUVEAU : On définit la forme des données reçues de Scryfall
+// Cela corrige les erreurs "Unexpected any" sur foundData et la Map
 interface ScryfallData {
   id: string;
   name: string;
@@ -52,7 +53,10 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
     return result;
   }
 
-  // 3. CORRECTION : Typage strict (WriteBatch) et Renommage (applyFallback)
+  // --- CORRECTION 1 : Renommage de useFallback -> applyFallback ---
+  // Cela corrige l'erreur "React Hook... called inside a callback"
+  // --- CORRECTION 2 : Typage de batch: WriteBatch ---
+  // Cela corrige l'erreur "Unexpected any" sur le batch
   const applyFallback = (batch: WriteBatch, uid: string, collection: string, card: CardInput) => {
     const cardRef = doc(db, 'users', uid, collection, card.tempId);
     batch.set(cardRef, {
@@ -151,10 +155,12 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
             });
 
             const scryfallResult = await response.json();
-            // 4. Utilisation du type ScryfallData ici
-            const foundData: ScryfallData[] = scryfallResult.data || [];
             
-            // 5. Typage de la Map pour éviter le "any"
+            // --- CORRECTION 3 : Typage des données Scryfall ---
+            // On force le type ScryfallData[] pour éviter le "any"
+            const foundData = (scryfallResult.data || []) as ScryfallData[];
+            
+            // Typage explicite de la Map
             const resultsMap = new Map<string, ScryfallData>();
             
             foundData.forEach((f) => {
@@ -203,11 +209,11 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
                     
                     successCount++;
                 } else {
-                    // Utilisation de la fonction corrigée
+                    // Utilisation de applyFallback (CORRIGÉ)
                     applyFallback(batch, user.uid, targetCollection, inputCard);
                 }
               } else {
-                // Utilisation de la fonction corrigée
+                // Utilisation de applyFallback (CORRIGÉ)
                 applyFallback(batch, user.uid, targetCollection, inputCard);
               }
             });
