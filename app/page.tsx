@@ -1,7 +1,7 @@
 // app/page.tsx
 'use client'; 
 
-import { useState, useMemo } from 'react';
+import { useState } from 'react';
 import { useAuth } from '@/lib/AuthContext';
 import { db } from '@/lib/firebase';
 import { doc, setDoc, updateDoc, getDoc, increment } from 'firebase/firestore'; 
@@ -13,7 +13,7 @@ type ScryfallCard = {
   name: string;
   set_name: string;
   set: string;
-  released_at: string; // Pour trier par date si besoin
+  released_at: string;
   image_uris?: {
     small: string;
     normal: string;
@@ -44,7 +44,7 @@ const getCardImage = (card: ScryfallCard): string => {
 const CardGroup = ({ name, versions }: { name: string, versions: ScryfallCard[] }) => {
   const { user } = useAuth();
   
-  // On sélectionne par défaut la première version (souvent la plus récente selon Scryfall)
+  // On sélectionne par défaut la première version
   const [selectedCard, setSelectedCard] = useState<ScryfallCard>(versions[0]);
 
   const handleVersionChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
@@ -58,7 +58,7 @@ const CardGroup = ({ name, versions }: { name: string, versions: ScryfallCard[] 
       return;
     }
 
-    const card = selectedCard; // On prend bien celle sélectionnée dans le menu
+    const card = selectedCard; 
     const wishlistRef = doc(db, 'users', user.uid, 'wishlist', card.id);
     const validImageUrl = getCardImage(card);
     const priceNumber = card.prices?.eur ? parseFloat(card.prices.eur) : 0;
@@ -73,7 +73,7 @@ const CardGroup = ({ name, versions }: { name: string, versions: ScryfallCard[] 
         toast.success(`+1 exemplaire (${card.set_name})`);
       } else {
         await setDoc(wishlistRef, {
-          name: card.name,
+          name: card.name, // On garde le nom complet ici, ou tu peux mettre 'name' nettoyé si tu préfères
           imageUrl: validImageUrl,
           quantity: 1,
           price: priceNumber,
@@ -148,27 +148,28 @@ export default function HomePage() {
     if (!query.trim()) return;
 
     setIsLoading(true);
-    setGroupedResults([]); // Reset
+    setGroupedResults([]); 
 
     try {
-      // On garde unique=prints pour avoir TOUTES les versions
       const response = await fetch(`/api/search?q=${query}`);
       if (!response.ok) throw new Error('Erreur');
       const data = await response.json();
       const rawCards: ScryfallCard[] = data.data || [];
 
-      // --- ALGORITHME DE GROUPEMENT ---
-      // On crée un dictionnaire : "Sol Ring" -> [Version1, Version2, Version3]
+      // --- ALGORITHME DE GROUPEMENT NETTOYÉ ---
       const groups = new Map<string, ScryfallCard[]>();
 
       rawCards.forEach(card => {
-        if (!groups.has(card.name)) {
-          groups.set(card.name, []);
+        // --- MODIFICATION ICI : On nettoie le nom avant de grouper ---
+        // "Sol Ring // Sol Ring" devient "Sol Ring"
+        const cleanName = card.name.split(' // ')[0]; 
+
+        if (!groups.has(cleanName)) {
+          groups.set(cleanName, []);
         }
-        groups.get(card.name)?.push(card);
+        groups.get(cleanName)?.push(card);
       });
 
-      // On transforme le Map en tableau pour l'afficher
       const resultsArray = Array.from(groups.entries()).map(([name, versions]) => ({
         name,
         versions

@@ -6,22 +6,36 @@ export async function GET(request: Request) {
   const query = searchParams.get('q'); 
 
   if (!query) {
-    return NextResponse.json({ error: 'Recherche vide' }, { status: 400 });
+    return NextResponse.json(
+      { error: 'Aucun terme de recherche fourni.' }, 
+      { status: 400 } 
+    );
   }
 
-  // CHANGEMENT ICI : 'unique=prints' pour avoir toutes les éditions
-  const scryfallUrl = `https://api.scryfall.com/cards/search?q=${query}&unique=prints`;
+  // --- MODIFICATION ICI : Ajout des guillemets "${query}" ---
+  // Cela force la recherche exacte de l'expression
+  const scryfallUrl = `https://api.scryfall.com/cards/search?q="${query}"&unique=prints`;
 
   try {
     const scryfallResponse = await fetch(scryfallUrl);
-    // ... le reste du code ne change pas
+
     if (!scryfallResponse.ok) {
-        // ...
-        return NextResponse.json({ error: 'Erreur' }, { status: 400 });
+      const errorData = await scryfallResponse.json();
+      console.error('Erreur Scryfall:', errorData);
+      return NextResponse.json(
+        { error: errorData.details || 'Carte non trouvée' }, 
+        { status: scryfallResponse.status }
+      );
     }
+
     const data = await scryfallResponse.json();
     return NextResponse.json(data);
+
   } catch (error) {
-    return NextResponse.json({ error: 'Erreur serveur' }, { status: 500 });
+    console.error('Erreur interne du serveur:', error);
+    return NextResponse.json(
+      { error: 'Une erreur est survenue sur le serveur.' }, 
+      { status: 500 }
+    );
   }
 }
