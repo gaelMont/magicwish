@@ -5,7 +5,7 @@ import { useState } from 'react';
 import Papa from 'papaparse';
 import { useAuth } from '@/lib/AuthContext';
 import { db } from '@/lib/firebase';
-import { doc, writeBatch, increment, getDoc } from 'firebase/firestore';
+import { doc, writeBatch, increment } from 'firebase/firestore';
 import toast from 'react-hot-toast';
 
 type ImportModalProps = {
@@ -21,7 +21,7 @@ type CardInput = {
   name: string;
   setCode: string;
   quantity: number;
-  id: string; // Notre ID unique pour Firestore
+  id: string; // ID unique Firestore
 };
 
 export default function ImportModal({ isOpen, onClose }: ImportModalProps) {
@@ -32,24 +32,24 @@ export default function ImportModal({ isOpen, onClose }: ImportModalProps) {
 
   if (!isOpen) return null;
 
-  // Fonction utilitaire pour découper un tableau en morceaux (chunks)
+  // Découpe un gros tableau en petits paquets de 'size'
   function chunkArray<T>(array: T[], size: number): T[][] {
-    const chunked_arr = [];
+    const result = [];
     for (let i = 0; i < array.length; i += size) {
-      chunked_arr.push(array.slice(i, i + size));
+      result.push(array.slice(i, i + size));
     }
-    return chunked_arr;
+    return result;
   }
 
+  // Nettoyage et préparation des données du CSV
   const mapRowToCard = (row: CSVRow): CardInput | null => {
-    // Normalisation
     const normalizedRow: { [key: string]: string } = {};
     Object.keys(row).forEach(key => {
       if (key) normalizedRow[key.toLowerCase().trim()] = (row[key] || '').trim();
     });
 
+    // Détection flexible des colonnes
     const name = normalizedRow['name'] || normalizedRow['card name'] || normalizedRow['card'] || normalizedRow['nom'];
-    // Si pas de nom, on ignore la ligne
     if (!name) return null;
 
     const setCode = normalizedRow['set code'] || normalizedRow['set'] || normalizedRow['edition'] || normalizedRow['extension'] || '';
@@ -57,7 +57,7 @@ export default function ImportModal({ isOpen, onClose }: ImportModalProps) {
     const qtyString = normalizedRow['quantity'] || normalizedRow['count'] || normalizedRow['qty'] || normalizedRow['qte'] || '1';
     const quantity = parseInt(qtyString) || 1;
 
-    // ID unique : nom-set
+    // Création de l'ID unique (ex: "sol-ring-c19")
     const id = `${name}-${setCode}`.toLowerCase().replace(/[^a-z0-9]/g, '-');
 
     return { name, setCode, quantity, id };
@@ -69,7 +69,7 @@ export default function ImportModal({ isOpen, onClose }: ImportModalProps) {
 
     setIsImporting(true);
     setProgress(0);
-    setStatusMessage("Analyse du fichier...");
+    setStatusMessage("Lecture et analyse du CSV...");
 
     Papa.parse(file, {
       header: true,
@@ -77,7 +77,7 @@ export default function ImportModal({ isOpen, onClose }: ImportModalProps) {
       complete: async (results) => {
         const rows = results.data as CSVRow[];
         
-        // 1. Préparer toutes les données valides
+        // 1. Préparer toute la liste en mémoire
         const allCards: CardInput[] = [];
         rows.forEach(row => {
           const card = mapRowToCard(row);
@@ -90,25 +90,28 @@ export default function ImportModal({ isOpen, onClose }: ImportModalProps) {
           return;
         }
 
-        setStatusMessage(`Traitement de ${allCards.length} cartes en lots...`);
-        
-        // 2. Découper en paquets de 75 (Limite de l'API Scryfall "Collection")
+        // 2. Découper en paquets de 75 (Limite technique Scryfall)
         const chunks = chunkArray(allCards, 75);
-        let processedCount = 0;
+        const totalChunks = chunks.length;
+        
+        setStatusMessage(`Démarrage : ${allCards.length} cartes (${totalChunks} lots)...`);
+        
+        let processedCards = 0;
         let successCount = 0;
 
-        // 3. Traiter chaque paquet
-        for (const chunk of chunks) {
+        // 3. Boucle sur les paquets (Batch Processing)
+        for (let i = 0; i < totalChunks; i++) {
+          const chunk = chunks[i];
+          
           try {
-            // A. Préparer la requête pour Scryfall (Identifiers)
-            const identifiers = chunk.map(card => {
-              // Si on a un set code, on l'utilise, sinon juste le nom
-              return card.setCode && card.setCode.length >= 2 
-                ? { name: card.name, set: card.setCode }
-                : { name: card.name };
-            });
+            // A. Préparer les identifiants pour Scryfall
+            const identifiers = chunk.map(c => 
+              (c.setCode && c.setCode.length >= 2) 
+                ? { name: c.name, set: c.setCode } 
+                : { name: c.name }
+            );
 
-            // B. Appel API Scryfall (Un seul appel pour 75 cartes !)
+            // B. Appel API GROUPÉ (1 requête = 75 cartes)
             const response = await fetch('https://api.scryfall.com/cards/collection', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -116,85 +119,75 @@ export default function ImportModal({ isOpen, onClose }: ImportModalProps) {
             });
 
             const scryfallResult = await response.json();
-            const foundCards = scryfallResult.data || [];
+            const foundData = scryfallResult.data || [];
 
-            // C. Préparer le Batch Firestore (Écriture groupée)
+            // C. Préparer le Batch Firestore (1 écriture = 75 cartes)
             const batch = writeBatch(db);
-            
-            // Pour retrouver la quantité, on fait un petit dictionnaire local du chunk
-            // Clé: "nom+set" (approximatif pour matcher le retour Scryfall) -> Valeur: Quantité
-            // Note: Scryfall peut corriger le nom, donc on doit être malin.
-            // On va itérer sur NOTRE liste (chunk) et chercher si Scryfall a renvoyé un résultat correspondant.
-            
-            for (const inputCard of chunk) {
-              // On cherche la carte correspondante dans la réponse Scryfall
-              // L'index dans 'data' ne correspond pas forcément à l'ordre d'envoi si des cartes sont introuvables
-              // Heureusement Scryfall renvoie tout, mais pour simplifier, on va chercher par nom
-              const found = foundCards.find((fc: any) => 
-                fc.name.toLowerCase() === inputCard.name.toLowerCase() || // Nom exact
-                fc.name.toLowerCase().includes(inputCard.name.toLowerCase()) // Nom partiel
+
+            chunk.forEach(inputCard => {
+              // On cherche les infos Scryfall correspondantes
+              const found = foundData.find((f: any) => 
+                f.name.toLowerCase() === inputCard.name.toLowerCase()
               );
 
               const cardRef = doc(db, 'users', user.uid, 'wishlist', inputCard.id);
 
               if (found) {
-                // INFO TROUVÉE SUR SCRYFALL
+                // Carte trouvée : on met les belles infos
                 const price = found.prices?.eur ? parseFloat(found.prices.eur) : 0;
                 let imageUrl = "https://cards.scryfall.io/large/front/a/6/a6984342-f723-4e80-8e69-902d287a915f.jpg";
+                
                 if (found.image_uris?.normal) imageUrl = found.image_uris.normal;
                 else if (found.card_faces?.[0]?.image_uris?.normal) imageUrl = found.card_faces[0].image_uris.normal;
 
-                // Astuce Batch : On ne peut pas lire ET écrire conditionnellement facilement dans un batch pur sans transactions complexes.
-                // Pour simplifier et aller VITE : On utilise setDoc avec { merge: true }
-                // Mais pour increment, c'est délicat.
-                // Pour ce mode "Turbo", on va écraser les données Scryfall mais garder l'ID.
-                // Si la carte existe déjà, on aimerait incrementer. Le batch supporte increment !
-                
                 batch.set(cardRef, {
-                    name: found.name, // Nom officiel Scryfall
-                    imageUrl: imageUrl,
-                    price: price,
-                    setName: found.set_name,
-                    setCode: found.set,
-                    quantity: increment(inputCard.quantity), // Magie : ça marche même si le doc n'existe pas (crée à la valeur)
-                    addedAt: new Date(), // Ça mettra à jour la date
+                  name: found.name,
+                  quantity: increment(inputCard.quantity), // Magie : ça additionne si ça existe déjà !
+                  imageUrl: imageUrl,
+                  price: price,
+                  setName: found.set_name,
+                  setCode: found.set,
+                  addedAt: new Date()
                 }, { merge: true });
-
               } else {
-                // CARTE NON TROUVÉE SUR SCRYFALL (On l'ajoute quand même en brouillon)
+                // Carte non trouvée : on sauvegarde quand même en mode "texte"
                 batch.set(cardRef, {
                   name: inputCard.name,
                   quantity: increment(inputCard.quantity),
                   imageUrl: "https://cards.scryfall.io/large/front/a/6/a6984342-f723-4e80-8e69-902d287a915f.jpg",
                   price: 0,
                   setName: inputCard.setCode,
-                  imported: true, // Marqueur brouillon
+                  imported: true,
                   addedAt: new Date()
                 }, { merge: true });
               }
               successCount++;
-            }
+            });
 
-            // D. Envoyer le paquet à Firestore
+            // D. Valider le lot dans la base de données
             await batch.commit();
 
           } catch (err) {
-            console.error("Erreur sur un lot", err);
+            console.error(`Erreur sur le lot ${i+1}`, err);
+            toast.error(`Erreur sur le lot ${i+1} (Scryfall ou Réseau)`);
           }
 
-          processedCount += chunk.length;
-          setProgress(Math.round((processedCount / allCards.length) * 100));
-          
-          // Petite pause de sécurité (même avec l'endpoint collection, faut pas abuser)
+          // Mise à jour progression
+          processedCards += chunk.length;
+          const percent = Math.round((processedCards / allCards.length) * 100);
+          setProgress(percent);
+          setStatusMessage(`Traitement... ${percent}% (${processedCards}/${allCards.length})`);
+
+          // Pause de 100ms pour être gentil avec l'API
           await new Promise(r => setTimeout(r, 100));
         }
 
-        toast.success(`Terminé ! ${successCount} cartes traitées.`);
+        toast.success(`Import terminé ! ${successCount} cartes ajoutées.`);
         setIsImporting(false);
         onClose();
       },
       error: () => {
-        toast.error("Erreur CSV");
+        toast.error("Impossible de lire le fichier CSV");
         setIsImporting(false);
       }
     });
@@ -203,25 +196,27 @@ export default function ImportModal({ isOpen, onClose }: ImportModalProps) {
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
       <div className="bg-white dark:bg-gray-800 rounded-xl p-6 max-w-md w-full shadow-2xl border border-gray-100 dark:border-gray-700">
-        <h2 className="text-xl font-bold mb-2">Importer (Mode Turbo 🚀)</h2>
+        <h2 className="text-xl font-bold mb-2">Importation Massive 🚀</h2>
         <p className="text-sm text-gray-500 mb-6">
-          Importation par lots. Détection automatique des images et prix.
+          Optimisé pour les collections (5000+ cartes).
+          <br/>Les cartes sont traitées par paquets de 75.
         </p>
 
         {isImporting ? (
           <div className="text-center py-6">
-            <div className="text-4xl font-bold text-purple-600 mb-2 transition-all">{progress}%</div>
+            <div className="text-4xl font-bold text-green-600 mb-2">{progress}%</div>
             
             <div className="w-full bg-gray-200 rounded-full h-3 dark:bg-gray-700 overflow-hidden mb-3">
               <div 
-                className="bg-purple-600 h-full rounded-full transition-all duration-300 ease-out" 
+                className="bg-green-600 h-full rounded-full transition-all duration-300 ease-out" 
                 style={{ width: `${progress}%` }}
               ></div>
             </div>
             
-            <p className="text-sm text-gray-600 dark:text-gray-300 animate-pulse">
+            <p className="text-sm text-gray-600 dark:text-gray-300 animate-pulse font-mono">
               {statusMessage}
             </p>
+            <p className="text-xs text-red-500 mt-2 font-bold">⚠️ NE FERMEZ PAS CETTE FENÊTRE</p>
           </div>
         ) : (
           <div className="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-xl p-8 text-center hover:bg-gray-50 dark:hover:bg-gray-700/50 transition cursor-pointer relative group">
@@ -231,9 +226,9 @@ export default function ImportModal({ isOpen, onClose }: ImportModalProps) {
               onChange={handleFileUpload}
               className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
             />
-            <div className="text-5xl mb-3 group-hover:scale-110 transition-transform">⚡</div>
+            <div className="text-5xl mb-3 group-hover:scale-110 transition-transform">📦</div>
             <span className="font-medium text-gray-700 dark:text-gray-200">
-              Choisir un CSV (Gros volume accepté)
+              Glisser votre CSV (Archidekt, Moxfield...)
             </span>
           </div>
         )}
