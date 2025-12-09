@@ -20,12 +20,11 @@ type CardInput = {
   name: string; 
   setCode: string; 
   quantity: number; 
-  scryfallIdFromCsv?: string; // On stocke l'ID unique s'il est présent
+  scryfallIdFromCsv?: string; // L'ID unique (ManaBox)
   tempId: string;
   signature: string;
 };
 
-// Interface pour les données reçues de l'API Scryfall
 interface ScryfallData {
   id: string;
   name: string;
@@ -52,7 +51,7 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
     return result;
   }
 
-  // Fonction de secours (Fallback) pour enregistrer les données brutes si Scryfall ne trouve rien
+  // Fonction de secours (Fallback)
   const applyFallback = (batch: WriteBatch, uid: string, collection: string, card: CardInput) => {
     const cardRef = doc(db, 'users', uid, collection, card.tempId);
     batch.set(cardRef, {
@@ -70,7 +69,7 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
   const optimizeCardList = (rawCards: CardInput[]): CardInput[] => {
     const map = new Map<string, CardInput>();
     rawCards.forEach(card => {
-      // On déduplique en priorité via l'ID Scryfall, sinon via la signature (Nom+Set)
+      // Priorité à l'ID pour la déduplication
       const key = card.scryfallIdFromCsv || card.signature;
       
       if (map.has(key)) {
@@ -86,18 +85,18 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
   const mapRowToCard = (row: CSVRow): CardInput | null => {
     const normalizedRow: { [key: string]: string } = {};
     
-    // --- ÉTAPE CRITIQUE : Nettoyage des clés (BOM Fix) ---
-    // Certains CSV (Excel/ManaBox) ajoutent un caractère invisible \uFEFF au début
+    // --- CORRECTIF BOM (CRUCIAL POUR MANABOX) ---
+    // On nettoie les clés du CSV pour enlever les caractères invisibles
     Object.keys(row).forEach(key => {
       if (key) {
         let cleanKey = key.trim().toLowerCase();
-        // On supprime le BOM s'il est présent
+        // Supprime le BOM (\uFEFF) s'il est au début
         cleanKey = cleanKey.replace(/^\ufeff/, '');
         normalizedRow[cleanKey] = (row[key] || '').trim();
       }
     });
 
-    // Détection flexible des colonnes
+    // Détection des colonnes (y compris celles nettoyées)
     const name = normalizedRow['name'] || normalizedRow['card name'] || normalizedRow['card'] || normalizedRow['nom'];
     if (!name) return null;
 
@@ -105,12 +104,11 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
     const qtyString = normalizedRow['quantity'] || normalizedRow['count'] || normalizedRow['qty'] || normalizedRow['qte'] || '1';
     const quantity = parseInt(qtyString) || 1;
     
-    // --- NOUVEAU : Récupération de l'ID Scryfall (ManaBox) ---
+    // Récupération de l'ID Scryfall
     const scryfallIdFromCsv = normalizedRow['scryfall id'] || normalizedRow['scryfallid'] || undefined;
 
     const cleanName = name.split(' // ')[0].toLowerCase();
     const cleanSet = setCode.toLowerCase();
-    // ID temporaire (utilisé uniquement pour le fallback)
     const tempId = `${cleanName}-${cleanSet}`.replace(/[^a-z0-9]/g, '-');
     const signature = `${cleanName}|${cleanSet}`;
 
@@ -138,7 +136,7 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
         });
 
         if (allCards.length === 0) {
-          toast.error("Aucune carte trouvée. Vérifiez le format du CSV.");
+          toast.error("Aucune carte trouvée. Vérifiez le format (BOM détecté ?).");
           setIsImporting(false);
           return;
         }
@@ -154,11 +152,10 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
           const chunk = chunks[i];
           
           try {
-            // PRÉPARATION REQUÊTE SCRYFALL
-            // Si on a l'ID Scryfall, on l'utilise (priorité absolue), sinon on utilise Nom + Set
+            // PRÉPARATION REQUÊTE : Utilisation de l'ID en priorité
             const identifiers = chunk.map(c => {
                 if (c.scryfallIdFromCsv) {
-                    return { id: c.scryfallIdFromCsv };
+                    return { id: c.scryfallIdFromCsv }; // Le Graal
                 }
                 return (c.setCode && c.setCode.length >= 2) 
                     ? { name: c.name, set: c.setCode } 
@@ -174,7 +171,6 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
             const scryfallResult = await response.json();
             const foundData = (scryfallResult.data || []) as ScryfallData[];
             
-            // Indexation des résultats pour recherche rapide (O(1))
             const resultsMap = new Map<string, ScryfallData>();
             
             foundData.forEach((f) => {
@@ -182,9 +178,8 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
                 const fSet = f.set.toLowerCase();
                 const fNameClean = fName.split(' // ')[0];
 
-                // On indexe par ID (le plus fiable)
+                // Indexation multiple (ID > Nom+Set > Nom)
                 resultsMap.set(f.id, f);
-                // Et par combinaisons Nom/Set
                 resultsMap.set(`${fName}|${fSet}`, f);
                 resultsMap.set(`${fNameClean}|${fSet}`, f);
                 
@@ -200,24 +195,24 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
               
               let found = null;
               
-              // 1. RECHERCHE PAR ID (ManaBox)
+              // 1. Match par ID (ManaBox)
               if (inputCard.scryfallIdFromCsv) {
                   found = resultsMap.get(inputCard.scryfallIdFromCsv);
               }
 
-              // 2. Recherche standard (Nom + Set)
+              // 2. Match par Nom + Set
               if (!found && inputSet) found = resultsMap.get(`${inputName}|${inputSet}`);
               
-              // 3. Recherche simple (Nom seul)
+              // 3. Match par Nom seul
               if (!found) found = resultsMap.get(inputName);
 
               if (found) {
-                // VALIDATION : Est-ce vraiment la bonne carte ?
+                // Validation de la trouvaille
                 const isIdMatch = inputCard.scryfallIdFromCsv === found.id;
                 const setMatches = inputSet ? (found.set === inputSet) : true;
                 const nameMatches = found.name.toLowerCase() === inputName || found.name.split(' // ')[0].toLowerCase() === inputName;
 
-                // On accepte si l'ID matche (100% sûr) OU si le set/nom matche
+                // On sauvegarde si : ID OK -OU- Set OK -OU- Nom exact OK
                 if (isIdMatch || setMatches || nameMatches) {
                     const cardRef = doc(db, 'users', user.uid, targetCollection, found.id);
                     const price = found.prices?.eur ? parseFloat(found.prices.eur) : 0;
@@ -227,12 +222,12 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
                     else if (found.card_faces?.[0]?.image_uris?.normal) imageUrl = found.card_faces[0].image_uris.normal;
 
                     batch.set(cardRef, {
-                      name: found.name.split(' // ')[0], // Nom propre
+                      name: found.name.split(' // ')[0],
                       quantity: increment(inputCard.quantity),
                       imageUrl: imageUrl,
                       price: price,
                       setName: found.set_name,
-                      setCode: found.set,
+                      setCode: found.set, // On prend le vrai set (SLD) et pas le faux (TLA)
                       scryfallId: found.id,
                       lastUpdated: new Date()
                     }, { merge: true });
@@ -265,7 +260,7 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
         onClose();
       },
       error: () => {
-        toast.error("Erreur de lecture du fichier CSV");
+        toast.error("Erreur CSV");
         setIsImporting(false);
       }
     });
@@ -292,7 +287,7 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
               <input type="file" accept=".csv" onChange={handleFileUpload} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" />
               <div className="text-5xl mb-3 group-hover:scale-110 transition-transform">📦</div>
               <span className="font-medium text-gray-700 dark:text-gray-200">Choisir un fichier CSV</span>
-              <p className="text-xs text-gray-400 mt-2">Compatible: ManaBox, Moxfield, etc.</p>
+              <p className="text-xs text-gray-400 mt-2">Format: ManaBox (recommandé), Name, Set...</p>
             </div>
           </div>
         )}
