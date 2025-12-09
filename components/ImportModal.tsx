@@ -5,7 +5,7 @@ import { useState } from 'react';
 import Papa from 'papaparse';
 import { useAuth } from '@/lib/AuthContext';
 import { db } from '@/lib/firebase';
-// AJOUT : Import de WriteBatch pour typer le batch correctement
+// On importe les types nécessaires pour éviter les erreurs TypeScript
 import { doc, writeBatch, increment, WriteBatch } from 'firebase/firestore';
 import toast from 'react-hot-toast';
 
@@ -25,8 +25,7 @@ type CardInput = {
   signature: string;
 };
 
-// NOUVEAU : On définit la forme des données reçues de Scryfall
-// Cela corrige les erreurs "Unexpected any" sur foundData et la Map
+// Interface pour les données reçues de Scryfall
 interface ScryfallData {
   id: string;
   name: string;
@@ -53,10 +52,7 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
     return result;
   }
 
-  // --- CORRECTION 1 : Renommage de useFallback -> applyFallback ---
-  // Cela corrige l'erreur "React Hook... called inside a callback"
-  // --- CORRECTION 2 : Typage de batch: WriteBatch ---
-  // Cela corrige l'erreur "Unexpected any" sur le batch
+  // Fonction de secours si la carte n'est pas trouvée (ou rejetée)
   const applyFallback = (batch: WriteBatch, uid: string, collection: string, card: CardInput) => {
     const cardRef = doc(db, 'users', uid, collection, card.tempId);
     batch.set(cardRef, {
@@ -155,12 +151,9 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
             });
 
             const scryfallResult = await response.json();
-            
-            // --- CORRECTION 3 : Typage des données Scryfall ---
-            // On force le type ScryfallData[] pour éviter le "any"
             const foundData = (scryfallResult.data || []) as ScryfallData[];
             
-            // Typage explicite de la Map
+            // Création d'une Map pour recherche rapide (O(1))
             const resultsMap = new Map<string, ScryfallData>();
             
             foundData.forEach((f) => {
@@ -171,6 +164,7 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
                 resultsMap.set(`${fName}|${fSet}`, f);
                 resultsMap.set(`${fNameClean}|${fSet}`, f);
                 
+                // Fallback : Nom seul
                 if (!resultsMap.has(fName)) resultsMap.set(fName, f);
                 if (!resultsMap.has(fNameClean)) resultsMap.set(fNameClean, f);
             });
@@ -182,13 +176,21 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
               const inputSet = inputCard.setCode.toLowerCase();
               
               let found = null;
+              // 1. Priorité : Nom + Set exact
               if (inputSet) found = resultsMap.get(`${inputName}|${inputSet}`);
+              // 2. Fallback : Nom seul (si set incorrect ou absent)
               if (!found) found = resultsMap.get(inputName);
 
               if (found) {
+                // --- LOGIQUE CORRIGÉE ICI ---
                 const setMatches = inputSet ? (found.set === inputSet) : true;
+                
+                // On accepte si le set correspond OU si le nom est exact (même si le set diffère)
+                // Cela règle le problème "TLA" vs "SLD"
+                const nameMatchesExact = found.name.toLowerCase() === inputName || found.name.split(' // ')[0].toLowerCase() === inputName;
 
-                if (setMatches) {
+                if (setMatches || nameMatchesExact) {
+                    // Carte trouvée et validée (avec les bonnes infos Scryfall)
                     const cardRef = doc(db, 'users', user.uid, targetCollection, found.id);
                     const price = found.prices?.eur ? parseFloat(found.prices.eur) : 0;
                     
@@ -202,18 +204,18 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
                       imageUrl: imageUrl,
                       price: price,
                       setName: found.set_name,
-                      setCode: found.set,
+                      setCode: found.set, // On sauvegarde le VRAI set (SLD), pas celui du CSV (TLA)
                       scryfallId: found.id,
                       lastUpdated: new Date()
                     }, { merge: true });
                     
                     successCount++;
                 } else {
-                    // Utilisation de applyFallback (CORRIGÉ)
+                    // Correspondance trouvée mais nom trop différent -> On préfère la sécurité (Fallback)
                     applyFallback(batch, user.uid, targetCollection, inputCard);
                 }
               } else {
-                // Utilisation de applyFallback (CORRIGÉ)
+                // Pas trouvée du tout -> Fallback
                 applyFallback(batch, user.uid, targetCollection, inputCard);
               }
             });
