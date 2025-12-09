@@ -7,7 +7,8 @@ import { db } from '@/lib/firebase';
 import { collection, onSnapshot, deleteDoc, doc, updateDoc, increment } from 'firebase/firestore';
 import toast from 'react-hot-toast';
 import ImportModal from '@/components/ImportModal';
-import ConfirmModal from '@/components/ConfirmModal'; 
+import ConfirmModal from '@/components/ConfirmModal';
+import DeleteAllButton from '@/components/DeleteAllButton'; // <--- NOUVEL IMPORT
 
 type WishlistCard = {
   id: string;
@@ -48,7 +49,6 @@ export default function WishlistPage() {
     if (!user) return;
     const cardRef = doc(db, 'users', user.uid, 'wishlist', cardId);
 
-    // Si on arrive à 0, on propose de supprimer
     if (currentQuantity + amount <= 0) {
       setCardToDelete(cardId);
     } else {
@@ -80,6 +80,7 @@ export default function WishlistPage() {
       
       {/* EN-TÊTE */}
       <div className="flex flex-col md:flex-row justify-between items-center mb-8 gap-4">
+        {/* Partie GAUCHE : Titre + Import */}
         <div className="flex items-center gap-4">
           <h1 className="text-3xl font-bold text-center md:text-left">
             Ma Wishlist 
@@ -96,9 +97,14 @@ export default function WishlistPage() {
           </button>
         </div>
         
-        <div className="bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-100 px-6 py-3 rounded-xl shadow-sm border border-green-200 dark:border-green-700">
-          <span className="text-sm uppercase tracking-wide opacity-80">Estimation Total</span>
-          <div className="text-2xl font-bold">{totalPrice.toFixed(2)} €</div>
+        {/* Partie DROITE : Bouton Vider + Total */}
+        <div className="flex items-center gap-4">
+           <DeleteAllButton targetCollection="wishlist" />
+           
+           <div className="bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-100 px-6 py-3 rounded-xl shadow-sm border border-green-200 dark:border-green-700">
+             <span className="text-sm uppercase tracking-wide opacity-80">Estimation Total</span>
+             <div className="text-2xl font-bold">{totalPrice.toFixed(2)} €</div>
+           </div>
         </div>
       </div>
 
@@ -112,7 +118,6 @@ export default function WishlistPage() {
           {cards.map((card) => (
             <div key={card.id} className="relative group flex bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden p-3 gap-4 items-center border border-gray-100 dark:border-gray-700 hover:border-blue-300 dark:hover:border-blue-500 transition-colors">
               
-              {/* BOUTON POUBELLE (Visible au survol ou tout le temps sur mobile) */}
               <button
                 onClick={() => setCardToDelete(card.id)}
                 className="absolute top-2 right-2 p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-full transition opacity-100 md:opacity-0 md:group-hover:opacity-100"
@@ -172,7 +177,7 @@ export default function WishlistPage() {
       )}
 
       {/* MODALS */}
-      <ImportModal isOpen={isImportOpen} onClose={() => setIsImportOpen(false)} />
+      <ImportModal isOpen={isImportOpen} onClose={() => setIsImportOpen(false)} targetCollection="wishlist" />
 
       <ConfirmModal 
         isOpen={!!cardToDelete} 

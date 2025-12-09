@@ -8,6 +8,7 @@ import { collection, onSnapshot, deleteDoc, doc, updateDoc, increment } from 'fi
 import toast from 'react-hot-toast';
 import ImportModal from '@/components/ImportModal';
 import ConfirmModal from '@/components/ConfirmModal';
+import DeleteAllButton from '@/components/DeleteAllButton'; // <--- NOUVEL IMPORT
 
 type CollectionCard = {
   id: string;
@@ -27,8 +28,6 @@ export default function CollectionPage() {
 
   useEffect(() => {
     if (!user) return;
-
-    // CHANGEMENT ICI : on écoute la collection 'collection' au lieu de 'wishlist'
     const unsubscribe = onSnapshot(collection(db, 'users', user.uid, 'collection'), (snapshot) => {
       const items = snapshot.docs.map(doc => ({
         id: doc.id,
@@ -47,9 +46,7 @@ export default function CollectionPage() {
 
   const updateQuantity = async (cardId: string, amount: number, currentQuantity: number) => {
     if (!user) return;
-    // CHANGEMENT ICI : path 'collection'
     const cardRef = doc(db, 'users', user.uid, 'collection', cardId);
-
     if (currentQuantity + amount <= 0) {
       setCardToDelete(cardId);
     } else {
@@ -60,9 +57,8 @@ export default function CollectionPage() {
   const confirmDelete = async () => {
     if (!user || !cardToDelete) return;
     try {
-      // CHANGEMENT ICI : path 'collection'
       await deleteDoc(doc(db, 'users', user.uid, 'collection', cardToDelete));
-      toast.success('Carte retirée de la collection', { icon: '🗑️' });
+      toast.success('Retirée de la collection', { icon: '🗑️' });
     } catch (error) {
       toast.error("Erreur suppression");
     } finally {
@@ -75,15 +71,16 @@ export default function CollectionPage() {
   }, 0);
 
   if (loading) return <p className="text-center p-10">Chargement...</p>;
-  if (!user) return <p className="text-center p-10">Connectez-vous pour voir votre collection.</p>;
+  if (!user) return <p className="text-center p-10">Connectez-vous.</p>;
 
   return (
     <main className="container mx-auto p-4 pb-20">
       
       {/* EN-TÊTE COLLECTION */}
       <div className="flex flex-col md:flex-row justify-between items-center mb-8 gap-4">
+        {/* Partie GAUCHE */}
         <div className="flex items-center gap-4">
-          <h1 className="text-3xl font-bold text-center md:text-left text-blue-800 dark:text-blue-300">
+          <h1 className="text-3xl font-bold text-center md:text-left text-blue-700 dark:text-blue-400">
             Ma Collection 
             <span className="ml-3 text-lg font-normal text-gray-500">
               ({cards.reduce((acc, c) => acc + c.quantity, 0)} cartes)
@@ -98,9 +95,15 @@ export default function CollectionPage() {
           </button>
         </div>
         
-        <div className="bg-blue-50 dark:bg-blue-900/30 text-blue-800 dark:text-blue-100 px-6 py-3 rounded-xl shadow-sm border border-blue-200 dark:border-blue-700">
-          <span className="text-sm uppercase tracking-wide opacity-80">Valeur Collection</span>
-          <div className="text-2xl font-bold">{totalPrice.toFixed(2)} €</div>
+        {/* Partie DROITE : Bouton Vider + Valeur */}
+        <div className="flex items-center gap-4">
+           {/* On cible 'collection' ici */}
+           <DeleteAllButton targetCollection="collection" />
+
+           <div className="bg-blue-50 dark:bg-blue-900/30 text-blue-800 dark:text-blue-100 px-6 py-3 rounded-xl shadow-sm border border-blue-200 dark:border-blue-700">
+             <span className="text-sm uppercase tracking-wide opacity-80">Valeur Collection</span>
+             <div className="text-2xl font-bold">{totalPrice.toFixed(2)} €</div>
+           </div>
         </div>
       </div>
 
@@ -131,11 +134,13 @@ export default function CollectionPage() {
                 <h3 className="font-bold text-lg truncate pr-6" title={card.name}>{card.name}</h3>
                 
                 {card.setName && (
-                  <p className="text-xs text-blue-600 dark:text-blue-400 mb-1 truncate font-medium">{card.setName}</p>
+                  <p className="text-xs text-blue-600 dark:text-blue-400 mb-1 truncate font-medium">
+                    {card.setName}
+                  </p>
                 )}
                 
                 <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">
-                  Prix : {card.price && card.price > 0 ? `${card.price} €` : 'N/A'}
+                  Prix : {card.price ? `${card.price} €` : 'N/A'}
                 </p>
                 
                 <div className="flex justify-between items-end mt-2">
@@ -144,8 +149,10 @@ export default function CollectionPage() {
                     <span className="font-mono text-xl w-6 text-center">{card.quantity}</span>
                     <button onClick={() => updateQuantity(card.id, 1, card.quantity)} className="bg-blue-100 dark:bg-blue-900 text-blue-600 w-8 h-8 rounded hover:bg-blue-200 font-bold">+</button>
                   </div>
-                  {card.price && card.price > 0 && (
-                     <div className="font-bold text-lg text-right text-gray-700 dark:text-gray-200">{(card.price * card.quantity).toFixed(2)} €</div>
+                  {card.price && (
+                     <div className="font-bold text-lg text-right text-gray-700 dark:text-gray-200">
+                       {(card.price * card.quantity).toFixed(2)} €
+                     </div>
                   )}
                 </div>
               </div>
@@ -154,8 +161,7 @@ export default function CollectionPage() {
         </div>
       )}
 
-      {/* --- MODALS --- */}
-      {/* On passe "collection" comme targetCollection */}
+      {/* MODALS */}
       <ImportModal isOpen={isImportOpen} onClose={() => setIsImportOpen(false)} targetCollection="collection" />
 
       <ConfirmModal 
@@ -165,6 +171,7 @@ export default function CollectionPage() {
         title="Retirer de la collection ?"
         message="Voulez-vous vraiment retirer cette carte de votre collection ?"
       />
+
     </main>
   );
 }
