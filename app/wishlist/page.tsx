@@ -4,11 +4,12 @@
 import { useEffect, useState } from 'react';
 import { useAuth } from '@/lib/AuthContext';
 import { db } from '@/lib/firebase';
-import { collection, onSnapshot, deleteDoc, doc, updateDoc, increment } from 'firebase/firestore';
+// On ajoute 'runTransaction' aux imports
+import { collection, onSnapshot, deleteDoc, doc, updateDoc, increment, runTransaction } from 'firebase/firestore';
 import toast from 'react-hot-toast';
 import ImportModal from '@/components/ImportModal';
 import ConfirmModal from '@/components/ConfirmModal';
-import DeleteAllButton from '@/components/DeleteAllButton'; // <--- NOUVEL IMPORT
+import DeleteAllButton from '@/components/DeleteAllButton';
 
 type WishlistCard = {
   id: string;
@@ -17,6 +18,7 @@ type WishlistCard = {
   quantity: number;
   price?: number;
   setName?: string;
+  setCode?: string; // J'ai ajouté ça pour être sûr de bien transférer le code set
 };
 
 export default function WishlistPage() {
@@ -35,7 +37,8 @@ export default function WishlistPage() {
         ...doc.data(),
         quantity: doc.data().quantity || 1,
         price: doc.data().price || 0,
-        setName: doc.data().setName || null
+        setName: doc.data().setName || null,
+        setCode: doc.data().setCode || null
       })) as WishlistCard[];
       
       items.sort((a, b) => a.name.localeCompare(b.name));
@@ -68,6 +71,52 @@ export default function WishlistPage() {
     }
   };
 
+  // --- NOUVELLE FONCTION : DÉPLACEMENT VERS COLLECTION ---
+  const moveToCollection = async (card: WishlistCard) => {
+    if (!user) return;
+    
+    // Feedback immédiat pour l'utilisateur
+    const toastId = toast.loading("Déplacement vers la collection...");
+
+    try {
+      const wishlistRef = doc(db, 'users', user.uid, 'wishlist', card.id);
+      const collectionRef = doc(db, 'users', user.uid, 'collection', card.id);
+
+      // La Transaction assure que la suppression et l'ajout se font en même temps (atomique)
+      await runTransaction(db, async (transaction) => {
+        // 1. On vérifie si la carte existe déjà dans la collection
+        const collectionDoc = await transaction.get(collectionRef);
+
+        if (collectionDoc.exists()) {
+          // Si oui : on augmente juste la quantité (+ quantité de la wishlist)
+          transaction.update(collectionRef, {
+            quantity: increment(card.quantity)
+          });
+        } else {
+          // Si non : on crée la carte dans la collection avec toutes ses infos
+          transaction.set(collectionRef, {
+            name: card.name,
+            imageUrl: card.imageUrl,
+            quantity: card.quantity, // On transfère TOUTE la quantité
+            price: card.price || 0,
+            setName: card.setName || null,
+            setCode: card.setCode || null,
+            addedAt: new Date()
+          });
+        }
+
+        // 2. On supprime de la wishlist
+        transaction.delete(wishlistRef);
+      });
+
+      toast.success("Carte ajoutée à votre collection ! 📦", { id: toastId });
+
+    } catch (error) {
+      console.error(error);
+      toast.error("Erreur lors du déplacement", { id: toastId });
+    }
+  };
+
   const totalPrice = cards.reduce((acc, card) => {
     return acc + (card.price || 0) * card.quantity;
   }, 0);
@@ -80,7 +129,6 @@ export default function WishlistPage() {
       
       {/* EN-TÊTE */}
       <div className="flex flex-col md:flex-row justify-between items-center mb-8 gap-4">
-        {/* Partie GAUCHE : Titre + Import */}
         <div className="flex items-center gap-4">
           <h1 className="text-3xl font-bold text-center md:text-left">
             Ma Wishlist 
@@ -97,7 +145,6 @@ export default function WishlistPage() {
           </button>
         </div>
         
-        {/* Partie DROITE : Bouton Vider + Total */}
         <div className="flex items-center gap-4">
            <DeleteAllButton targetCollection="wishlist" />
            
@@ -118,9 +165,19 @@ export default function WishlistPage() {
           {cards.map((card) => (
             <div key={card.id} className="relative group flex bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden p-3 gap-4 items-center border border-gray-100 dark:border-gray-700 hover:border-blue-300 dark:hover:border-blue-500 transition-colors">
               
+              {/* --- BOUTON DÉPLACEMENT (HAUT GAUCHE) --- */}
+              <button
+                onClick={() => moveToCollection(card)}
+                className="absolute top-2 left-2 p-1.5 bg-green-100 text-green-700 hover:bg-green-600 hover:text-white rounded-full transition opacity-100 md:opacity-0 md:group-hover:opacity-100 shadow-sm z-10"
+                title="J'ai acheté cette carte ! (Déplacer vers Collection)"
+              >
+                📦
+              </button>
+
+              {/* BOUTON POUBELLE (HAUT DROITE) */}
               <button
                 onClick={() => setCardToDelete(card.id)}
-                className="absolute top-2 right-2 p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-full transition opacity-100 md:opacity-0 md:group-hover:opacity-100"
+                className="absolute top-2 right-2 p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-full transition opacity-100 md:opacity-0 md:group-hover:opacity-100 z-10"
                 title="Supprimer la carte"
               >
                 🗑️
@@ -133,7 +190,7 @@ export default function WishlistPage() {
               />
               
               <div className="flex-1 min-w-0">
-                <h3 className="font-bold text-lg truncate pr-6" title={card.name}>{card.name}</h3>
+                <h3 className="font-bold text-lg truncate pr-6 pl-6" title={card.name}>{card.name}</h3>
                 
                 {card.setName && (
                   <p className="text-xs text-blue-600 dark:text-blue-400 mb-1 truncate font-medium">
