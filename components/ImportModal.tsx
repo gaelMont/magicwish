@@ -77,21 +77,22 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
     return Array.from(map.values());
   };
 
-  // --- NOUVELLE LOGIQUE ROBUSTE ---
-  // On ne se fie plus aux en-têtes nommés, on utilise la position (index) des colonnes standard ManaBox
-  // Index 2 = Name, Index 3 = Set Code, Index 8 = Quantity, Index 10 = Scryfall ID
+  // --- LOGIQUE PAR POSITION (Index) ---
+  // On ignore les noms de colonnes qui buggent. On prend la 3ème case, la 4ème, etc.
   const mapRowToCard = (row: unknown[]): CardInput | null => {
     if (!Array.isArray(row) || row.length < 3) return null;
 
-    // Conversion sécurisée en string
+    // Fonction sécurisée pour récupérer du texte
     const getString = (index: number) => (row[index] ? String(row[index]).trim() : '');
 
+    // Index 2 = Nom de la carte (ManaBox standard)
     const name = getString(2); 
-    if (!name) return null; // Pas de nom, on ignore
+    if (!name) return null; 
 
+    // Index 3 = Code du set
     const setCode = getString(3);
     
-    // Nettoyage quantité
+    // Index 8 = Quantité
     let qty = 1;
     const qtyStr = getString(8);
     if (qtyStr) {
@@ -99,7 +100,7 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
       if (!isNaN(parsed) && parsed > 0) qty = parsed;
     }
 
-    // ID Scryfall (colonne 10)
+    // Index 10 = ID Scryfall
     let scryfallId = undefined;
     const idStr = getString(10);
     if (idStr && idStr.length > 10) {
@@ -127,15 +128,13 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
 
     setIsImporting(true);
     setProgress(0);
-    setStatusMessage(`Analyse du fichier...`);
+    setStatusMessage(`Lecture du fichier...`);
 
     Papa.parse(file, {
-      header: false, // IMPORTANT: On désactive la lecture des en-têtes pour éviter les bugs de clés
+      header: false, // <--- ON FORCE 'FALSE' POUR LIRE LIGNE PAR LIGNE SANS ANALYSE D'EN-TÊTE
       skipEmptyLines: true,
-      // On force la détection automatique complète sans préjugés
-      delimiter: "", 
       complete: async (results) => {
-        // CORRECTION DE L'ERREUR 'ANY' : On cast en 'unknown[][]'
+        // On force le type ici pour éviter les erreurs TypeScript
         const rows = results.data as unknown[][];
 
         if (!rows || rows.length < 2) {
@@ -144,7 +143,9 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
           return;
         }
 
-        // On ignore la première ligne (les titres)
+        console.log("Lecture brute réussie :", rows.length, "lignes trouvées.");
+
+        // On enlève la 1ère ligne (les titres)
         const dataRows = rows.slice(1);
         
         let allCards: CardInput[] = [];
@@ -154,13 +155,13 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
         });
 
         if (allCards.length === 0) {
-          console.error("Aucune carte trouvée. Données brutes de la ligne 1:", dataRows[0]);
-          toast.error("Format non reconnu. Vérifiez que c'est un CSV ManaBox valide.");
+          console.error("Echec parsing. Ligne 1 brute :", dataRows[0]);
+          toast.error("Aucune carte identifiée. Vérifiez le format ManaBox.");
           setIsImporting(false);
           return;
         }
 
-        // --- DÉBUT DU TRAITEMENT ---
+        // --- SUITE STANDARD ---
         allCards = optimizeCardList(allCards);
         const optimizedCount = allCards.length;
         const chunks = chunkArray(allCards, 75);
@@ -255,11 +256,12 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
           await new Promise(r => setTimeout(r, 100));
         }
 
-        toast.success(`Import terminé ! (${successCount} cartes)`);
+        toast.success(`Import terminé ! (${successCount} cartes identifiées)`);
         setIsImporting(false);
         onClose();
       },
-      // CORRECTION FINALE : On utilise 'unknown' pour éviter l'erreur TypeScript bloquante
+      // --- C'EST ICI LA CORRECTION CRUCIALE ---
+      // On utilise 'unknown' au lieu de 'any' pour valider TypeScript
       error: (err: unknown) => {
         console.error(err);
         toast.error("Erreur lecture CSV");
