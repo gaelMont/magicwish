@@ -94,7 +94,6 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
     // Détection flexible du nom de la colonne
     const name = normalizedRow['name'] || normalizedRow['card name'] || normalizedRow['card'] || normalizedRow['nom'];
     
-    // Si pas de nom, on ignore la ligne
     if (!name) return null;
 
     const setCode = normalizedRow['set code'] || normalizedRow['set'] || normalizedRow['edition'] || normalizedRow['extension'] || '';
@@ -119,7 +118,6 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
     setProgress(0);
     setStatusMessage(`Analyse du fichier...`);
 
-    // 1. Lecture manuelle pour forcer le bon délimiteur
     const reader = new FileReader();
     
     reader.onload = async (event) => {
@@ -130,20 +128,18 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
         return;
       }
 
-      // 2. Détection "Brute Force" du délimiteur
-      // On regarde la première ligne : y a-t-il plus de point-virgules ou de virgules ?
+      // --- DÉTECTION MANUELLE DU SÉPARATEUR ---
       const firstLine = csvText.split('\n')[0];
       const semiCount = (firstLine.match(/;/g) || []).length;
       const commaCount = (firstLine.match(/,/g) || []).length;
       const detectedDelimiter = semiCount > commaCount ? ';' : ',';
 
-      console.log(`Délimiteur détecté : "${detectedDelimiter}" (Testé sur : ${firstLine})`);
+      console.log(`Délimiteur détecté : "${detectedDelimiter}"`);
 
-      // 3. Parsing avec le délimiteur forcé
       Papa.parse(csvText, {
         header: true,
         skipEmptyLines: true,
-        delimiter: detectedDelimiter, // <--- ON IMPOSE LE GAGNANT
+        delimiter: detectedDelimiter, // On force le séparateur gagnant
         complete: async (results) => {
           const rows = results.data as CSVRow[];
           
@@ -157,16 +153,16 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
             if (card) allCards.push(card);
           });
 
-          // DEBUG : Si toujours 0 cartes, on affiche ce qu'on a trouvé comme colonnes
           if (allCards.length === 0) {
+            // Message d'erreur détaillé pour le débogage
             const foundColumns = rows.length > 0 ? Object.keys(rows[0]).join(', ') : 'Aucune';
             console.error("Colonnes trouvées :", foundColumns);
-            toast.error(`Aucune carte trouvée. Colonnes détectées : ${foundColumns}`);
+            toast.error(`Aucune carte trouvée. Colonnes lues : ${foundColumns}`);
             setIsImporting(false);
             return;
           }
 
-          // --- DEBUT DU TRAITEMENT (IDENTIQUE A AVANT) ---
+          // --- DÉBUT DU TRAITEMENT ---
           allCards = optimizeCardList(allCards);
           const optimizedCount = allCards.length;
           const chunks = chunkArray(allCards, 75);
@@ -219,7 +215,7 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
                 if (found) {
                   const isIdMatch = inputCard.scryfallIdFromCsv === found.id;
                   const setMatches = inputSet ? (found.set === inputSet) : true;
-                  const nameMatches = found.name.toLowerCase().includes(inputName); // Plus souple
+                  const nameMatches = found.name.toLowerCase().includes(inputName);
 
                   if (isIdMatch || setMatches || nameMatches) {
                       const cardRef = doc(db, 'users', user.uid, targetCollection, found.id);
@@ -265,7 +261,8 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
           setIsImporting(false);
           onClose();
         },
-        error: (err) => {
+        // --- CORRECTION : 'unknown' est accepté par le linter en mode strict ---
+        error: (err: unknown) => {
           console.error(err);
           toast.error("Erreur lecture CSV");
           setIsImporting(false);
@@ -273,7 +270,7 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'wishl
       });
     };
 
-    reader.readAsText(file); // Lecture déclenche le onload ci-dessus
+    reader.readAsText(file);
   };
 
   return (
