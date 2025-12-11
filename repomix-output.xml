@@ -88,230 +88,6 @@ tsconfig.json
 <files>
 This section contains the contents of the repository's files.
 
-<file path="app/trades/new/[uid]/page.tsx">
-// app/trades/new/[uid]/page.tsx
-'use client';
-
-import { useState, use, useEffect } from 'react';
-import { useAuth } from '@/lib/AuthContext';
-import { useCardCollection, CardType } from '@/hooks/useCardCollection';
-import { useTradeSystem } from '@/hooks/useTradeSystem';
-import { db } from '@/lib/firebase';
-import { doc, getDoc } from 'firebase/firestore';
-import { useRouter } from 'next/navigation';
-import toast from 'react-hot-toast';
-
-export default function DirectTradePage({ params }: { params: Promise<{ uid: string }> }) {
-  // Récupération des paramètres (Next.js 15)
-  const unwrappedParams = use(params);
-  const targetUid = unwrappedParams.uid;
-
-  const { user } = useAuth();
-  const router = useRouter();
-  const { proposeTrade } = useTradeSystem();
-
-  // --- CHARGEMENT DES COLLECTIONS ---
-  // 1. Ma Collection
-  const { cards: myCollection, loading: loadingMe } = useCardCollection('collection');
-  // 2. Collection de l'ami (on utilise le 3ème argument targetUid)
-  const { cards: friendCollection, loading: loadingHim } = useCardCollection('collection', 'default', targetUid);
-
-  // --- ÉTATS ---
-  const [targetName, setTargetName] = useState('L\'ami');
-  
-  // Cartes sélectionnées pour l'échange
-  const [toGive, setToGive] = useState<CardType[]>([]);
-  const [toReceive, setToReceive] = useState<CardType[]>([]);
-
-  // Filtres de recherche locaux
-  const [searchMe, setSearchMe] = useState('');
-  const [searchHim, setSearchHim] = useState('');
-
-  // Récupérer le nom de l'ami pour l'affichage propre
-  useEffect(() => {
-    const fetchName = async () => {
-        try {
-            const snap = await getDoc(doc(db, 'users', targetUid, 'public_profile', 'info'));
-            if(snap.exists()) setTargetName(snap.data().displayName || snap.data().username);
-        } catch(e) { console.error(e); }
-    };
-    if (targetUid) fetchName();
-  }, [targetUid]);
-
-  // --- LOGIQUE DE SÉLECTION ---
-
-  const handleSelectCard = (card: CardType, listType: 'give' | 'receive') => {
-    const targetList = listType === 'give' ? toGive : toReceive;
-    const setTarget = listType === 'give' ? setToGive : setToReceive;
-
-    const existing = targetList.find(c => c.id === card.id);
-    
-    // On vérifie qu'on ne dépasse pas le stock disponible de la collection source
-    const maxStock = card.quantity;
-    const currentSelected = existing ? existing.quantity : 0;
-
-    if (currentSelected < maxStock) {
-        if (existing) {
-            setTarget(prev => prev.map(c => c.id === card.id ? { ...c, quantity: c.quantity + 1 } : c));
-        } else {
-            setTarget(prev => [...prev, { ...card, quantity: 1 }]);
-        }
-    } else {
-        toast.error("Stock maximum atteint pour cette carte");
-    }
-  };
-
-  const handleRemoveCard = (cardId: string, listType: 'give' | 'receive') => {
-    const setTarget = listType === 'give' ? setToGive : setToReceive;
-    setTarget(prev => prev.filter(c => c.id !== cardId));
-  };
-
-  // --- VALIDATION ---
-  const handlePropose = async () => {
-    if (toGive.length === 0 && toReceive.length === 0) return;
-    
-    // On lance la proposition d'échange
-    const success = await proposeTrade(targetUid, targetName, toGive, toReceive);
-    if (success) {
-        router.push('/trades'); // Redirection vers le centre d'échanges après succès
-    }
-  };
-
-  // Calculs totaux (Valeurs estimées)
-  const valGive = toGive.reduce((acc, c) => acc + (c.customPrice ?? c.price ?? 0) * c.quantity, 0);
-  const valReceive = toReceive.reduce((acc, c) => acc + (c.customPrice ?? c.price ?? 0) * c.quantity, 0);
-
-  if (!user) return <div className="p-10 text-center">Connexion requise.</div>;
-
-  return (
-    <div className="container mx-auto p-4 min-h-screen pb-24">
-        
-        {/* HEADER */}
-        <div className="flex items-center gap-4 mb-6">
-            <button onClick={() => router.back()} className="text-gray-500 hover:text-gray-700 bg-gray-100 px-3 py-1 rounded-lg text-sm">
-                ← Retour
-            </button>
-            <h1 className="text-2xl font-bold">
-                Échange avec <span className="text-blue-600">{targetName}</span>
-            </h1>
-        </div>
-
-        <div className="grid lg:grid-cols-2 gap-8 h-[calc(100vh-200px)]">
-            
-            {/* --- COLONNE GAUCHE : CE QUE JE DONNE --- */}
-            <div className="flex flex-col bg-red-50/50 dark:bg-red-900/10 rounded-xl border border-red-100 dark:border-red-900 p-4">
-                <h2 className="font-bold text-red-600 mb-2">📤 Je donne (Ma Collection)</h2>
-                
-                {/* 1. Liste des cartes SÉLECTIONNÉES */}
-                <div className="flex-none mb-4 space-y-2 min-h-[100px] bg-white dark:bg-gray-800 p-2 rounded border border-gray-200 dark:border-gray-700 overflow-y-auto max-h-[25vh]">
-                    {toGive.length === 0 && <p className="text-xs text-gray-400 italic text-center py-4">Rien sélectionné</p>}
-                    {toGive.map(card => (
-                        <div key={card.id} className="flex justify-between items-center text-sm p-1 border-b dark:border-gray-700">
-                            <span>{card.quantity}x {card.name} <span className="text-gray-400 text-xs">({card.setName})</span></span>
-                            <button onClick={() => handleRemoveCard(card.id, 'give')} className="text-red-500 font-bold px-2">✕</button>
-                        </div>
-                    ))}
-                </div>
-
-                {/* 2. Filtre Recherche locale */}
-                <input 
-                    type="text" 
-                    placeholder="Filtrer ma collection..." 
-                    className="w-full p-2 mb-2 rounded border dark:bg-gray-800 dark:text-white"
-                    value={searchMe}
-                    onChange={e => setSearchMe(e.target.value)}
-                />
-
-                {/* 3. Liste DISPONIBLE (Source) */}
-                <div className="grow overflow-y-auto custom-scrollbar space-y-2 pr-1">
-                    {loadingMe ? <p>Chargement...</p> : 
-                        myCollection
-                            .filter(c => c.name.toLowerCase().includes(searchMe.toLowerCase()))
-                            .slice(0, 50) // Limite d'affichage pour éviter le lag
-                            .map(card => (
-                                <div key={card.id} onClick={() => handleSelectCard(card, 'give')} className="cursor-pointer hover:bg-red-100 dark:hover:bg-red-900/30 p-2 rounded flex items-center gap-2 border border-transparent hover:border-red-200 transition">
-                                    <div className="w-8 h-11 bg-gray-200 rounded shrink-0 overflow-hidden">
-                                        <img src={card.imageUrl} className="w-full h-full object-cover" alt="" />
-                                    </div>
-                                    <div className="grow min-w-0">
-                                        <p className="font-bold text-xs truncate dark:text-gray-200">{card.name}</p>
-                                        <p className="text-[10px] text-gray-500">{card.setName} - Dispo: {card.quantity}</p>
-                                    </div>
-                                    <span className="text-xs font-bold text-gray-400">+</span>
-                                </div>
-                            ))
-                    }
-                </div>
-            </div>
-
-            {/* --- COLONNE DROITE : CE QUE JE VEUX (SA COLLECTION) --- */}
-            <div className="flex flex-col bg-blue-50/50 dark:bg-blue-900/10 rounded-xl border border-blue-100 dark:border-blue-900 p-4">
-                <h2 className="font-bold text-blue-600 mb-2">📥 Je reçois (Sa Collection)</h2>
-
-                {/* 1. Liste des cartes SÉLECTIONNÉES */}
-                <div className="flex-none mb-4 space-y-2 min-h-[100px] bg-white dark:bg-gray-800 p-2 rounded border border-gray-200 dark:border-gray-700 overflow-y-auto max-h-[25vh]">
-                    {toReceive.length === 0 && <p className="text-xs text-gray-400 italic text-center py-4">Rien sélectionné</p>}
-                    {toReceive.map(card => (
-                        <div key={card.id} className="flex justify-between items-center text-sm p-1 border-b dark:border-gray-700">
-                            <span>{card.quantity}x {card.name} <span className="text-gray-400 text-xs">({card.setName})</span></span>
-                            <button onClick={() => handleRemoveCard(card.id, 'receive')} className="text-red-500 font-bold px-2">✕</button>
-                        </div>
-                    ))}
-                </div>
-
-                {/* 2. Filtre Recherche locale (chez l'ami) */}
-                <input 
-                    type="text" 
-                    placeholder={`Filtrer la collection de ${targetName}...`}
-                    className="w-full p-2 mb-2 rounded border dark:bg-gray-800 dark:text-white"
-                    value={searchHim}
-                    onChange={e => setSearchHim(e.target.value)}
-                />
-
-                {/* 3. Liste DISPONIBLE (Source Ami) */}
-                <div className="grow overflow-y-auto custom-scrollbar space-y-2 pr-1">
-                    {loadingHim ? <p>Chargement...</p> : 
-                        friendCollection
-                            .filter(c => c.name.toLowerCase().includes(searchHim.toLowerCase()))
-                            .slice(0, 50)
-                            .map(card => (
-                                <div key={card.id} onClick={() => handleSelectCard(card, 'receive')} className="cursor-pointer hover:bg-blue-100 dark:hover:bg-blue-900/30 p-2 rounded flex items-center gap-2 border border-transparent hover:border-blue-200 transition">
-                                    <div className="w-8 h-11 bg-gray-200 rounded shrink-0 overflow-hidden">
-                                        <img src={card.imageUrl} className="w-full h-full object-cover" alt="" />
-                                    </div>
-                                    <div className="grow min-w-0">
-                                        <p className="font-bold text-xs truncate dark:text-gray-200">{card.name}</p>
-                                        <p className="text-[10px] text-gray-500">{card.setName} - Dispo: {card.quantity}</p>
-                                    </div>
-                                    <span className="text-xs font-bold text-gray-400">+</span>
-                                </div>
-                            ))
-                    }
-                </div>
-            </div>
-
-        </div>
-
-        {/* --- FOOTER DE VALIDATION --- */}
-        <div className="fixed bottom-0 left-0 right-0 p-4 bg-white dark:bg-gray-900 border-t dark:border-gray-800 flex justify-between items-center z-40 shadow-2xl">
-            <div className="flex gap-4 text-sm">
-                <div>Donne: <span className="font-bold">{valGive.toFixed(2)}€</span></div>
-                <div>Reçoit: <span className="font-bold">{valReceive.toFixed(2)}€</span></div>
-            </div>
-            <button 
-                onClick={handlePropose}
-                disabled={toGive.length === 0 && toReceive.length === 0}
-                className="bg-purple-600 hover:bg-purple-700 text-white px-8 py-3 rounded-xl font-bold disabled:opacity-50 transition shadow-lg flex items-center gap-2"
-            >
-                <span>🚀</span> Proposer l&apos;échange
-            </button>
-        </div>
-
-    </div>
-  );
-}
-</file>
-
 <file path=".gitignore">
 # See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
 
@@ -1456,6 +1232,226 @@ export default function RootLayout({
 }
 </file>
 
+<file path="app/trades/new/[uid]/page.tsx">
+// app/trades/new/[uid]/page.tsx
+'use client';
+
+import { useState, use, useEffect } from 'react';
+import { useAuth } from '@/lib/AuthContext';
+import { useCardCollection, CardType } from '@/hooks/useCardCollection';
+import { useTradeSystem } from '@/hooks/useTradeSystem';
+import { db } from '@/lib/firebase';
+import { doc, getDoc } from 'firebase/firestore';
+import { useRouter } from 'next/navigation';
+import toast from 'react-hot-toast';
+
+export default function DirectTradePage({ params }: { params: Promise<{ uid: string }> }) {
+  const unwrappedParams = use(params);
+  const targetUid = unwrappedParams.uid;
+
+  const { user } = useAuth();
+  const router = useRouter();
+  const { proposeTrade } = useTradeSystem();
+
+  // --- CHARGEMENT DES COLLECTIONS ---
+  const { cards: myCollection, loading: loadingMe } = useCardCollection('collection');
+  const { cards: friendCollection, loading: loadingHim } = useCardCollection('collection', 'default', targetUid);
+
+  // --- ÉTATS ---
+  const [targetName, setTargetName] = useState('L\'ami');
+  
+  const [toGive, setToGive] = useState<CardType[]>([]);
+  const [toReceive, setToReceive] = useState<CardType[]>([]);
+
+  const [searchMe, setSearchMe] = useState('');
+  const [searchHim, setSearchHim] = useState('');
+
+  useEffect(() => {
+    const fetchName = async () => {
+        try {
+            const snap = await getDoc(doc(db, 'users', targetUid, 'public_profile', 'info'));
+            if(snap.exists()) setTargetName(snap.data().displayName || snap.data().username);
+        } catch(e) { console.error(e); }
+    };
+    if (targetUid) fetchName();
+  }, [targetUid]);
+
+  // --- LOGIQUE DE SÉLECTION ---
+
+  const handleSelectCard = (card: CardType, listType: 'give' | 'receive') => {
+    const targetList = listType === 'give' ? toGive : toReceive;
+    const setTarget = listType === 'give' ? setToGive : setToReceive;
+
+    const existing = targetList.find(c => c.id === card.id);
+    const maxStock = card.quantity;
+    const currentSelected = existing ? existing.quantity : 0;
+
+    if (currentSelected < maxStock) {
+        if (existing) {
+            setTarget(prev => prev.map(c => c.id === card.id ? { ...c, quantity: c.quantity + 1 } : c));
+        } else {
+            setTarget(prev => [...prev, { ...card, quantity: 1 }]);
+        }
+    } else {
+        toast.error("Stock maximum atteint pour cette carte");
+    }
+  };
+
+  const handleRemoveCard = (cardId: string, listType: 'give' | 'receive') => {
+    const setTarget = listType === 'give' ? setToGive : setToReceive;
+    setTarget(prev => prev.filter(c => c.id !== cardId));
+  };
+
+  // --- VALIDATION ---
+  const handlePropose = async () => {
+    if (toGive.length === 0 && toReceive.length === 0) return;
+    
+    const success = await proposeTrade(targetUid, targetName, toGive, toReceive);
+    if (success) {
+        router.push('/trades'); 
+    }
+  };
+
+  const valGive = toGive.reduce((acc, c) => acc + (c.customPrice ?? c.price ?? 0) * c.quantity, 0);
+  const valReceive = toReceive.reduce((acc, c) => acc + (c.customPrice ?? c.price ?? 0) * c.quantity, 0);
+
+  if (!user) return <div className="p-10 text-center">Connexion requise.</div>;
+
+  return (
+    <div className="container mx-auto p-4 min-h-screen pb-24">
+        
+        {/* HEADER */}
+        <div className="flex items-center gap-4 mb-6">
+            <button onClick={() => router.back()} className="text-gray-500 hover:text-gray-700 bg-gray-100 px-3 py-1 rounded-lg text-sm">
+                ← Retour
+            </button>
+            <h1 className="text-2xl font-bold">
+                Échange avec <span className="text-blue-600">{targetName}</span>
+            </h1>
+        </div>
+
+        <div className="grid lg:grid-cols-2 gap-8 h-[calc(100vh-200px)]">
+            
+            {/* --- COLONNE GAUCHE : CE QUE JE DONNE --- */}
+            <div className="flex flex-col bg-red-50/50 dark:bg-red-900/10 rounded-xl border border-red-100 dark:border-red-900 p-4">
+                <h2 className="font-bold text-red-600 mb-2">📤 Je donne (Ma Collection)</h2>
+                
+                {/* 1. Liste des cartes SÉLECTIONNÉES */}
+                <div className="flex-none mb-4 space-y-2 min-h-[100px] bg-white dark:bg-gray-800 p-2 rounded border border-gray-200 dark:border-gray-700 overflow-y-auto max-h-[25vh]">
+                    {toGive.length === 0 && <p className="text-xs text-gray-400 italic text-center py-4">Rien sélectionné</p>}
+                    {toGive.map(card => (
+                        <div key={card.id} className="flex justify-between items-center text-sm p-1 border-b dark:border-gray-700">
+                            <span>{card.quantity}x {card.name} <span className="text-gray-400 text-xs">({card.setName})</span></span>
+                            <button onClick={() => handleRemoveCard(card.id, 'give')} className="text-red-500 font-bold px-2">✕</button>
+                        </div>
+                    ))}
+                </div>
+
+                {/* 2. Filtre Recherche */}
+                <input 
+                    type="text" 
+                    placeholder="Filtrer ma collection..." 
+                    className="w-full p-2 mb-2 rounded border dark:bg-gray-800 dark:text-white"
+                    value={searchMe}
+                    onChange={e => setSearchMe(e.target.value)}
+                />
+
+                {/* 3. Liste DISPONIBLE */}
+                <div className="grow overflow-y-auto custom-scrollbar space-y-2 pr-1">
+                    {loadingMe ? <p>Chargement...</p> : 
+                        myCollection
+                            .filter(c => c.name.toLowerCase().includes(searchMe.toLowerCase()))
+                            .slice(0, 50) 
+                            .map(card => (
+                                <div key={card.id} onClick={() => handleSelectCard(card, 'give')} className="cursor-pointer hover:bg-red-100 dark:hover:bg-red-900/30 p-2 rounded flex items-center gap-2 border border-transparent hover:border-red-200 transition">
+                                    <div className="w-8 h-11 bg-gray-200 rounded shrink-0 overflow-hidden relative">
+                                         <img src={card.imageUrl} className="w-full h-full object-cover" alt="" />
+                                         {/* Indicateur si la carte est marquée à l'échange chez MOI (Info visuelle) */}
+                                         {card.isForTrade && <div className="absolute bottom-0 right-0 bg-green-500 text-white text-[8px] px-1">🤝</div>}
+                                    </div>
+                                    <div className="grow min-w-0">
+                                        <p className="font-bold text-xs truncate dark:text-gray-200">{card.name}</p>
+                                        <p className="text-[10px] text-gray-500">{card.setName} - Dispo: {card.quantity}</p>
+                                    </div>
+                                    <span className="text-xs font-bold text-gray-400">+</span>
+                                </div>
+                            ))
+                    }
+                </div>
+            </div>
+
+            {/* --- COLONNE DROITE : CE QUE JE VEUX (SA COLLECTION) --- */}
+            <div className="flex flex-col bg-blue-50/50 dark:bg-blue-900/10 rounded-xl border border-blue-100 dark:border-blue-900 p-4">
+                <h2 className="font-bold text-blue-600 mb-2">📥 Je reçois (Sa Collection)</h2>
+
+                {/* 1. Liste SÉLECTIONNÉE */}
+                <div className="flex-none mb-4 space-y-2 min-h-[100px] bg-white dark:bg-gray-800 p-2 rounded border border-gray-200 dark:border-gray-700 overflow-y-auto max-h-[25vh]">
+                    {toReceive.length === 0 && <p className="text-xs text-gray-400 italic text-center py-4">Rien sélectionné</p>}
+                    {toReceive.map(card => (
+                        <div key={card.id} className="flex justify-between items-center text-sm p-1 border-b dark:border-gray-700">
+                            <span>{card.quantity}x {card.name} <span className="text-gray-400 text-xs">({card.setName})</span></span>
+                            <button onClick={() => handleRemoveCard(card.id, 'receive')} className="text-red-500 font-bold px-2">✕</button>
+                        </div>
+                    ))}
+                </div>
+
+                {/* 2. Filtre Recherche */}
+                <input 
+                    type="text" 
+                    placeholder={`Filtrer la collection de ${targetName}...`}
+                    className="w-full p-2 mb-2 rounded border dark:bg-gray-800 dark:text-white"
+                    value={searchHim}
+                    onChange={e => setSearchHim(e.target.value)}
+                />
+
+                {/* 3. Liste DISPONIBLE (Source Ami) - FILTRÉE PAR isForTrade */}
+                <div className="grow overflow-y-auto custom-scrollbar space-y-2 pr-1">
+                    {loadingHim ? <p>Chargement...</p> : 
+                        friendCollection
+                            // 🔒 FILTRE CRUCIAL : On ne montre que ce qui est "En Échange"
+                            .filter(c => c.isForTrade) 
+                            // -----------------------------------------------------------
+                            .filter(c => c.name.toLowerCase().includes(searchHim.toLowerCase()))
+                            .slice(0, 50)
+                            .map(card => (
+                                <div key={card.id} onClick={() => handleSelectCard(card, 'receive')} className="cursor-pointer hover:bg-blue-100 dark:hover:bg-blue-900/30 p-2 rounded flex items-center gap-2 border border-transparent hover:border-blue-200 transition">
+                                    <div className="w-8 h-11 bg-gray-200 rounded shrink-0 overflow-hidden relative">
+                                        <img src={card.imageUrl} className="w-full h-full object-cover" alt="" />
+                                        <div className="absolute bottom-0 right-0 bg-green-500 text-white text-[8px] px-1">🤝</div>
+                                    </div>
+                                    <div className="grow min-w-0">
+                                        <p className="font-bold text-xs truncate dark:text-gray-200">{card.name}</p>
+                                        <p className="text-[10px] text-gray-500">{card.setName} - Dispo: {card.quantity}</p>
+                                    </div>
+                                    <span className="text-xs font-bold text-gray-400">+</span>
+                                </div>
+                            ))
+                    }
+                </div>
+            </div>
+
+        </div>
+
+        {/* --- FOOTER DE VALIDATION --- */}
+        <div className="fixed bottom-0 left-0 right-0 p-4 bg-white dark:bg-gray-900 border-t dark:border-gray-800 flex justify-between items-center z-40 shadow-2xl">
+            <div className="flex gap-4 text-sm">
+                <div>Donne: <span className="font-bold">{valGive.toFixed(2)}€</span></div>
+                <div>Reçoit: <span className="font-bold">{valReceive.toFixed(2)}€</span></div>
+            </div>
+            <button 
+                onClick={handlePropose}
+                disabled={toGive.length === 0 && toReceive.length === 0}
+                className="bg-purple-600 hover:bg-purple-700 text-white px-8 py-3 rounded-xl font-bold disabled:opacity-50 transition shadow-lg flex items-center gap-2"
+            >
+                <span>🚀</span> Proposer l&apos;échange
+            </button>
+        </div>
+
+    </div>
+  );
+}
+</file>
+
 <file path="components/wishlist/SingleWishlistView.tsx">
 // components/wishlist/SingleWishlistView.tsx
 'use client';
@@ -2223,203 +2219,6 @@ export default function ManualTradePage() {
 }
 </file>
 
-<file path="hooks/useTradeMatcher.ts">
-// hooks/useTradeMatcher.ts
-import { useState } from 'react';
-import { useAuth } from '@/lib/AuthContext';
-import { db } from '@/lib/firebase';
-import { collection, getDocs, doc, writeBatch } from 'firebase/firestore'; 
-import { useWishlists, WishlistMeta } from './useWishlists'; // <--- 1. Import WishlistMeta
-import { useFriends, FriendProfile } from './useFriends';
-import { CardType } from './useCardCollection';
-
-export type TradeProposal = {
-  friend: FriendProfile;
-  toReceive: CardType[]; 
-  toGive: CardType[];    
-  balance: number;       
-};
-
-export function useTradeMatcher() {
-  const { user } = useAuth();
-  const { lists } = useWishlists();
-  const { friends } = useFriends();
-  
-  const [proposals, setProposals] = useState<TradeProposal[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [status, setStatus] = useState("");
-
-  // 2. Correction ici : Remplacement de any[] par WishlistMeta[]
-  const fetchAllCards = async (uid: string, mode: 'collection' | 'wishlist', userLists: WishlistMeta[] = []) => {
-    const cardsMap = new Map<string, CardType>();
-
-    if (mode === 'collection') {
-        const snap = await getDocs(collection(db, 'users', uid, 'collection'));
-        snap.forEach(d => cardsMap.set(d.id, { id: d.id, ...d.data() } as CardType));
-    } else {
-        const defSnap = await getDocs(collection(db, 'users', uid, 'wishlist'));
-        defSnap.forEach(d => cardsMap.set(d.id, { id: d.id, ...d.data() } as CardType));
-        
-        if (userLists.length > 0) {
-            for (const list of userLists) {
-                 if (list.id === 'default') continue;
-                 const snap = await getDocs(collection(db, 'users', uid, 'wishlists_data', list.id, 'cards'));
-                 snap.forEach(d => cardsMap.set(d.id, { id: d.id, ...d.data() } as CardType));
-            }
-        } else {
-            const metaSnap = await getDocs(collection(db, 'users', uid, 'wishlists_meta'));
-            for (const meta of metaSnap.docs) {
-                const snap = await getDocs(collection(db, 'users', uid, 'wishlists_data', meta.id, 'cards'));
-                snap.forEach(d => cardsMap.set(d.id, { id: d.id, ...d.data() } as CardType));
-            }
-        }
-    }
-    return cardsMap;
-  };
-
-  const refreshPrices = async (cardsToUpdate: CardType[], uid: string, collectionName: string) => {
-     if (cardsToUpdate.length === 0) return;
-
-     const chunks = [];
-     for (let i = 0; i < cardsToUpdate.length; i += 75) {
-         chunks.push(cardsToUpdate.slice(i, i + 75));
-     }
-
-     const batch = writeBatch(db); 
-     let hasUpdates = false;
-
-     for (const chunk of chunks) {
-         try {
-             const identifiers = chunk.map(c => ({ id: c.id }));
-             
-             const res = await fetch('https://api.scryfall.com/cards/collection', {
-                 method: 'POST',
-                 headers: { 'Content-Type': 'application/json' },
-                 body: JSON.stringify({ identifiers })
-             });
-
-             if (!res.ok) continue;
-
-             const data = await res.json();
-             
-             // 3. Correction ici : On utilise le commentaire spécial pour autoriser any juste ici
-             // eslint-disable-next-line @typescript-eslint/no-explicit-any
-             const foundCards: any[] = data.data || [];
-
-             foundCards.forEach(scryCard => {
-                 const newPrice = parseFloat(scryCard.prices?.eur || "0");
-                 const localCard = chunk.find(c => c.id === scryCard.id);
-
-                 if (localCard && localCard.price !== newPrice) {
-                     localCard.price = newPrice; 
-                     
-                     if (collectionName === 'collection') {
-                         const ref = doc(db, 'users', uid, 'collection', localCard.id);
-                         batch.update(ref, { price: newPrice });
-                         hasUpdates = true;
-                     }
-                 }
-             });
-         } catch (e) { console.error("Err price fetch batch", e); }
-     }
-
-     if (hasUpdates) {
-         await batch.commit();
-     }
-  };
-
-  const runScan = async () => {
-    if (!user || friends.length === 0) return;
-    setLoading(true);
-    setStatus("Chargement de vos données...");
-
-    try {
-        const myCollectionMap = await fetchAllCards(user.uid, 'collection');
-        const myWishlistMap = await fetchAllCards(user.uid, 'wishlist', lists);
-
-        const myWishlistNames = new Set<string>();
-        const myWishlistIds = new Set<string>();
-
-        myWishlistMap.forEach(card => {
-            if (card.isSpecificVersion) {
-                myWishlistIds.add(card.id);
-            } else {
-                myWishlistNames.add(card.name);
-            }
-        });
-
-        const myCollectionNames = new Set<string>();
-        myCollectionMap.forEach(card => myCollectionNames.add(card.name));
-
-        const newProposals: TradeProposal[] = [];
-
-        let i = 0;
-        for (const friend of friends) {
-            i++;
-            setStatus(`Analyse de ${friend.username} (${i}/${friends.length})...`);
-            
-            const friendCollectionMap = await fetchAllCards(friend.uid, 'collection');
-            const friendWishlistMap = await fetchAllCards(friend.uid, 'wishlist');
-
-            const toReceive: CardType[] = [];
-            const toGive: CardType[] = [];
-
-            friendCollectionMap.forEach((card) => {
-                if (myWishlistIds.has(card.id)) {
-                    toReceive.push(card);
-                } 
-                else if (myWishlistNames.has(card.name)) {
-                    toReceive.push(card);
-                }
-            });
-
-            const friendWishlistNames = new Set<string>();
-            const friendWishlistIds = new Set<string>();
-
-            friendWishlistMap.forEach(c => {
-                if (c.isSpecificVersion) friendWishlistIds.add(c.id);
-                else friendWishlistNames.add(c.name);
-            });
-
-            myCollectionMap.forEach((card) => {
-                if (friendWishlistIds.has(card.id)) {
-                    toGive.push(card);
-                }
-                else if (friendWishlistNames.has(card.name)) {
-                    toGive.push(card);
-                }
-            });
-
-            if (toReceive.length > 0 || toGive.length > 0) {
-                await refreshPrices(toReceive, friend.uid, 'collection');
-                await refreshPrices(toGive, user.uid, 'collection');
-
-                const valueReceive = toReceive.reduce((sum, c) => sum + (c.customPrice ?? c.price ?? 0), 0);
-                const valueGive = toGive.reduce((sum, c) => sum + (c.customPrice ?? c.price ?? 0), 0);
-
-                newProposals.push({
-                    friend,
-                    toReceive,
-                    toGive,
-                    balance: valueGive - valueReceive
-                });
-            }
-        }
-
-        setProposals(newProposals);
-
-    } catch (error) {
-        console.error("Erreur scan", error);
-    } finally {
-        setLoading(false);
-        setStatus("");
-    }
-  };
-
-  return { proposals, loading, status, runScan };
-}
-</file>
-
 <file path="hooks/useTradeTransaction.ts">
 // hooks/useTradeTransaction.ts
 import { useState } from 'react';
@@ -2617,334 +2416,204 @@ export async function GET(request: Request) {
 }
 </file>
 
-<file path="components/MagicCard.tsx">
-// components/MagicCard.tsx
-'use client';
-
-import { useState, useEffect } from 'react'; // <--- useEffect ajouté
-
-type MagicCardProps = {
-  id?: string;
-  name: string;
-  imageUrl: string;
-  imageBackUrl?: string | null;
-  quantity?: number;
-  price?: number;
-  customPrice?: number; 
-  setName?: string;
-  
-  isFoil?: boolean;
-  isSpecificVersion?: boolean;
-  
-  onDelete?: () => void;
-  onIncrement?: () => void;
-  onDecrement?: () => void;
-  onMove?: () => void;
-  
-  onEditPrice?: (newPrice: number) => void;
-  onToggleAttribute?: (field: 'isFoil' | 'isSpecificVersion', currentValue: boolean) => void;
-  
-  isWishlist?: boolean;
-  readOnly?: boolean;
-  isTradeView?: boolean;
-  allowPriceEdit?: boolean;
-};
-
-const CARD_BACK_URL = "https://cards.scryfall.io/large/front/a/6/a6984342-f723-4e80-8e69-902d287a915f.jpg";
-
-export default function MagicCard(props: MagicCardProps) {
-  const { 
-      id, name, imageUrl, imageBackUrl, quantity = 1, 
-      price, customPrice, setName, 
-      isFoil, isSpecificVersion, 
-      isTradeView, allowPriceEdit, 
-      onEditPrice, onToggleAttribute, 
-      readOnly, isWishlist,
-      onDelete, onIncrement, onDecrement, onMove
-  } = props;
-  
-  const [isFlipped, setIsFlipped] = useState(false);
-  const [isEditingPrice, setIsEditingPrice] = useState(false);
-  
-  // Initialisation
-  const [tempPrice, setTempPrice] = useState(customPrice?.toString() || price?.toString() || "0");
-
-  // --- CORRECTION : Synchronisation ---
-  // Si le parent met à jour customPrice, on met à jour l'input local
- useEffect(() => {
-    if (!isEditingPrice) {
-        const newVal = customPrice?.toString() || price?.toString() || "0";
-        // eslint-disable-next-line react-hooks/set-state-in-effect
-        setTempPrice(newVal);
-    }
-  }, [customPrice, price, isEditingPrice]);
-
-  const effectivePrice = customPrice !== undefined ? customPrice : (price || 0);
-
-  const handleSavePrice = () => {
-      if (onEditPrice) {
-          onEditPrice(parseFloat(tempPrice));
-          setIsEditingPrice(false);
-      }
-  };
-
-  const currentImage = isFlipped && imageBackUrl ? imageBackUrl : imageUrl;
-
-  // --- VUE LISTE COMPACTE (TRADE) ---
-  if (isTradeView) {
-      return (
-        <div className="flex items-center gap-3 bg-white dark:bg-gray-800 p-2 rounded-lg border border-gray-100 dark:border-gray-700">
-            <div className="w-10 h-14 bg-gray-200 rounded overflow-hidden flex-shrink-0 relative group cursor-pointer" onClick={() => setIsFlipped(!isFlipped)}>
-                 <img src={currentImage} className="w-full h-full object-cover" alt={name} />
-                 {isFoil && <div className="absolute top-0 right-0 bg-purple-600/80 text-white text-[8px] px-1 font-bold">✨</div>}
-            </div>
-            
-            <div className="flex-grow min-w-0">
-                <div className="flex items-center gap-2">
-                    <p className="font-bold text-sm truncate" title={name}>{name}</p>
-                    {isFoil && <span className="text-xs" title="Foil">✨</span>}
-                </div>
-                <div className="flex items-center gap-2 text-xs text-gray-500">
-                    <p className="truncate">{setName}</p>
-                    {isSpecificVersion && <span className="bg-gray-200 dark:bg-gray-700 px-1 rounded text-[9px] border border-gray-400" title="Édition exacte requise">🔒 EXACT</span>}
-                </div>
-            </div>
-
-            <div className="text-right flex flex-col items-end">
-                {isEditingPrice ? (
-                    <div className="flex items-center gap-1">
-                        <input type="number" value={tempPrice} onChange={(e) => setTempPrice(e.target.value)} className="w-16 p-1 text-xs border rounded text-black" autoFocus />
-                        <button onClick={handleSavePrice} className="text-green-600 text-xs font-bold">OK</button>
-                    </div>
-                ) : (
-                    <div 
-                        className={`font-bold text-sm ${customPrice ? 'text-orange-600' : 'text-gray-700 dark:text-gray-300'} ${allowPriceEdit ? 'cursor-pointer hover:underline' : ''}`}
-                        onClick={() => { if (allowPriceEdit) { setTempPrice(effectivePrice.toString()); setIsEditingPrice(true); }}}
-                        title={customPrice ? "Prix personnalisé" : "Prix Scryfall"}
-                    >
-                        {effectivePrice.toFixed(2)} €
-                        {customPrice && <span className="text-[8px] align-top ml-0.5">*</span>}
-                    </div>
-                )}
-            </div>
-        </div>
-      );
-  }
-
-  // --- VUE NORMALE (GRILLE) ---
-  return (
-    <div className={`relative group flex flex-col bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden p-3 gap-3 border transition-colors h-full ${isFoil ? 'border-purple-300 dark:border-purple-800 shadow-purple-100 dark:shadow-none' : 'border-gray-100 dark:border-gray-700 hover:border-blue-300 dark:hover:border-blue-500'}`}>
-      
-      {/* --- BADGES ET TOGGLES --- */}
-      <div className="absolute top-14 left-4 z-10 flex flex-col gap-1">
-        {isWishlist && !readOnly && onToggleAttribute && (
-            <button 
-                onClick={() => onToggleAttribute('isFoil', !!isFoil)}
-                className={`w-6 h-6 rounded-full flex items-center justify-center text-xs shadow-md border ${isFoil ? 'bg-purple-600 text-white border-purple-400' : 'bg-white/80 text-gray-400 border-gray-300 hover:text-purple-600'}`}
-                title="Basculer Foil"
-            >
-                ✨
-            </button>
-        )}
-        {isWishlist && !readOnly && onToggleAttribute && (
-            <button 
-                onClick={() => onToggleAttribute('isSpecificVersion', !!isSpecificVersion)}
-                className={`w-6 h-6 rounded-full flex items-center justify-center text-xs shadow-md border ${isSpecificVersion ? 'bg-blue-600 text-white border-blue-400' : 'bg-white/80 text-gray-400 border-gray-300 hover:text-blue-600'}`}
-                title={isSpecificVersion ? "Version exacte requise" : "N'importe quelle version"}
-            >
-                {isSpecificVersion ? '🔒' : '🌍'}
-            </button>
-        )}
-      </div>
-
-      {/* --- BOUTONS D'ACTION --- */}
-      {!readOnly && (
-        <div className="absolute top-2 left-2 right-2 flex justify-between z-20 pointer-events-none">
-            {isWishlist && onMove && (
-            <button onClick={onMove} className="pointer-events-auto p-1.5 bg-green-100 text-green-700 hover:bg-green-600 hover:text-white rounded-full transition opacity-100 md:opacity-0 md:group-hover:opacity-100 shadow-sm" title="Déplacer vers Collection">📦</button>
-            )}
-            
-            {!isWishlist && <div></div>} 
-
-            {onDelete && (
-            <button onClick={onDelete} className="pointer-events-auto p-1.5 bg-red-50 text-gray-400 hover:text-white hover:bg-red-600 rounded-full transition opacity-100 md:opacity-0 md:group-hover:opacity-100" title="Supprimer">🗑️</button>
-            )}
-        </div>
-      )}
-
-      {/* --- IMAGE --- */}
-      <div className="relative w-full aspect-[2.5/3.5] bg-gray-200 rounded-lg overflow-hidden">
-        <img
-          src={currentImage || CARD_BACK_URL}
-          alt={name}
-          className="w-full h-full object-cover transition-transform duration-300"
-          onError={(e) => { e.currentTarget.src = CARD_BACK_URL; }}
-        />
-        {isFoil && <div className="absolute inset-0 bg-gradient-to-tr from-purple-500/20 to-transparent pointer-events-none mix-blend-overlay"></div>}
-
-        {imageBackUrl && (
-          <button onClick={() => setIsFlipped(!isFlipped)} className="absolute top-1/2 right-2 -translate-y-1/2 bg-black/50 hover:bg-black/80 text-white p-2 rounded-full backdrop-blur-sm transition-all shadow-lg border border-white/20 z-10 pointer-events-auto">
-            🔄
-          </button>
-        )}
-      </div>
-      
-      {/* --- INFO CARTE --- */}
-      <div className="flex-1 flex flex-col min-w-0">
-        <div className="flex justify-between items-start">
-            <h3 className="font-bold text-sm md:text-base truncate mb-1 flex-grow" title={name}>{name}</h3>
-        </div>
-        
-        <div className="flex items-center gap-2 mb-2">
-            <p className="text-xs text-blue-600 dark:text-blue-400 truncate font-medium max-w-[70%]">{setName}</p>
-            {readOnly && isFoil && <span className="text-[10px] bg-purple-100 text-purple-700 px-1 rounded border border-purple-200">Foil</span>}
-            {readOnly && isSpecificVersion && <span className="text-[10px] bg-gray-100 text-gray-700 px-1 rounded border border-gray-200">Exact</span>}
-        </div>
-        
-        <div className="mt-auto flex justify-between items-end border-t border-gray-100 dark:border-gray-700 pt-2">
-          
-          <div className="flex items-center gap-2">
-            {!readOnly && <button onClick={onDecrement} className="bg-gray-200 dark:bg-gray-700 w-7 h-7 rounded hover:bg-gray-300 font-bold flex items-center justify-center">-</button>}
-            <span className={`font-mono text-lg ${readOnly ? 'font-bold text-gray-800 dark:text-white' : 'w-5 text-center'}`}>{readOnly && "x"}{quantity}</span>
-            {!readOnly && <button onClick={onIncrement} className="bg-blue-100 dark:bg-blue-900 text-blue-600 font-bold w-7 h-7 rounded hover:bg-blue-200 flex items-center justify-center">+</button>}
-          </div>
-          
-          <div className="text-right cursor-help" title="Prix unitaire Scryfall ou Perso">
-             <p className="text-[10px] text-gray-400">Unit: {effectivePrice.toFixed(2)}€</p>
-             <p className={`font-bold ${customPrice ? 'text-orange-600' : 'text-gray-700 dark:text-gray-200'}`}>
-                 {(effectivePrice * quantity).toFixed(2)} €
-             </p>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-</file>
-
-<file path="hooks/useCardCollection.ts">
-// hooks/useCardCollection.ts
-import { useState, useEffect, useMemo } from 'react';
-import { db } from '@/lib/firebase';
-import { collection, onSnapshot, doc, updateDoc, deleteDoc, increment } from 'firebase/firestore';
+<file path="hooks/useTradeMatcher.ts">
+// hooks/useTradeMatcher.ts
+import { useState } from 'react';
 import { useAuth } from '@/lib/AuthContext';
-import toast from 'react-hot-toast';
+import { db } from '@/lib/firebase';
+import { collection, getDocs, doc, writeBatch } from 'firebase/firestore'; 
+import { useWishlists, WishlistMeta } from './useWishlists'; 
+import { useFriends, FriendProfile } from './useFriends';
+import { CardType } from './useCardCollection';
 
-export type CardType = {
-  id: string;
-  name: string;
-  imageUrl: string;
-  imageBackUrl?: string;
-  quantity: number;
-  price?: number; 
-  customPrice?: number;
-  setName?: string;
-  setCode?: string;
-  wishlistId?: string;
-  
-  // --- NOUVEAUX CHAMPS ---
-  isFoil?: boolean;             // L'utilisateur veut-il (ou a-t-il) une version Foil ?
-  isSpecificVersion?: boolean;  // Si true : Je veux CETTE édition précise. Si false : N'importe laquelle.
+export type TradeProposal = {
+  friend: FriendProfile;
+  toReceive: CardType[]; 
+  toGive: CardType[];    
+  balance: number;       
 };
 
-export function useCardCollection(
-    target: 'collection' | 'wishlist', 
-    listId: string = 'default',
-    targetUid?: string
-) {
-  const { user, loading: authLoading } = useAuth();
-  const [cards, setCards] = useState<CardType[]>([]);
-  const [loading, setLoading] = useState(true);
+export function useTradeMatcher() {
+  const { user } = useAuth();
+  const { lists } = useWishlists();
+  const { friends } = useFriends();
+  
+  const [proposals, setProposals] = useState<TradeProposal[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [status, setStatus] = useState("");
 
-  const effectiveUid = targetUid || user?.uid;
-  const isOwner = user?.uid === effectiveUid; 
+  const fetchAllCards = async (uid: string, mode: 'collection' | 'wishlist', userLists: WishlistMeta[] = []) => {
+    const cardsMap = new Map<string, CardType>();
 
-  useEffect(() => {
-    if (!effectiveUid || authLoading) {
-        if (!authLoading && !effectiveUid) setLoading(false);
-        return;
-    }
-    setLoading(true);
-
-    let collectionPath = '';
-    if (target === 'collection') {
-        collectionPath = `users/${effectiveUid}/collection`;
+    if (mode === 'collection') {
+        const snap = await getDocs(collection(db, 'users', uid, 'collection'));
+        snap.forEach(d => cardsMap.set(d.id, { id: d.id, ...d.data() } as CardType));
     } else {
-        if (listId === 'default') collectionPath = `users/${effectiveUid}/wishlist`;
-        else collectionPath = `users/${effectiveUid}/wishlists_data/${listId}/cards`;
+        const defSnap = await getDocs(collection(db, 'users', uid, 'wishlist'));
+        defSnap.forEach(d => cardsMap.set(d.id, { id: d.id, ...d.data() } as CardType));
+        
+        if (userLists.length > 0) {
+            for (const list of userLists) {
+                 if (list.id === 'default') continue;
+                 const snap = await getDocs(collection(db, 'users', uid, 'wishlists_data', list.id, 'cards'));
+                 snap.forEach(d => cardsMap.set(d.id, { id: d.id, ...d.data() } as CardType));
+            }
+        } else {
+            const metaSnap = await getDocs(collection(db, 'users', uid, 'wishlists_meta'));
+            for (const meta of metaSnap.docs) {
+                const snap = await getDocs(collection(db, 'users', uid, 'wishlists_data', meta.id, 'cards'));
+                snap.forEach(d => cardsMap.set(d.id, { id: d.id, ...d.data() } as CardType));
+            }
+        }
     }
-
-    const colRef = collection(db, collectionPath);
-    const unsubscribe = onSnapshot(colRef, (snapshot) => {
-      const items = snapshot.docs.map((doc) => ({
-        id: doc.id,
-        wishlistId: listId,
-        ...doc.data(),
-      })) as CardType[];
-      setCards(items);
-      setLoading(false);
-    });
-    return () => unsubscribe();
-  }, [effectiveUid, target, listId, authLoading]);
-
-  // --- ACTIONS ---
-
-  const getDocRef = (cardId: string) => {
-      if (!isOwner || !effectiveUid) return null;
-      let path = '';
-      if (target === 'collection') path = `users/${effectiveUid}/collection`;
-      else if (listId === 'default') path = `users/${effectiveUid}/wishlist`;
-      else path = `users/${effectiveUid}/wishlists_data/${listId}/cards`;
-      return doc(db, path, cardId);
+    return cardsMap;
   };
 
-  const setCustomPrice = async (cardId: string, price: number) => {
-      if (!isOwner) return;
-      const ref = getDocRef(cardId);
-      if (ref) {
-          await updateDoc(ref, { customPrice: price });
-          toast.success("Prix mis à jour");
-      }
+  const refreshPrices = async (cardsToUpdate: CardType[], uid: string, collectionName: string) => {
+     if (cardsToUpdate.length === 0) return;
+
+     const chunks = [];
+     for (let i = 0; i < cardsToUpdate.length; i += 75) {
+         chunks.push(cardsToUpdate.slice(i, i + 75));
+     }
+
+     const batch = writeBatch(db); 
+     let hasUpdates = false;
+
+     for (const chunk of chunks) {
+         try {
+             const identifiers = chunk.map(c => ({ id: c.id }));
+             
+             const res = await fetch('https://api.scryfall.com/cards/collection', {
+                 method: 'POST',
+                 headers: { 'Content-Type': 'application/json' },
+                 body: JSON.stringify({ identifiers })
+             });
+
+             if (!res.ok) continue;
+
+             const data = await res.json();
+             
+             // eslint-disable-next-line @typescript-eslint/no-explicit-any
+             const foundCards: any[] = data.data || [];
+
+             foundCards.forEach(scryCard => {
+                 const newPrice = parseFloat(scryCard.prices?.eur || "0");
+                 const localCard = chunk.find(c => c.id === scryCard.id);
+
+                 if (localCard && localCard.price !== newPrice) {
+                     localCard.price = newPrice; 
+                     
+                     if (collectionName === 'collection') {
+                         const ref = doc(db, 'users', uid, 'collection', localCard.id);
+                         batch.update(ref, { price: newPrice });
+                         hasUpdates = true;
+                     }
+                 }
+             });
+         } catch (e) { console.error("Err price fetch batch", e); }
+     }
+
+     if (hasUpdates) {
+         await batch.commit();
+     }
   };
 
-  // NOUVEAU : Fonction pour changer Foil / Version stricte
-  const toggleAttribute = async (cardId: string, field: 'isFoil' | 'isSpecificVersion', currentValue: boolean) => {
-      if (!isOwner) return;
-      const ref = getDocRef(cardId);
-      if (ref) {
-          await updateDoc(ref, { [field]: !currentValue });
-          // Pas de toast ici pour ne pas spammer l'UI, le switch visuel suffit
-      }
-  };
+  const runScan = async () => {
+    if (!user || friends.length === 0) return;
+    setLoading(true);
+    setStatus("Chargement de vos données...");
 
-  const updateQuantity = async (cardId: string, amount: number, currentQuantity: number) => {
-    if (!isOwner) return;
-    const ref = getDocRef(cardId);
-    if (!ref) return;
-    if (currentQuantity + amount <= 0) return 'shouldDelete';
     try {
-      await updateDoc(ref, { quantity: increment(amount) });
-      return 'updated';
-    } catch (err) { return 'error'; }
+        const myCollectionMap = await fetchAllCards(user.uid, 'collection');
+        const myWishlistMap = await fetchAllCards(user.uid, 'wishlist', lists);
+
+        const myWishlistNames = new Set<string>();
+        const myWishlistIds = new Set<string>();
+
+        myWishlistMap.forEach(card => {
+            if (card.isSpecificVersion) {
+                myWishlistIds.add(card.id);
+            } else {
+                myWishlistNames.add(card.name);
+            }
+        });
+
+        const newProposals: TradeProposal[] = [];
+
+        let i = 0;
+        for (const friend of friends) {
+            i++;
+            setStatus(`Analyse de ${friend.username} (${i}/${friends.length})...`);
+            
+            const friendCollectionMap = await fetchAllCards(friend.uid, 'collection');
+            const friendWishlistMap = await fetchAllCards(friend.uid, 'wishlist');
+
+            const toReceive: CardType[] = [];
+            const toGive: CardType[] = [];
+
+            // 1. CE QUE JE PEUX RECEVOIR (CHECK AMI)
+            // On vérifie que l'ami a marqué la carte "isForTrade"
+            friendCollectionMap.forEach((card) => {
+                if (card.isForTrade) { 
+                    if (myWishlistIds.has(card.id)) {
+                        toReceive.push(card);
+                    } 
+                    else if (myWishlistNames.has(card.name)) {
+                        toReceive.push(card);
+                    }
+                }
+            });
+
+            const friendWishlistNames = new Set<string>();
+            const friendWishlistIds = new Set<string>();
+
+            friendWishlistMap.forEach(c => {
+                if (c.isSpecificVersion) friendWishlistIds.add(c.id);
+                else friendWishlistNames.add(c.name);
+            });
+
+            // 2. CE QUE JE PEUX DONNER (CHECK MOI)
+            // On vérifie que J'AI marqué la carte "isForTrade"
+            myCollectionMap.forEach((card) => {
+                if (card.isForTrade) {
+                    if (friendWishlistIds.has(card.id)) {
+                        toGive.push(card);
+                    }
+                    else if (friendWishlistNames.has(card.name)) {
+                        toGive.push(card);
+                    }
+                }
+            });
+
+            if (toReceive.length > 0 || toGive.length > 0) {
+                // On met à jour les prix pour avoir une balance précise
+                await refreshPrices(toReceive, friend.uid, 'collection');
+                await refreshPrices(toGive, user.uid, 'collection');
+
+                const valueReceive = toReceive.reduce((sum, c) => sum + (c.customPrice ?? c.price ?? 0), 0);
+                const valueGive = toGive.reduce((sum, c) => sum + (c.customPrice ?? c.price ?? 0), 0);
+
+                newProposals.push({
+                    friend,
+                    toReceive,
+                    toGive,
+                    balance: valueGive - valueReceive
+                });
+            }
+        }
+
+        setProposals(newProposals);
+
+    } catch (error) {
+        console.error("Erreur scan", error);
+    } finally {
+        setLoading(false);
+        setStatus("");
+    }
   };
 
-  const removeCard = async (cardId: string) => {
-    if (!isOwner) return;
-    const ref = getDocRef(cardId);
-    if(ref) { await deleteDoc(ref); toast.success('Carte retirée', { icon: '🗑️' }); }
-  };
-
-  const totalPrice = useMemo(() => {
-    return cards.reduce((acc, card) => {
-        const effectivePrice = card.customPrice !== undefined ? card.customPrice : (card.price || 0);
-        return acc + effectivePrice * card.quantity;
-    }, 0);
-  }, [cards]);
-
-  return { 
-      cards, loading, isOwner, totalPrice,
-      updateQuantity, removeCard, setCustomPrice, toggleAttribute // Export de la nouvelle fonction
-  };
+  return { proposals, loading, status, runScan };
 }
 </file>
 
@@ -3063,231 +2732,6 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     </AuthContext.Provider>
   );
 };
-</file>
-
-<file path="app/contacts/page.tsx">
-// app/contacts/page.tsx
-'use client';
-
-import { useState, useEffect } from 'react';
-import Link from 'next/link';
-import { useAuth } from '@/lib/AuthContext';
-import { useFriends, FriendProfile } from '@/hooks/useFriends';
-import toast from 'react-hot-toast';
-
-// Liste des Planeswalkers pour l'exemple aléatoire
-const PLANESWALKERS = [
-  "Jace", "Liliana", "Chandra", "Ajani", "Garruk", 
-  "Teferi", "Nissa", "Gideon", "Nicol_Bolas", "Ugin", 
-  "Karn", "Sorin", "Elspeth", "Tezzeret", "Sarkhan",
-  "Vraska", "Domri", "Ral_Zarek", "Kaya", "Narset"
-];
-
-export default function ContactsPage() {
-  const { user } = useAuth();
-  
-  const { 
-    friends, requestsReceived, loading,
-    searchUsers, 
-    sendFriendRequest, acceptRequest, declineRequest, removeFriend
-  } = useFriends();
-
-  const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState<FriendProfile[]>([]);
-  const [isSearching, setIsSearching] = useState(false);
-  
-  // État pour le placeholder aléatoire
-  const [randomPlaceholder, setRandomPlaceholder] = useState("ex: Jace...");
-
-  // Au chargement, on choisit un nom au hasard
-  useEffect(() => {
-    const randomName = PLANESWALKERS[Math.floor(Math.random() * PLANESWALKERS.length)];
-    setRandomPlaceholder(`ex: ${randomName} (pour trouver ${randomName.toLowerCase()}_fan...)`);
-  }, []);
-
-  if (!user) return <div className="p-10 text-center">Veuillez vous connecter pour gérer vos contacts.</div>;
-
-  const handleSearch = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!searchQuery.trim()) return;
-    
-    setIsSearching(true);
-    setSearchResults([]);
-    
-    try {
-      const results = await searchUsers(searchQuery);
-      setSearchResults(results);
-      
-      if (results.length === 0) {
-        toast("Aucun utilisateur trouvé", { icon: '🤷‍♂️' });
-      }
-    } catch (err: any) {
-        console.error(err);
-        if (err.message && err.message.includes("indexes")) {
-            toast.error("Configuration serveur requise (voir console F12)");
-        } else {
-            toast.error("Erreur lors de la recherche");
-        }
-    } finally {
-      setIsSearching(false);
-    }
-  };
-
-  return (
-    <main className="container mx-auto p-4 max-w-4xl min-h-[80vh]">
-      <h1 className="text-3xl font-bold mb-8 text-blue-600 dark:text-blue-400 flex items-center gap-2">
-        👥 Mes Contacts
-      </h1>
-
-      <div className="grid md:grid-cols-2 gap-8">
-        
-        {/* --- COLONNE GAUCHE : RECHERCHE & DEMANDES --- */}
-        <div className="space-y-8">
-            
-            {/* 1. MODULE DE RECHERCHE */}
-            <div className="bg-white dark:bg-gray-800 p-6 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700">
-                <h2 className="font-bold text-lg mb-4 text-gray-800 dark:text-white">Chercher un ami</h2>
-                
-                <form onSubmit={handleSearch} className="flex gap-2 mb-4">
-                    <div className="relative flex-grow">
-                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">@</span>
-                        <input 
-                            type="text" 
-                            placeholder={randomPlaceholder} 
-                            className="w-full pl-7 p-2 border rounded-lg bg-gray-50 dark:bg-gray-900 dark:border-gray-600 outline-none focus:ring-2 focus:ring-blue-500 lowercase text-gray-900 dark:text-white"
-                            value={searchQuery}
-                            onChange={e => setSearchQuery(e.target.value.toLowerCase())}
-                        />
-                    </div>
-                    <button 
-                        type="submit" 
-                        disabled={isSearching}
-                        className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-bold transition disabled:opacity-50"
-                    >
-                        {isSearching ? '...' : '🔍'}
-                    </button>
-                </form>
-
-                {/* LISTE DES RÉSULTATS DE RECHERCHE */}
-                <div className="space-y-2 max-h-60 overflow-y-auto custom-scrollbar">
-                    {searchResults.map(result => (
-                        <div key={result.uid} className="flex items-center justify-between bg-blue-50 dark:bg-blue-900/20 p-3 rounded-lg border border-blue-100 dark:border-blue-800 animate-in fade-in">
-                            <div className="flex items-center gap-3">
-                                {/* Avatar */}
-                                <div className="w-8 h-8 rounded-full bg-blue-200 flex items-center justify-center text-blue-700 font-bold text-xs overflow-hidden">
-                                    {result.photoURL ? <img src={result.photoURL} alt="" className="w-full h-full object-cover"/> : result.username[0].toUpperCase()}
-                                </div>
-                                {/* Infos */}
-                                <div>
-                                    <p className="font-bold text-sm text-gray-900 dark:text-white">{result.displayName}</p>
-                                    <p className="text-xs text-blue-600 dark:text-blue-400">@{result.username}</p>
-                                </div>
-                            </div>
-                            {/* Bouton Ajouter */}
-                            <button 
-                                onClick={() => sendFriendRequest(result)}
-                                className="text-xs bg-blue-600 text-white px-3 py-1.5 rounded-full hover:bg-blue-700 transition shadow-sm"
-                            >
-                                Ajouter +
-                            </button>
-                        </div>
-                    ))}
-                </div>
-            </div>
-
-            {/* 2. DEMANDES D'AMIS REÇUES */}
-            {requestsReceived.length > 0 && (
-                <div className="bg-white dark:bg-gray-800 p-6 rounded-xl shadow-sm border border-orange-200 dark:border-orange-900/50 animate-in slide-in-from-left-4">
-                    <h2 className="font-bold text-lg mb-4 text-orange-600 dark:text-orange-400 flex items-center gap-2">
-                        🔔 Demandes reçues <span className="bg-orange-100 text-orange-800 text-xs px-2 py-0.5 rounded-full">{requestsReceived.length}</span>
-                    </h2>
-                    <div className="space-y-3">
-                        {requestsReceived.map(req => (
-                            <div key={req.uid} className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
-                                <div className="flex items-center gap-3">
-                                    <div className="w-10 h-10 rounded-full bg-gray-300 overflow-hidden">
-                                        {req.photoURL ? <img src={req.photoURL} alt="" className="w-full h-full object-cover"/> : <span className="flex items-center justify-center h-full font-bold text-gray-500">{req.username[0].toUpperCase()}</span>}
-                                    </div>
-                                    <div>
-                                        <p className="font-bold text-sm text-gray-900 dark:text-white">{req.displayName}</p>
-                                        <p className="text-xs text-gray-500">@{req.username}</p>
-                                    </div>
-                                </div>
-                                <div className="flex gap-2">
-                                    <button onClick={() => acceptRequest(req)} className="p-2 bg-green-100 text-green-700 hover:bg-green-200 rounded-full transition" title="Accepter">✓</button>
-                                    <button onClick={() => declineRequest(req.uid)} className="p-2 bg-red-100 text-red-700 hover:bg-red-200 rounded-full transition" title="Refuser">✕</button>
-                                </div>
-                            </div>
-                        ))}
-                    </div>
-                </div>
-            )}
-        </div>
-
-        {/* --- COLONNE DROITE : LISTE MES AMIS --- */}
-        <div className="bg-white dark:bg-gray-800 p-6 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 h-fit">
-            <h2 className="font-bold text-lg mb-4 flex items-center gap-2 text-gray-800 dark:text-white">
-                Mes Amis <span className="text-gray-400 font-normal">({friends.length})</span>
-            </h2>
-            
-            {loading ? (
-                <p className="text-gray-500 text-sm">Chargement...</p>
-            ) : friends.length === 0 ? (
-                <div className="text-center py-10 text-gray-400 italic">
-                    <p>Aucun ami pour l&apos;instant.</p>
-                </div>
-            ) : (
-                <div className="space-y-2">
-                    {friends.map(friend => (
-                        <div key={friend.uid} className="group flex items-center justify-between p-3 hover:bg-gray-50 dark:hover:bg-gray-700/50 rounded-lg transition border border-transparent hover:border-gray-100 dark:hover:border-gray-600">
-                            
-                            {/* Identité Ami */}
-                            <div className="flex items-center gap-3">
-                                <div className="w-10 h-10 rounded-full bg-gradient-to-br from-purple-500 to-blue-500 flex items-center justify-center text-white font-bold shadow-sm overflow-hidden">
-                                    {friend.photoURL ? <img src={friend.photoURL} alt="" className="w-full h-full object-cover" /> : friend.username[0].toUpperCase()}
-                                </div>
-                                <div>
-                                    <p className="font-bold text-gray-800 dark:text-gray-200">{friend.displayName}</p>
-                                    <p className="text-xs text-gray-500">@{friend.username}</p>
-                                </div>
-                            </div>
-                            
-                            {/* Actions (Visibles au survol sur desktop) */}
-                            <div className="flex items-center gap-2 opacity-100 md:opacity-0 group-hover:opacity-100 transition-opacity">
-                                {/* BOUTON VOIR PROFIL */}
-                                <Link 
-                                    href={`/user/${friend.uid}`}
-                                    className="text-xs bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300 px-3 py-1.5 rounded hover:bg-blue-200 dark:hover:bg-blue-800 transition font-medium"
-                                >
-                                    Voir
-                                </Link>
-
-                                {/* --- NOUVEAU : BOUTON ÉCHANGER --- */}
-                                <Link 
-                                    href={`/trades/new/${friend.uid}`}
-                                    className="text-xs bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300 px-3 py-1.5 rounded hover:bg-purple-200 dark:hover:bg-purple-800 transition font-medium flex items-center gap-1"
-                                >
-                                    🤝 Échanger
-                                </Link>
-                                
-                                <button 
-                                    onClick={() => removeFriend(friend.uid)} 
-                                    className="text-red-400 hover:text-red-600 text-xs px-2 py-1"
-                                    title="Retirer cet ami"
-                                >
-                                    ✕
-                                </button>
-                            </div>
-                        </div>
-                    ))}
-                </div>
-            )}
-        </div>
-
-      </div>
-    </main>
-  );
-}
 </file>
 
 <file path="app/trades/page.tsx">
@@ -3705,6 +3149,364 @@ export default function Header() {
 }
 </file>
 
+<file path="components/MagicCard.tsx">
+// components/MagicCard.tsx
+'use client';
+
+import { useState, useEffect } from 'react';
+
+type MagicCardProps = {
+  id?: string;
+  name: string;
+  imageUrl: string;
+  imageBackUrl?: string | null;
+  quantity?: number;
+  price?: number;
+  customPrice?: number; 
+  setName?: string;
+  
+  isFoil?: boolean;
+  isSpecificVersion?: boolean;
+  isForTrade?: boolean; // <--- Nouveau
+  
+  onDelete?: () => void;
+  onIncrement?: () => void;
+  onDecrement?: () => void;
+  onMove?: () => void;
+  
+  onEditPrice?: (newPrice: number) => void;
+  // Signature mise à jour pour accepter isForTrade
+  onToggleAttribute?: (field: 'isFoil' | 'isSpecificVersion' | 'isForTrade', currentValue: boolean) => void;
+  
+  isWishlist?: boolean;
+  readOnly?: boolean;
+  isTradeView?: boolean;
+  allowPriceEdit?: boolean;
+};
+
+const CARD_BACK_URL = "https://cards.scryfall.io/large/front/a/6/a6984342-f723-4e80-8e69-902d287a915f.jpg";
+
+export default function MagicCard(props: MagicCardProps) {
+  const { 
+      id, name, imageUrl, imageBackUrl, quantity = 1, 
+      price, customPrice, setName, 
+      isFoil, isSpecificVersion, isForTrade,
+      isTradeView, allowPriceEdit, 
+      onEditPrice, onToggleAttribute, 
+      readOnly, isWishlist,
+      onDelete, onIncrement, onDecrement, onMove
+  } = props;
+  
+  const [isFlipped, setIsFlipped] = useState(false);
+  const [isEditingPrice, setIsEditingPrice] = useState(false);
+  
+  const [tempPrice, setTempPrice] = useState(customPrice?.toString() || price?.toString() || "0");
+
+  // Synchronisation du prix
+  useEffect(() => {
+    if (!isEditingPrice) {
+        const newVal = customPrice?.toString() || price?.toString() || "0";
+        setTempPrice(newVal);
+    }
+  }, [customPrice, price, isEditingPrice]);
+
+  const effectivePrice = customPrice !== undefined ? customPrice : (price || 0);
+
+  const handleSavePrice = () => {
+      if (onEditPrice) {
+          onEditPrice(parseFloat(tempPrice));
+          setIsEditingPrice(false);
+      }
+  };
+
+  const currentImage = isFlipped && imageBackUrl ? imageBackUrl : imageUrl;
+
+  // --- VUE LISTE COMPACTE (TRADE) ---
+  if (isTradeView) {
+      return (
+        <div className="flex items-center gap-3 bg-white dark:bg-gray-800 p-2 rounded-lg border border-gray-100 dark:border-gray-700">
+            <div className="w-10 h-14 bg-gray-200 rounded overflow-hidden flex-shrink-0 relative group cursor-pointer" onClick={() => setIsFlipped(!isFlipped)}>
+                 <img src={currentImage} className="w-full h-full object-cover" alt={name} />
+                 {isFoil && <div className="absolute top-0 right-0 bg-purple-600/80 text-white text-[8px] px-1 font-bold">✨</div>}
+            </div>
+            
+            <div className="flex-grow min-w-0">
+                <div className="flex items-center gap-2">
+                    <p className="font-bold text-sm truncate" title={name}>{name}</p>
+                    {isFoil && <span className="text-xs" title="Foil">✨</span>}
+                </div>
+                <div className="flex items-center gap-2 text-xs text-gray-500">
+                    <p className="truncate">{setName}</p>
+                    {isSpecificVersion && <span className="bg-gray-200 dark:bg-gray-700 px-1 rounded text-[9px] border border-gray-400" title="Édition exacte requise">🔒 EXACT</span>}
+                </div>
+            </div>
+
+            <div className="text-right flex flex-col items-end">
+                {isEditingPrice ? (
+                    <div className="flex items-center gap-1">
+                        <input type="number" value={tempPrice} onChange={(e) => setTempPrice(e.target.value)} className="w-16 p-1 text-xs border rounded text-black" autoFocus />
+                        <button onClick={handleSavePrice} className="text-green-600 text-xs font-bold">OK</button>
+                    </div>
+                ) : (
+                    <div 
+                        className={`font-bold text-sm ${customPrice ? 'text-orange-600' : 'text-gray-700 dark:text-gray-300'} ${allowPriceEdit ? 'cursor-pointer hover:underline' : ''}`}
+                        onClick={() => { if (allowPriceEdit) { setTempPrice(effectivePrice.toString()); setIsEditingPrice(true); }}}
+                        title={customPrice ? "Prix personnalisé" : "Prix Scryfall"}
+                    >
+                        {effectivePrice.toFixed(2)} €
+                        {customPrice && <span className="text-[8px] align-top ml-0.5">*</span>}
+                    </div>
+                )}
+            </div>
+        </div>
+      );
+  }
+
+  // --- VUE NORMALE (GRILLE) ---
+  return (
+    <div className={`relative group flex flex-col bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden p-3 gap-3 border transition-colors h-full ${isFoil ? 'border-purple-300 dark:border-purple-800 shadow-purple-100 dark:shadow-none' : 'border-gray-100 dark:border-gray-700 hover:border-blue-300 dark:hover:border-blue-500'}`}>
+      
+      {/* --- BADGES ET TOGGLES --- */}
+      <div className="absolute top-14 left-4 z-10 flex flex-col gap-1">
+        
+        {/* BOUTON FOIL */}
+        {isWishlist && !readOnly && onToggleAttribute && (
+            <button 
+                onClick={() => onToggleAttribute('isFoil', !!isFoil)}
+                className={`w-6 h-6 rounded-full flex items-center justify-center text-xs shadow-md border ${isFoil ? 'bg-purple-600 text-white border-purple-400' : 'bg-white/80 text-gray-400 border-gray-300 hover:text-purple-600'}`}
+                title="Basculer Foil"
+            >
+                ✨
+            </button>
+        )}
+
+        {/* BOUTON VERSION EXACTE */}
+        {isWishlist && !readOnly && onToggleAttribute && (
+            <button 
+                onClick={() => onToggleAttribute('isSpecificVersion', !!isSpecificVersion)}
+                className={`w-6 h-6 rounded-full flex items-center justify-center text-xs shadow-md border ${isSpecificVersion ? 'bg-blue-600 text-white border-blue-400' : 'bg-white/80 text-gray-400 border-gray-300 hover:text-blue-600'}`}
+                title={isSpecificVersion ? "Version exacte requise" : "N'importe quelle version"}
+            >
+                {isSpecificVersion ? '🔒' : '🌍'}
+            </button>
+        )}
+
+        {/* --- NOUVEAU : BOUTON TRADE (COLLECTION SEULEMENT) --- */}
+        {!isWishlist && !readOnly && onToggleAttribute && (
+            <button 
+                onClick={() => onToggleAttribute('isForTrade', !!isForTrade)}
+                className={`w-8 h-8 rounded-full flex items-center justify-center text-sm shadow-md border transition-all ${
+                    isForTrade 
+                    ? 'bg-green-500 text-white border-green-600 scale-110' 
+                    : 'bg-white/90 text-gray-300 border-gray-300 hover:text-green-500 grayscale'
+                }`}
+                title={isForTrade ? "Disponible à l'échange" : "Non disponible à l'échange"}
+            >
+                🤝
+            </button>
+        )}
+      </div>
+
+      {/* --- BOUTONS D'ACTION (Delete/Move) --- */}
+      {!readOnly && (
+        <div className="absolute top-2 left-2 right-2 flex justify-between z-20 pointer-events-none">
+            {isWishlist && onMove && (
+            <button onClick={onMove} className="pointer-events-auto p-1.5 bg-green-100 text-green-700 hover:bg-green-600 hover:text-white rounded-full transition opacity-100 md:opacity-0 md:group-hover:opacity-100 shadow-sm" title="Déplacer vers Collection">📦</button>
+            )}
+            
+            {!isWishlist && <div></div>} 
+
+            {onDelete && (
+            <button onClick={onDelete} className="pointer-events-auto p-1.5 bg-red-50 text-gray-400 hover:text-white hover:bg-red-600 rounded-full transition opacity-100 md:opacity-0 md:group-hover:opacity-100" title="Supprimer">🗑️</button>
+            )}
+        </div>
+      )}
+
+      {/* --- IMAGE --- */}
+      <div className="relative w-full aspect-[2.5/3.5] bg-gray-200 rounded-lg overflow-hidden">
+        <img
+          src={currentImage || CARD_BACK_URL}
+          alt={name}
+          className="w-full h-full object-cover transition-transform duration-300"
+          onError={(e) => { e.currentTarget.src = CARD_BACK_URL; }}
+        />
+        {isFoil && <div className="absolute inset-0 bg-gradient-to-tr from-purple-500/20 to-transparent pointer-events-none mix-blend-overlay"></div>}
+
+        {imageBackUrl && (
+          <button onClick={() => setIsFlipped(!isFlipped)} className="absolute top-1/2 right-2 -translate-y-1/2 bg-black/50 hover:bg-black/80 text-white p-2 rounded-full backdrop-blur-sm transition-all shadow-lg border border-white/20 z-10 pointer-events-auto">
+            🔄
+          </button>
+        )}
+      </div>
+      
+      {/* --- INFO CARTE --- */}
+      <div className="flex-1 flex flex-col min-w-0">
+        <div className="flex justify-between items-start">
+            <h3 className="font-bold text-sm md:text-base truncate mb-1 flex-grow" title={name}>{name}</h3>
+        </div>
+        
+        <div className="flex items-center gap-2 mb-2">
+            <p className="text-xs text-blue-600 dark:text-blue-400 truncate font-medium max-w-[70%]">{setName}</p>
+            {readOnly && isFoil && <span className="text-[10px] bg-purple-100 text-purple-700 px-1 rounded border border-purple-200">Foil</span>}
+            {readOnly && isSpecificVersion && <span className="text-[10px] bg-gray-100 text-gray-700 px-1 rounded border border-gray-200">Exact</span>}
+            {/* BADGE TRADE */}
+            {isForTrade && <span className="text-[10px] bg-green-100 text-green-700 px-1 rounded border border-green-200 font-bold flex items-center gap-1">🤝 Échange</span>}
+        </div>
+        
+        <div className="mt-auto flex justify-between items-end border-t border-gray-100 dark:border-gray-700 pt-2">
+          
+          <div className="flex items-center gap-2">
+            {!readOnly && <button onClick={onDecrement} className="bg-gray-200 dark:bg-gray-700 w-7 h-7 rounded hover:bg-gray-300 font-bold flex items-center justify-center">-</button>}
+            <span className={`font-mono text-lg ${readOnly ? 'font-bold text-gray-800 dark:text-white' : 'w-5 text-center'}`}>{readOnly && "x"}{quantity}</span>
+            {!readOnly && <button onClick={onIncrement} className="bg-blue-100 dark:bg-blue-900 text-blue-600 font-bold w-7 h-7 rounded hover:bg-blue-200 flex items-center justify-center">+</button>}
+          </div>
+          
+          <div className="text-right cursor-help" title="Prix unitaire Scryfall ou Perso">
+             <p className="text-[10px] text-gray-400">Unit: {effectivePrice.toFixed(2)}€</p>
+             <p className={`font-bold ${customPrice ? 'text-orange-600' : 'text-gray-700 dark:text-gray-200'}`}>
+                 {(effectivePrice * quantity).toFixed(2)} €
+             </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+</file>
+
+<file path="hooks/useCardCollection.ts">
+// hooks/useCardCollection.ts
+import { useState, useEffect, useMemo } from 'react';
+import { db } from '@/lib/firebase';
+import { collection, onSnapshot, doc, updateDoc, deleteDoc, increment } from 'firebase/firestore';
+import { useAuth } from '@/lib/AuthContext';
+import toast from 'react-hot-toast';
+
+export type CardType = {
+  id: string;
+  name: string;
+  imageUrl: string;
+  imageBackUrl?: string;
+  quantity: number;
+  price?: number; 
+  customPrice?: number;
+  setName?: string;
+  setCode?: string;
+  wishlistId?: string;
+  
+  // --- OPTIONS ---
+  isFoil?: boolean;             
+  isSpecificVersion?: boolean;
+  
+  // --- NOUVEAU : CLASSEUR D'ÉCHANGE ---
+  isForTrade?: boolean; 
+};
+
+export function useCardCollection(
+    target: 'collection' | 'wishlist', 
+    listId: string = 'default',
+    targetUid?: string
+) {
+  const { user, loading: authLoading } = useAuth();
+  const [cards, setCards] = useState<CardType[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const effectiveUid = targetUid || user?.uid;
+  const isOwner = user?.uid === effectiveUid; 
+
+  useEffect(() => {
+    if (!effectiveUid || authLoading) {
+        if (!authLoading && !effectiveUid) setLoading(false);
+        return;
+    }
+    setLoading(true);
+
+    let collectionPath = '';
+    if (target === 'collection') {
+        collectionPath = `users/${effectiveUid}/collection`;
+    } else {
+        if (listId === 'default') collectionPath = `users/${effectiveUid}/wishlist`;
+        else collectionPath = `users/${effectiveUid}/wishlists_data/${listId}/cards`;
+    }
+
+    const colRef = collection(db, collectionPath);
+    const unsubscribe = onSnapshot(colRef, (snapshot) => {
+      const items = snapshot.docs.map((doc) => ({
+        id: doc.id,
+        wishlistId: listId,
+        ...doc.data(),
+      })) as CardType[];
+      setCards(items);
+      setLoading(false);
+    });
+    return () => unsubscribe();
+  }, [effectiveUid, target, listId, authLoading]);
+
+  // --- ACTIONS ---
+
+  const getDocRef = (cardId: string) => {
+      if (!isOwner || !effectiveUid) return null;
+      let path = '';
+      if (target === 'collection') path = `users/${effectiveUid}/collection`;
+      else if (listId === 'default') path = `users/${effectiveUid}/wishlist`;
+      else path = `users/${effectiveUid}/wishlists_data/${listId}/cards`;
+      return doc(db, path, cardId);
+  };
+
+  const setCustomPrice = async (cardId: string, price: number) => {
+      if (!isOwner) return;
+      const ref = getDocRef(cardId);
+      if (ref) {
+          await updateDoc(ref, { customPrice: price });
+          toast.success("Prix mis à jour");
+      }
+  };
+
+  // NOUVEAU : On ajoute 'isForTrade' aux champs modifiables
+  const toggleAttribute = async (
+      cardId: string, 
+      field: 'isFoil' | 'isSpecificVersion' | 'isForTrade', 
+      currentValue: boolean
+  ) => {
+      if (!isOwner) return;
+      const ref = getDocRef(cardId);
+      if (ref) {
+          await updateDoc(ref, { [field]: !currentValue });
+          // Pas de toast pour fluidifier l'UI lors des clics répétés
+      }
+  };
+
+  const updateQuantity = async (cardId: string, amount: number, currentQuantity: number) => {
+    if (!isOwner) return;
+    const ref = getDocRef(cardId);
+    if (!ref) return;
+    if (currentQuantity + amount <= 0) return 'shouldDelete';
+    try {
+      await updateDoc(ref, { quantity: increment(amount) });
+      return 'updated';
+    } catch (err) { return 'error'; }
+  };
+
+  const removeCard = async (cardId: string) => {
+    if (!isOwner) return;
+    const ref = getDocRef(cardId);
+    if(ref) { await deleteDoc(ref); toast.success('Carte retirée', { icon: '🗑️' }); }
+  };
+
+  const totalPrice = useMemo(() => {
+    return cards.reduce((acc, card) => {
+        const effectivePrice = card.customPrice !== undefined ? card.customPrice : (card.price || 0);
+        return acc + effectivePrice * card.quantity;
+    }, 0);
+  }, [cards]);
+
+  return { 
+      cards, loading, isOwner, totalPrice,
+      updateQuantity, removeCard, setCustomPrice, toggleAttribute 
+  };
+}
+</file>
+
 <file path="app/collection/page.tsx">
 // app/collection/page.tsx
 'use client';
@@ -3800,6 +3602,233 @@ export default function CollectionPage() {
         title="Retirer ?" 
         message="Cette carte sera retirée de votre collection."
       />
+    </main>
+  );
+}
+</file>
+
+<file path="app/contacts/page.tsx">
+// app/contacts/page.tsx
+'use client';
+
+import { useState, useEffect } from 'react';
+import Link from 'next/link';
+import { useAuth } from '@/lib/AuthContext';
+import { useFriends, FriendProfile } from '@/hooks/useFriends';
+import toast from 'react-hot-toast';
+
+// Liste des Planeswalkers pour l'exemple aléatoire
+const PLANESWALKERS = [
+  "Jace", "Liliana", "Chandra", "Ajani", "Garruk", 
+  "Teferi", "Nissa", "Gideon", "Nicol_Bolas", "Ugin", 
+  "Karn", "Sorin", "Elspeth", "Tezzeret", "Sarkhan",
+  "Vraska", "Domri", "Ral_Zarek", "Kaya", "Narset"
+];
+
+export default function ContactsPage() {
+  const { user } = useAuth();
+  
+  const { 
+    friends, requestsReceived, loading,
+    searchUsers, 
+    sendFriendRequest, acceptRequest, declineRequest, removeFriend
+  } = useFriends();
+
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<FriendProfile[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+  
+  // État pour le placeholder aléatoire
+  const [randomPlaceholder, setRandomPlaceholder] = useState("ex: Jace...");
+
+  // Au chargement, on choisit un nom au hasard
+  useEffect(() => {
+    const randomName = PLANESWALKERS[Math.floor(Math.random() * PLANESWALKERS.length)];
+    setRandomPlaceholder(`ex: ${randomName} (pour trouver ${randomName.toLowerCase()}_fan...)`);
+  }, []);
+
+  if (!user) return <div className="p-10 text-center">Veuillez vous connecter pour gérer vos contacts.</div>;
+
+  const handleSearch = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!searchQuery.trim()) return;
+    
+    setIsSearching(true);
+    setSearchResults([]);
+    
+    try {
+      const results = await searchUsers(searchQuery);
+      setSearchResults(results);
+      
+      if (results.length === 0) {
+        toast("Aucun utilisateur trouvé", { icon: '🤷‍♂️' });
+      }
+    } catch (err: unknown) { // 1. On utilise 'unknown' au lieu de 'any'
+        console.error(err);
+        
+        // 2. On vérifie que c'est bien une Erreur standard avant de lire '.message'
+        if (err instanceof Error && err.message.includes("indexes")) {
+            toast.error("Configuration serveur requise (voir console F12)");
+        } else {
+            toast.error("Erreur lors de la recherche");
+        }
+    } finally {
+      setIsSearching(false);
+    }
+  };
+
+  return (
+    <main className="container mx-auto p-4 max-w-4xl min-h-[80vh]">
+      <h1 className="text-3xl font-bold mb-8 text-blue-600 dark:text-blue-400 flex items-center gap-2">
+        👥 Mes Contacts
+      </h1>
+
+      <div className="grid md:grid-cols-2 gap-8">
+        
+        {/* --- COLONNE GAUCHE : RECHERCHE & DEMANDES --- */}
+        <div className="space-y-8">
+            
+            {/* 1. MODULE DE RECHERCHE */}
+            <div className="bg-white dark:bg-gray-800 p-6 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700">
+                <h2 className="font-bold text-lg mb-4 text-gray-800 dark:text-white">Chercher un ami</h2>
+                
+                <form onSubmit={handleSearch} className="flex gap-2 mb-4">
+                    <div className="relative flex-grow">
+                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">@</span>
+                        <input 
+                            type="text" 
+                            placeholder={randomPlaceholder} 
+                            className="w-full pl-7 p-2 border rounded-lg bg-gray-50 dark:bg-gray-900 dark:border-gray-600 outline-none focus:ring-2 focus:ring-blue-500 lowercase text-gray-900 dark:text-white"
+                            value={searchQuery}
+                            onChange={e => setSearchQuery(e.target.value.toLowerCase())}
+                        />
+                    </div>
+                    <button 
+                        type="submit" 
+                        disabled={isSearching}
+                        className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-bold transition disabled:opacity-50"
+                    >
+                        {isSearching ? '...' : '🔍'}
+                    </button>
+                </form>
+
+                {/* LISTE DES RÉSULTATS DE RECHERCHE */}
+                <div className="space-y-2 max-h-60 overflow-y-auto custom-scrollbar">
+                    {searchResults.map(result => (
+                        <div key={result.uid} className="flex items-center justify-between bg-blue-50 dark:bg-blue-900/20 p-3 rounded-lg border border-blue-100 dark:border-blue-800 animate-in fade-in">
+                            <div className="flex items-center gap-3">
+                                {/* Avatar */}
+                                <div className="w-8 h-8 rounded-full bg-blue-200 flex items-center justify-center text-blue-700 font-bold text-xs overflow-hidden">
+                                    {result.photoURL ? <img src={result.photoURL} alt="" className="w-full h-full object-cover"/> : result.username[0].toUpperCase()}
+                                </div>
+                                {/* Infos */}
+                                <div>
+                                    <p className="font-bold text-sm text-gray-900 dark:text-white">{result.displayName}</p>
+                                    <p className="text-xs text-blue-600 dark:text-blue-400">@{result.username}</p>
+                                </div>
+                            </div>
+                            {/* Bouton Ajouter */}
+                            <button 
+                                onClick={() => sendFriendRequest(result)}
+                                className="text-xs bg-blue-600 text-white px-3 py-1.5 rounded-full hover:bg-blue-700 transition shadow-sm"
+                            >
+                                Ajouter +
+                            </button>
+                        </div>
+                    ))}
+                </div>
+            </div>
+
+            {/* 2. DEMANDES D'AMIS REÇUES */}
+            {requestsReceived.length > 0 && (
+                <div className="bg-white dark:bg-gray-800 p-6 rounded-xl shadow-sm border border-orange-200 dark:border-orange-900/50 animate-in slide-in-from-left-4">
+                    <h2 className="font-bold text-lg mb-4 text-orange-600 dark:text-orange-400 flex items-center gap-2">
+                        🔔 Demandes reçues <span className="bg-orange-100 text-orange-800 text-xs px-2 py-0.5 rounded-full">{requestsReceived.length}</span>
+                    </h2>
+                    <div className="space-y-3">
+                        {requestsReceived.map(req => (
+                            <div key={req.uid} className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
+                                <div className="flex items-center gap-3">
+                                    <div className="w-10 h-10 rounded-full bg-gray-300 overflow-hidden">
+                                        {req.photoURL ? <img src={req.photoURL} alt="" className="w-full h-full object-cover"/> : <span className="flex items-center justify-center h-full font-bold text-gray-500">{req.username[0].toUpperCase()}</span>}
+                                    </div>
+                                    <div>
+                                        <p className="font-bold text-sm text-gray-900 dark:text-white">{req.displayName}</p>
+                                        <p className="text-xs text-gray-500">@{req.username}</p>
+                                    </div>
+                                </div>
+                                <div className="flex gap-2">
+                                    <button onClick={() => acceptRequest(req)} className="p-2 bg-green-100 text-green-700 hover:bg-green-200 rounded-full transition" title="Accepter">✓</button>
+                                    <button onClick={() => declineRequest(req.uid)} className="p-2 bg-red-100 text-red-700 hover:bg-red-200 rounded-full transition" title="Refuser">✕</button>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )}
+        </div>
+
+        {/* --- COLONNE DROITE : LISTE MES AMIS --- */}
+        <div className="bg-white dark:bg-gray-800 p-6 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 h-fit">
+            <h2 className="font-bold text-lg mb-4 flex items-center gap-2 text-gray-800 dark:text-white">
+                Mes Amis <span className="text-gray-400 font-normal">({friends.length})</span>
+            </h2>
+            
+            {loading ? (
+                <p className="text-gray-500 text-sm">Chargement...</p>
+            ) : friends.length === 0 ? (
+                <div className="text-center py-10 text-gray-400 italic">
+                    <p>Aucun ami pour l&apos;instant.</p>
+                </div>
+            ) : (
+                <div className="space-y-2">
+                    {friends.map(friend => (
+                        <div key={friend.uid} className="group flex items-center justify-between p-3 hover:bg-gray-50 dark:hover:bg-gray-700/50 rounded-lg transition border border-transparent hover:border-gray-100 dark:hover:border-gray-600">
+                            
+                            {/* Identité Ami */}
+                            <div className="flex items-center gap-3">
+                                <div className="w-10 h-10 rounded-full bg-gradient-to-br from-purple-500 to-blue-500 flex items-center justify-center text-white font-bold shadow-sm overflow-hidden">
+                                    {friend.photoURL ? <img src={friend.photoURL} alt="" className="w-full h-full object-cover" /> : friend.username[0].toUpperCase()}
+                                </div>
+                                <div>
+                                    <p className="font-bold text-gray-800 dark:text-gray-200">{friend.displayName}</p>
+                                    <p className="text-xs text-gray-500">@{friend.username}</p>
+                                </div>
+                            </div>
+                            
+                            {/* Actions (Visibles au survol sur desktop) */}
+                            <div className="flex items-center gap-2 opacity-100 md:opacity-0 group-hover:opacity-100 transition-opacity">
+                                {/* BOUTON VOIR PROFIL */}
+                                <Link 
+                                    href={`/user/${friend.uid}`}
+                                    className="text-xs bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300 px-3 py-1.5 rounded hover:bg-blue-200 dark:hover:bg-blue-800 transition font-medium"
+                                >
+                                    Voir
+                                </Link>
+
+                                {/* --- NOUVEAU : BOUTON ÉCHANGER --- */}
+                                <Link 
+                                    href={`/trades/new/${friend.uid}`}
+                                    className="text-xs bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300 px-3 py-1.5 rounded hover:bg-purple-200 dark:hover:bg-purple-800 transition font-medium flex items-center gap-1"
+                                >
+                                    🤝 Échanger
+                                </Link>
+                                
+                                <button 
+                                    onClick={() => removeFriend(friend.uid)} 
+                                    className="text-red-400 hover:text-red-600 text-xs px-2 py-1"
+                                    title="Retirer cet ami"
+                                >
+                                    ✕
+                                </button>
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            )}
+        </div>
+
+      </div>
     </main>
   );
 }
