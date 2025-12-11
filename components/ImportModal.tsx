@@ -29,6 +29,7 @@ type ScryfallCard = {
   id: string;
   name: string;
   set: string;
+  collector_number: string; // Important pour le matching
   set_name: string;
   prices?: { eur?: string; usd?: string };
   image_uris?: { normal?: string };
@@ -69,12 +70,11 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
   
   const [resultStats, setResultStats] = useState({ success: 0, ignored: 0 });
 
-  // Map pour accès rapide (Hashmap)
+  // Map pour accès rapide aux cartes existantes par leur ID
   const existingMap = useMemo(() => {
     const map = new Map<string, ExistingCard>();
     currentCollection.forEach(card => {
-        // On utilise l'ID Firestore (qui est l'ID Scryfall) comme clé
-        const key = card.id; 
+        const key = card.id; // L'ID du document est l'ID Scryfall
         map.set(key, card);
     });
     return map;
@@ -107,7 +107,7 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
 
   if (!isOpen) return null;
 
-  // --- LOGIQUE PARSING ---
+  // --- PARSERS ---
   const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -131,6 +131,7 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
 
     const rows: ManaboxRow[] = [];
     const lines = textInput.split('\n');
+    // Regex : "Quantité Nom (Set) Collector [Optionnel *F*]"
     const regex = /^(\d+)\s+(.+?)\s+\((\w+)\)\s+(\S+)(?:\s+\*(F)\*)?/;
 
     lines.forEach(line => {
@@ -144,7 +145,7 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
                 "Set code": match[3].toLowerCase(),
                 "Collector number": match[4],
                 "Foil": match[5] === 'F' ? "true" : "false",
-                "Scryfall ID": "", // Vide pour le moment
+                "Scryfall ID": "", 
                 "Binder Name": "Import Texte",
                 "Set name": "",
                 "Rarity": "",
@@ -193,7 +194,7 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
     return { name, imageUrl, imageBackUrl };
   };
 
-  // --- LOGIQUE IMPORTATION (CORRIGÉE) ---
+  // --- LOGIQUE IMPORTATION PRINCIPALE ---
   const startImport = async () => {
     if (!user) return;
     setStep('importing');
@@ -203,7 +204,7 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
     const rowsToUpdateDirectly: ManaboxRow[] = [];
     let skippedCount = 0;
 
-    // 1. TRI PRELIMINAIRE (Ceux qui ont déjà un ID Scryfall dans le CSV)
+    // 1. TRI (Séparation CSV avec ID connu vs Reste)
     data.forEach(row => {
         const scryfallId = row["Scryfall ID"];
         const csvQty = parseInt(row["Quantity"]) || 1;
@@ -211,9 +212,9 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
         const existing = scryfallId ? existingMap.get(scryfallId) : undefined;
 
         if (existing) {
-            // Cas CSV avec ID connu
+            // Cas CSV avec ID connu : Comparaison directe
             if (importMode === 'sync') {
-                const existingFoil = existing.foil ?? false; // Gérer le cas undefined
+                const existingFoil = !!existing.foil; // Force le booléen (false si undefined)
                 if (existing.quantity === csvQty && existingFoil === csvFoil) {
                     skippedCount++;
                 } else {
@@ -223,7 +224,7 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
                 if (csvQty > 0) rowsToUpdateDirectly.push(row);
             }
         } else {
-            // Cas Texte OU Nouvelle carte CSV -> On doit demander à Scryfall
+            // Cas Texte OU Nouvelle carte CSV -> On interroge Scryfall
             rowsToFetch.push(row);
         }
     });
@@ -231,7 +232,7 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
     let processedCount = skippedCount; 
     let successCount = 0;
 
-    // 2. TRAITEMENT DIRECT (Rapide)
+    // 2. UPDATES RAPIDES (Pas d'appel API)
     if (rowsToUpdateDirectly.length > 0) {
         setStatusMsg("Mise à jour rapide...");
         const updateChunks = chunkArray(rowsToUpdateDirectly, 400);
@@ -263,9 +264,9 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
         }
     }
 
-    // 3. TRAITEMENT SCRYFALL (Lent) + CHECK SECONDAIRE
+    // 3. IDENTIFICATION SCRYFALL (Texte & Nouvelles cartes)
     if (rowsToFetch.length > 0) {
-        setStatusMsg("Identification et vérification...");
+        setStatusMsg("Vérification des doublons...");
         const fetchChunks = chunkArray(rowsToFetch, 75);
 
         for (const chunk of fetchChunks) {
@@ -287,27 +288,27 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
                 let batchHasOps = false;
                 
                 foundCards.forEach(scryfallData => {
-                    // Retrouver la ligne d'origine (Mapping approximatif par Nom/Set si ID manquant)
+                    // Recherche STRICTE de la ligne correspondante
                     const matchingRow = chunk.find(r => 
                         r["Scryfall ID"] === scryfallData.id || 
-                        (r["Set code"] === scryfallData.set && r["Name"].includes(scryfallData.name.split(" //")[0]))
+                        (r["Set code"] === scryfallData.set && r["Collector number"] === scryfallData.collector_number)
                     );
 
                     if (matchingRow) {
                         const csvQty = parseInt(matchingRow["Quantity"]);
                         const csvFoil = matchingRow["Foil"] === "true";
                         
-                        // --- LA CORRECTION EST ICI ---
-                        // Maintenant qu'on a l'ID Scryfall, on vérifie SI ON L'A DÉJÀ EN BASE
+                        // --- DOUBLE VÉRIFICATION ---
+                        // Maintenant qu'on a l'ID Scryfall officiel, on revérifie notre collection
                         const existing = existingMap.get(scryfallData.id);
                         let shouldWrite = true;
 
                         if (existing && importMode === 'sync') {
-                            const existingFoil = existing.foil ?? false;
+                            const existingFoil = !!existing.foil; // Force booléen
                             // Si c'est EXACTEMENT pareil, on ignore
                             if (existing.quantity === csvQty && existingFoil === csvFoil) {
                                 shouldWrite = false;
-                                skippedCount++; // On incrémente le compteur global d'ignorés
+                                skippedCount++; // On compte comme ignoré
                             }
                         }
 
@@ -325,8 +326,10 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
                             };
 
                             if (importMode === 'add') {
+                                 // Add: On merge en incrémentant
                                  batch.set(cardRef, { ...cardData, quantity: increment(csvQty) }, { merge: true });
                             } else {
+                                 // Sync: On écrase la quantité
                                  batch.set(cardRef, { ...cardData, quantity: csvQty }, { merge: true });
                             }
                             successCount++;
@@ -344,14 +347,14 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
             }
             processedCount += chunk.length;
             setProgress(Math.round((processedCount / data.length) * 100));
-            // Petit délai pour API
+            // Délai de courtoisie pour l'API
             await new Promise(r => setTimeout(r, 100));
         }
     }
 
     setResultStats({ success: successCount, ignored: skippedCount });
     setStep('success');
-    toast.success("Terminé !");
+    toast.success("Opération terminée !");
   };
 
   return (
