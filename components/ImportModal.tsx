@@ -29,7 +29,7 @@ type ScryfallCard = {
   id: string;
   name: string;
   set: string;
-  collector_number: string; // Important pour le matching
+  collector_number: string;
   set_name: string;
   prices?: { eur?: string; usd?: string };
   image_uris?: { normal?: string };
@@ -62,19 +62,18 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
   const [data, setData] = useState<ManaboxRow[]>([]);
   const [columns, setColumns] = useState<string[]>([]);
   
-  const [step, setStep] = useState<'upload' | 'preview' | 'importing' | 'success'>('upload');
+  // On a retiré 'success' des étapes
+  const [step, setStep] = useState<'upload' | 'preview' | 'importing'>('upload');
   
   const [progress, setProgress] = useState(0);
   const [statusMsg, setStatusMsg] = useState('');
   const [importMode, setImportMode] = useState<'add' | 'sync'>('add'); 
-  
-  const [resultStats, setResultStats] = useState({ success: 0, ignored: 0 });
 
-  // Map pour accès rapide aux cartes existantes par leur ID
+  // Map pour accès rapide
   const existingMap = useMemo(() => {
     const map = new Map<string, ExistingCard>();
     currentCollection.forEach(card => {
-        const key = card.id; // L'ID du document est l'ID Scryfall
+        const key = card.id; 
         map.set(key, card);
     });
     return map;
@@ -92,12 +91,12 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
   const handleClose = () => {
     if (step === 'importing') return; 
     onClose();
+    // Reset différé
     setTimeout(() => {
       setStep('upload');
       setData([]);
       setTextInput('');
       setProgress(0);
-      setResultStats({ success: 0, ignored: 0 });
     }, 300);
   };
 
@@ -131,7 +130,6 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
 
     const rows: ManaboxRow[] = [];
     const lines = textInput.split('\n');
-    // Regex : "Quantité Nom (Set) Collector [Optionnel *F*]"
     const regex = /^(\d+)\s+(.+?)\s+\((\w+)\)\s+(\S+)(?:\s+\*(F)\*)?/;
 
     lines.forEach(line => {
@@ -194,7 +192,7 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
     return { name, imageUrl, imageBackUrl };
   };
 
-  // --- LOGIQUE IMPORTATION PRINCIPALE ---
+  // --- LOGIQUE IMPORTATION ---
   const startImport = async () => {
     if (!user) return;
     setStep('importing');
@@ -202,9 +200,8 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
 
     const rowsToFetch: ManaboxRow[] = [];
     const rowsToUpdateDirectly: ManaboxRow[] = [];
-    let skippedCount = 0;
+    let skippedCount = 0; // On garde le compte en interne juste pour le log si besoin
 
-    // 1. TRI (Séparation CSV avec ID connu vs Reste)
     data.forEach(row => {
         const scryfallId = row["Scryfall ID"];
         const csvQty = parseInt(row["Quantity"]) || 1;
@@ -212,9 +209,8 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
         const existing = scryfallId ? existingMap.get(scryfallId) : undefined;
 
         if (existing) {
-            // Cas CSV avec ID connu : Comparaison directe
             if (importMode === 'sync') {
-                const existingFoil = !!existing.foil; // Force le booléen (false si undefined)
+                const existingFoil = !!existing.foil;
                 if (existing.quantity === csvQty && existingFoil === csvFoil) {
                     skippedCount++;
                 } else {
@@ -224,15 +220,14 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
                 if (csvQty > 0) rowsToUpdateDirectly.push(row);
             }
         } else {
-            // Cas Texte OU Nouvelle carte CSV -> On interroge Scryfall
             rowsToFetch.push(row);
         }
     });
 
     let processedCount = skippedCount; 
-    let successCount = 0;
+    let successCount = 0; // Nombre d'écritures réelles
 
-    // 2. UPDATES RAPIDES (Pas d'appel API)
+    // 1. UPDATES RAPIDES
     if (rowsToUpdateDirectly.length > 0) {
         setStatusMsg("Mise à jour rapide...");
         const updateChunks = chunkArray(rowsToUpdateDirectly, 400);
@@ -264,9 +259,9 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
         }
     }
 
-    // 3. IDENTIFICATION SCRYFALL (Texte & Nouvelles cartes)
+    // 2. SCRYFALL + VERIF SECONDAIRE
     if (rowsToFetch.length > 0) {
-        setStatusMsg("Vérification des doublons...");
+        setStatusMsg("Identification des cartes...");
         const fetchChunks = chunkArray(rowsToFetch, 75);
 
         for (const chunk of fetchChunks) {
@@ -288,7 +283,6 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
                 let batchHasOps = false;
                 
                 foundCards.forEach(scryfallData => {
-                    // Recherche STRICTE de la ligne correspondante
                     const matchingRow = chunk.find(r => 
                         r["Scryfall ID"] === scryfallData.id || 
                         (r["Set code"] === scryfallData.set && r["Collector number"] === scryfallData.collector_number)
@@ -298,17 +292,15 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
                         const csvQty = parseInt(matchingRow["Quantity"]);
                         const csvFoil = matchingRow["Foil"] === "true";
                         
-                        // --- DOUBLE VÉRIFICATION ---
-                        // Maintenant qu'on a l'ID Scryfall officiel, on revérifie notre collection
+                        // Verif secondaire
                         const existing = existingMap.get(scryfallData.id);
                         let shouldWrite = true;
 
                         if (existing && importMode === 'sync') {
-                            const existingFoil = !!existing.foil; // Force booléen
-                            // Si c'est EXACTEMENT pareil, on ignore
+                            const existingFoil = !!existing.foil;
                             if (existing.quantity === csvQty && existingFoil === csvFoil) {
                                 shouldWrite = false;
-                                skippedCount++; // On compte comme ignoré
+                                skippedCount++;
                             }
                         }
 
@@ -326,10 +318,8 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
                             };
 
                             if (importMode === 'add') {
-                                 // Add: On merge en incrémentant
                                  batch.set(cardRef, { ...cardData, quantity: increment(csvQty) }, { merge: true });
                             } else {
-                                 // Sync: On écrase la quantité
                                  batch.set(cardRef, { ...cardData, quantity: csvQty }, { merge: true });
                             }
                             successCount++;
@@ -347,14 +337,14 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
             }
             processedCount += chunk.length;
             setProgress(Math.round((processedCount / data.length) * 100));
-            // Délai de courtoisie pour l'API
             await new Promise(r => setTimeout(r, 100));
         }
     }
 
-    setResultStats({ success: successCount, ignored: skippedCount });
-    setStep('success');
-    toast.success("Opération terminée !");
+    // --- FIN DE L'OPÉRATION ---
+    // On ferme directement et on notifie
+    toast.success(`${successCount} cartes synchronisée(s) !`, { duration: 4000 });
+    handleClose();
   };
 
   return (
@@ -369,7 +359,7 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
         {/* HEADER */}
         <div className="flex-none flex justify-between items-center mb-4 border-b border-gray-100 dark:border-gray-700 pb-3">
           <h2 className="text-xl font-bold text-gray-900 dark:text-white">
-            {step === 'success' ? 'Résultat' : 'Ajouter des cartes'}
+            Ajouter des cartes
           </h2>
           {step !== 'importing' && (
              <button onClick={handleClose} className="text-gray-500 hover:text-gray-700 text-lg p-2">✕</button>
@@ -449,24 +439,6 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
                     <div className="w-full bg-gray-200 rounded-full h-4 dark:bg-gray-700 overflow-hidden max-w-md">
                         <div className="bg-blue-600 h-full rounded-full transition-all duration-300 ease-out" style={{ width: `${progress}%` }}></div>
                     </div>
-                </div>
-            )}
-
-            {step === 'success' && (
-                <div className="flex flex-col items-center justify-center h-full py-10 text-center animate-in zoom-in-95 duration-300">
-                    <div className="w-20 h-20 bg-green-100 text-green-600 rounded-full flex items-center justify-center text-4xl mb-6">✅</div>
-                    <h3 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">Opération Terminée !</h3>
-                    <div className="grid grid-cols-2 gap-4 w-full max-w-md mb-8 mt-4">
-                        <div className="bg-green-50 dark:bg-green-900/20 p-4 rounded-xl border border-green-100 dark:border-green-800">
-                            <p className="text-xs text-green-600 dark:text-green-400 font-bold uppercase">Traitées</p>
-                            <p className="text-2xl font-bold text-green-700 dark:text-green-300">{resultStats.success}</p>
-                        </div>
-                        <div className="bg-gray-50 dark:bg-gray-800 p-4 rounded-xl border border-gray-200 dark:border-gray-700">
-                            <p className="text-xs text-gray-500 dark:text-gray-400 font-bold uppercase">Ignorées</p>
-                            <p className="text-2xl font-bold text-gray-700 dark:text-gray-300">{resultStats.ignored}</p>
-                        </div>
-                    </div>
-                    <button onClick={handleClose} className="bg-gray-900 hover:bg-black text-white px-8 py-3 rounded-xl font-bold shadow-lg transition transform hover:-translate-y-0.5">Fermer</button>
                 </div>
             )}
         </div>
