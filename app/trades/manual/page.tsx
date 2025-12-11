@@ -6,7 +6,6 @@ import { useCardCollection, CardType } from '@/hooks/useCardCollection';
 import { useTradeTransaction } from '@/hooks/useTradeTransaction';
 import toast from 'react-hot-toast';
 import CardVersionPickerModal from '@/components/CardVersionPickerModal';
-// CORRECTION ICI : On importe le type depuis l'utilitaire, pas le composant
 import { ScryfallRawData } from '@/lib/cardUtils';
 
 export default function ManualTradePage() {
@@ -14,29 +13,24 @@ export default function ManualTradePage() {
   const { cards: myCollection, loading } = useCardCollection('collection'); 
   const { executeTrade, isProcessing } = useTradeTransaction();
 
-  // --- ÉTATS ---
   const [toGive, setToGive] = useState<CardType[]>([]);
   const [toReceive, setToReceive] = useState<CardType[]>([]);
   
   const [localSearch, setLocalSearch] = useState('');
   
   const [remoteSearch, setRemoteSearch] = useState('');
-  // CORRECTION TYPE ICI
   const [searchResults, setSearchResults] = useState<ScryfallRawData[]>([]);
   const [isSearching, setIsSearching] = useState(false);
 
-  // CORRECTION TYPE ICI
   const [cardToPick, setCardToPick] = useState<ScryfallRawData | null>(null);
 
-  // --- LOGIQUE AJOUT / RETRAIT ---
-  
   const handleAddToGive = (card: CardType) => {
       const existing = toGive.find(c => c.id === card.id);
       if (existing) {
           if (existing.quantity < card.quantity) { 
               setToGive(prev => prev.map(c => c.id === card.id ? { ...c, quantity: c.quantity + 1 } : c));
           } else {
-              toast.error("Max quantité atteinte");
+              toast.error("Max quantite atteinte");
           }
       } else {
           setToGive(prev => [...prev, { ...card, quantity: 1 }]);
@@ -55,13 +49,10 @@ export default function ManualTradePage() {
       finally { setIsSearching(false); }
   };
 
-  // Click sur résultat recherche -> Ouvre la modale
-  // CORRECTION TYPE ICI
   const handleSearchResultClick = (scryfallCard: ScryfallRawData) => {
     setCardToPick(scryfallCard);
   };
 
-  // Retour de la modale -> Ajoute à la liste "Je reçois"
   const handleConfirmReceive = (card: CardType) => {
       const existing = toReceive.find(c => c.id === card.id && c.isFoil === card.isFoil); 
       
@@ -75,16 +66,14 @@ export default function ManualTradePage() {
           setToReceive(prev => [...prev, card]);
       }
       
-      // On vide la recherche pour nettoyer l'interface
       setSearchResults([]); 
       setRemoteSearch("");
-      toast.success(`Ajouté : ${card.name}`);
+      toast.success(`Ajoute : ${card.name}`);
   };
 
-  // --- VALIDATION ---
   const handleValidate = async () => {
       if (toGive.length === 0 && toReceive.length === 0) return;
-      if (!confirm("Confirmer cet échange ? Vos cartes données seront retirées de votre collection.")) return;
+      if (!confirm("Confirmer cet echange ? Vos cartes donnees seront retirees de votre collection.")) return;
 
       const success = await executeTrade(toGive, toReceive, null);
       if (success) {
@@ -94,15 +83,12 @@ export default function ManualTradePage() {
       }
   };
 
-  // --- CALCULS & FILTRES ---
   const valGive = toGive.reduce((acc, c) => acc + (c.customPrice ?? c.price ?? 0) * c.quantity, 0);
   const valReceive = toReceive.reduce((acc, c) => acc + (c.price || 0) * c.quantity, 0);
 
-  // ⚡ On filtre les doublons de nom pour l'affichage
   const uniqueSearchResults = useMemo(() => {
     const seen = new Set();
     return searchResults.filter(card => {
-      // Sécurisation : on vérifie que le nom existe (pour éviter crash sur data corrompue)
       const rawName = card.name || "";
       const name = rawName.split(' // ')[0];
       if (seen.has(name)) return false;
@@ -114,20 +100,17 @@ export default function ManualTradePage() {
   if (!user) return <div className="p-10 text-center">Connectez-vous.</div>;
 
   return (
-    // CONTENEUR PRINCIPAL FIXE (Hauteur écran - Header)
     <div className="container mx-auto p-4 h-[calc(100vh-64px)] flex flex-col">
         
         <h1 className="text-2xl font-bold mb-4 flex-none flex items-center gap-2">
-            🖐️ Échange Manuel / Externe
+            Echange Manuel / Externe
         </h1>
 
-        {/* GRILLE QUI PREND TOUT L'ESPACE RESTANT */}
         <div className="grid lg:grid-cols-2 gap-6 grow overflow-hidden pb-24">
             
-            {/* --- COLONNE GAUCHE : JE DONNE --- */}
             <div className="flex flex-col h-full bg-red-50/50 dark:bg-red-900/10 rounded-xl border border-red-100 dark:border-red-900 overflow-hidden relative shadow-sm">
                 <div className="p-4 pb-0 flex-none">
-                    <h2 className="font-bold text-red-600 mb-2">📤 Je donne (De ma collection)</h2>
+                    <h2 className="font-bold text-red-600 mb-2">Je donne (De ma collection)</h2>
                     <input 
                         type="text" 
                         placeholder="Chercher dans ma collection..." 
@@ -137,25 +120,22 @@ export default function ManualTradePage() {
                     />
                 </div>
                 
-                {/* LISTE DÉFILANTE */}
                  <div className="grow overflow-y-auto custom-scrollbar p-4 pt-0 space-y-4">
                     
-                    {/* SÉLECTIONNÉS */}
                     {toGive.length > 0 && (
                         <div className="bg-white dark:bg-gray-800 rounded-lg border border-red-200 dark:border-red-800 overflow-hidden">
                             <div className="bg-red-100 dark:bg-red-900/30 px-3 py-1 text-xs font-bold text-red-700 dark:text-red-300">
-                                SÉLECTION ({toGive.reduce((a,c)=>a+c.quantity,0)})
+                                SELECTION ({toGive.reduce((a,c)=>a+c.quantity,0)})
                             </div>
                             {toGive.map(card => (
                                 <div key={card.id} className="flex justify-between items-center text-sm p-2 border-b dark:border-gray-700 last:border-0 hover:bg-gray-50 dark:hover:bg-gray-700/50">
                                     <span className="truncate">{card.quantity}x {card.name}</span>
-                                    <button onClick={() => setToGive(p => p.filter(c => c.id !== card.id))} className="text-red-500 hover:bg-red-50 rounded px-1">✕</button>
+                                    <button onClick={() => setToGive(p => p.filter(c => c.id !== card.id))} className="text-red-500 hover:bg-red-50 rounded px-1">X</button>
                                 </div>
                             ))}
                         </div>
                     )}
 
-                    {/* DISPONIBLES */}
                     <div className="space-y-1">
                         <p className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Ma Collection</p>
                         {loading ? <p className="text-sm">Chargement...</p> : 
@@ -178,37 +158,33 @@ export default function ManualTradePage() {
                     </div>
                 </div>
 
-                {/* TOTAL */}
                 <div className="flex-none bg-red-50 dark:bg-red-900/20 p-3 border-t border-red-100 dark:border-red-900 text-center">
-                    <span className="text-xs text-red-600 dark:text-red-400 font-bold uppercase">Total Donné</span>
-                    <div className="text-xl font-bold text-red-700 dark:text-red-300">{valGive.toFixed(2)} €</div>
+                    <span className="text-xs text-red-600 dark:text-red-400 font-bold uppercase">Total Donne</span>
+                    <div className="text-xl font-bold text-red-700 dark:text-red-300">{valGive.toFixed(2)} EUR</div>
                 </div>
             </div>
 
-            {/* --- COLONNE DROITE : JE REÇOIS --- */}
             <div className="flex flex-col h-full bg-green-50/50 dark:bg-green-900/10 rounded-xl border border-green-100 dark:border-green-900 overflow-hidden relative shadow-sm">
                 <div className="p-4 pb-0 flex-none">
-                    <h2 className="font-bold text-green-600 mb-2">📥 Je reçois (Ajout libre)</h2>
+                    <h2 className="font-bold text-green-600 mb-2">Je recois (Ajout libre)</h2>
                     <form onSubmit={handleSearchScryfall} className="flex gap-2 mb-2">
                         <input 
                             type="text" 
-                            placeholder="Rechercher carte à recevoir..." 
+                            placeholder="Rechercher carte a recevoir..." 
                             className="grow p-2 rounded border dark:bg-gray-800 dark:text-white dark:border-gray-600 text-sm"
                             value={remoteSearch}
                             onChange={e => setRemoteSearch(e.target.value)}
                         />
-                        <button type="submit" className="bg-green-600 hover:bg-green-700 text-white px-3 rounded shadow-sm">🔍</button>
+                        <button type="submit" className="bg-green-600 hover:bg-green-700 text-white px-3 rounded shadow-sm">V</button>
                     </form>
                 </div>
 
-                {/* LISTE DÉFILANTE */}
                  <div className="grow overflow-y-auto custom-scrollbar p-4 pt-0 space-y-4">
                     
-                    {/* SÉLECTIONNÉS */}
                     {toReceive.length > 0 && (
                         <div className="bg-white dark:bg-gray-800 rounded-lg border border-green-200 dark:border-green-800 overflow-hidden">
                             <div className="bg-green-100 dark:bg-green-900/30 px-3 py-1 text-xs font-bold text-green-700 dark:text-green-300">
-                                SÉLECTION ({toReceive.reduce((a,c)=>a+c.quantity,0)})
+                                SELECTION ({toReceive.reduce((a,c)=>a+c.quantity,0)})
                             </div>
                             {toReceive.map((card, idx) => (
                                 <div key={`${card.id}-${idx}`} className="flex justify-between items-center text-sm p-2 border-b dark:border-gray-700 last:border-0 hover:bg-gray-50 dark:hover:bg-gray-700/50">
@@ -217,19 +193,18 @@ export default function ManualTradePage() {
                                         <div className="flex flex-col truncate">
                                             <span className="dark:text-gray-200 truncate">{card.name}</span>
                                             <span className="text-[10px] text-gray-500 truncate">
-                                                {card.setName} {card.isFoil && '✨'}
+                                                {card.setName} {card.isFoil && 'Foil'}
                                             </span>
                                         </div>
                                     </div>
-                                    <button onClick={() => setToReceive(p => p.filter((_, i) => i !== idx))} className="text-red-500 hover:bg-red-50 rounded px-1 ml-2">✕</button>
+                                    <button onClick={() => setToReceive(p => p.filter((_, i) => i !== idx))} className="text-red-500 hover:bg-red-50 rounded px-1 ml-2">X</button>
                                 </div>
                             ))}
                         </div>
                     )}
 
-                    {/* RÉSULTATS SCRYFALL */}
                      <div className="space-y-1">
-                        <p className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Résultats Scryfall</p>
+                        <p className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Resultats Scryfall</p>
                         {isSearching && <p className="text-xs text-center py-4">Recherche...</p>}
                         
                         {uniqueSearchResults.map(card => (
@@ -239,49 +214,43 @@ export default function ManualTradePage() {
                                  </div>
                                  <div className="grow min-w-0">
                                     <p className="font-bold text-xs truncate dark:text-gray-200">{card.name}</p>
-                                    <p className="text-[10px] text-gray-500 italic">Sélectionner version...</p>
+                                    <p className="text-[10px] text-gray-500 italic">Selectionner version...</p>
                                  </div>
-                                 <span className="text-xs font-bold text-gray-400 group-hover:text-green-500 shrink-0">Choisir ›</span>
+                                 <span className="text-xs font-bold text-gray-400 group-hover:text-green-500 shrink-0">Choisir</span>
                             </div>
                         ))}
                     </div>
                 </div>
 
-                {/* TOTAL */}
                 <div className="flex-none bg-green-50 dark:bg-green-900/20 p-3 border-t border-green-100 dark:border-green-900 text-center">
-                    <span className="text-xs text-green-600 dark:text-green-400 font-bold uppercase">Total Reçu</span>
-                    <div className="text-xl font-bold text-green-700 dark:text-green-300">{valReceive.toFixed(2)} €</div>
+                    <span className="text-xs text-green-600 dark:text-green-400 font-bold uppercase">Total Recu</span>
+                    <div className="text-xl font-bold text-green-700 dark:text-green-300">{valReceive.toFixed(2)} EUR</div>
                 </div>
             </div>
         </div>
 
-        {/* --- FOOTER DE VALIDATION --- */}
         <div className="fixed bottom-0 left-0 right-0 h-20 bg-white dark:bg-gray-900 border-t dark:border-gray-800 flex justify-between items-center px-6 z-40 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)]">
             
-            {/* Espace vide pour centrer */}
             <div className="flex-1"></div>
 
-            {/* BALANCE */}
             <div className="flex-1 flex flex-col items-center justify-center">
                 <span className="text-xs text-gray-400 font-bold uppercase tracking-widest">Balance</span>
                 <div className={`text-2xl font-black ${valGive - valReceive >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                    {valGive - valReceive > 0 ? '+' : ''}{(valGive - valReceive).toFixed(2)} €
+                    {valGive - valReceive > 0 ? '+' : ''}{(valGive - valReceive).toFixed(2)} EUR
                 </div>
             </div>
 
-            {/* BOUTON */}
             <div className="flex-1 flex justify-end">
                 <button 
                     onClick={handleValidate}
                     disabled={isProcessing || (toGive.length === 0 && toReceive.length === 0)}
                     className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-3 rounded-xl font-bold disabled:opacity-50 transition shadow-lg transform active:scale-95"
                 >
-                    {isProcessing ? 'Validation...' : '✅ Valider l\'échange'}
+                    {isProcessing ? 'Validation...' : 'Valider l\'echange'}
                 </button>
             </div>
         </div>
 
-        {/* MODALE DE SÉLECTION DE VERSION */}
         <CardVersionPickerModal 
             isOpen={!!cardToPick}
             baseCard={cardToPick}

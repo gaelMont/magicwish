@@ -319,231 +319,6 @@ export default function LoginPage() {
 }
 </file>
 
-<file path="app/search/page.tsx">
-// app/search/page.tsx
-'use client';
-
-import { useState, useMemo } from 'react';
-import { useAuth } from '@/lib/AuthContext';
-import { db } from '@/lib/firebase';
-import { doc, setDoc, increment, serverTimestamp } from 'firebase/firestore';
-import { ScryfallRawData } from '@/lib/cardUtils';
-import { CardType } from '@/hooks/useCardCollection';
-import { useWishlists } from '@/hooks/useWishlists'; // IMPORT AJOUTÉ
-import CardVersionPickerModal from '@/components/CardVersionPickerModal';
-import toast from 'react-hot-toast';
-
-export default function SearchPage() {
-  const { user } = useAuth();
-  const { lists } = useWishlists(); // RÉCUPÉRATION DES LISTES
-  
-  // États de recherche
-  const [query, setQuery] = useState('');
-  const [results, setResults] = useState<ScryfallRawData[]>([]);
-  const [isSearching, setIsSearching] = useState(false);
-  const [hasSearched, setHasSearched] = useState(false);
-
-  // États du Modal
-  const [modalOpen, setModalOpen] = useState(false);
-  const [selectedBaseCard, setSelectedBaseCard] = useState<ScryfallRawData | null>(null);
-  const [targetDestination, setTargetDestination] = useState<'collection' | 'wishlist'>('collection');
-
-  // --- 1. FONCTION DE RECHERCHE ---
-  const handleSearch = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!query.trim()) return;
-
-    setIsSearching(true);
-    setHasSearched(true);
-    setResults([]);
-
-    try {
-        const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
-        const data = await res.json();
-        
-        if (data.data) {
-            setResults(data.data);
-        } else {
-            toast.error("Aucune carte trouvée.");
-        }
-    } catch (error) {
-        console.error(error);
-        toast.error("Erreur de recherche.");
-    } finally {
-        setIsSearching(false);
-    }
-  };
-
-  // --- 2. OUVERTURE DU MODAL ---
-  const openPicker = (card: ScryfallRawData, destination: 'collection' | 'wishlist') => {
-      setSelectedBaseCard(card);
-      setTargetDestination(destination);
-      setModalOpen(true);
-  };
-
-  // --- 3. SAUVEGARDE EN BASE (LOGIQUE CORRIGÉE) ---
-  const handleConfirmAdd = async (card: CardType, targetListId: string = 'default') => {
-      if (!user) return;
-
-      const destLabel = targetDestination === 'collection' ? 'Collection' : 'Wishlist';
-      const toastId = toast.loading(`Ajout à : ${destLabel}...`);
-      
-      try {
-          // --- LOGIQUE DE CHEMIN FIRESTORE DYNAMIQUE ---
-          let collectionPath = 'collection';
-          
-          if (targetDestination === 'wishlist') {
-              if (targetListId === 'default') {
-                  collectionPath = 'wishlist';
-              } else {
-                  collectionPath = `wishlists_data/${targetListId}/cards`;
-              }
-          }
-
-          const cardRef = doc(db, 'users', user.uid, collectionPath, card.id);
-
-          // Construction de l'objet à sauvegarder
-          const dataToSave = {
-              ...card,
-              addedAt: serverTimestamp(),
-              // On force le bon ID de liste ou null
-              wishlistId: targetDestination === 'wishlist' ? targetListId : null, 
-              isForTrade: false 
-          };
-
-          // On utilise setDoc avec merge pour gérer l'incrément ou la création
-          await setDoc(cardRef, {
-              ...dataToSave,
-              quantity: increment(card.quantity)
-          }, { merge: true });
-
-          toast.success(`Ajouté avec succès !`, { id: toastId });
-
-      } catch (error) {
-          console.error(error);
-          toast.error("Erreur lors de l'ajout", { id: toastId });
-      }
-  };
-
-  // Filtre visuel pour éviter les doublons de noms
-  const uniqueResults = useMemo(() => {
-    const seen = new Set();
-    return results.filter(c => {
-        const name = c.name.split(' // ')[0];
-        if (seen.has(name)) return false;
-        seen.add(name);
-        return true;
-    });
-  }, [results]);
-
-  return (
-    <main className="container mx-auto p-4 max-w-5xl min-h-[85vh]">
-      
-      {/* HEADER */}
-      <div className="text-center mb-8 pt-4">
-          <h1 className="text-3xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent mb-2">
-              🔍 Centre de Recherche
-          </h1>
-          <p className="text-gray-500">
-              Trouvez n&apos;importe quelle carte et ajoutez-la à votre Collection ou votre Wishlist.
-          </p>
-      </div>
-
-      {/* BARRE DE RECHERCHE */}
-      <div className="max-w-2xl mx-auto mb-10 sticky top-4 z-20">
-          <form onSubmit={handleSearch} className="relative shadow-lg rounded-full">
-              <input 
-                  type="text" 
-                  className="w-full p-4 pl-6 pr-14 rounded-full border-2 border-transparent bg-white dark:bg-gray-800 dark:text-white focus:border-blue-500 outline-none transition text-lg"
-                  placeholder="Nom de la carte (ex: Black Lotus, Sol Ring...)"
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  autoFocus
-              />
-              <button 
-                  type="submit"
-                  disabled={isSearching || !query.trim()}
-                  className="absolute right-2 top-2 bottom-2 bg-blue-600 hover:bg-blue-700 text-white rounded-full w-12 flex items-center justify-center transition disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                  {isSearching ? '...' : '🔎'}
-              </button>
-          </form>
-      </div>
-
-      {/* RÉSULTATS */}
-      {isSearching ? (
-          <div className="text-center py-20">
-              <div className="inline-block w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mb-4"></div>
-              <p className="text-gray-400">Interrogation de Scryfall...</p>
-          </div>
-      ) : uniqueResults.length > 0 ? (
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-              {uniqueResults.map((card) => (
-                  <div key={card.id} className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden flex flex-col group hover:shadow-md transition">
-                      {/* Image */}
-                      <div className="relative aspect-[2.5/3.5] bg-gray-200 overflow-hidden">
-                          {card.image_uris?.normal ? (
-                              <img src={card.image_uris.normal} alt={card.name} className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110" loading="lazy" />
-                          ) : (
-                             <div className="flex items-center justify-center h-full text-gray-400 text-xs">Pas d&apos;image</div>
-                          )}
-                          
-                          {/* Overlay au survol */}
-                          <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center gap-3 p-4">
-                              <button 
-                                  onClick={() => openPicker(card, 'collection')}
-                                  className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 rounded-lg text-sm shadow-lg transform translate-y-4 group-hover:translate-y-0 transition-transform duration-300"
-                              >
-                                  + Collection
-                              </button>
-                              <button 
-                                  onClick={() => openPicker(card, 'wishlist')}
-                                  className="w-full bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 rounded-lg text-sm shadow-lg transform translate-y-4 group-hover:translate-y-0 transition-transform duration-300 delay-75"
-                              >
-                                  + Wishlist
-                              </button>
-                          </div>
-                      </div>
-
-                      <div className="p-3">
-                          <h3 className="font-bold text-gray-900 dark:text-white truncate" title={card.name}>{card.name}</h3>
-                          <p className="text-xs text-gray-500">{card.set_name}</p>
-                      </div>
-                  </div>
-              ))}
-          </div>
-      ) : hasSearched ? (
-          <div className="text-center py-20 bg-gray-50 dark:bg-gray-800/50 rounded-2xl border-2 border-dashed border-gray-200 dark:border-gray-700">
-              <p className="text-xl text-gray-500">Aucun résultat trouvé pour &quot;{query}&quot;.</p>
-          </div>
-      ) : (
-          <div className="grid md:grid-cols-2 gap-4 max-w-3xl mx-auto opacity-50 hover:opacity-100 transition-opacity">
-               <div className="p-6 border-2 border-dashed border-gray-200 dark:border-gray-700 rounded-xl text-center">
-                   <span className="text-4xl mb-2 block">📚</span>
-                   <h3 className="font-bold">Compléter ma Collection</h3>
-               </div>
-               <div className="p-6 border-2 border-dashed border-gray-200 dark:border-gray-700 rounded-xl text-center">
-                   <span className="text-4xl mb-2 block">✨</span>
-                   <h3 className="font-bold">Remplir ma Wishlist</h3>
-               </div>
-          </div>
-      )}
-
-      {/* MODALE DE SÉLECTION */}
-      <CardVersionPickerModal 
-          isOpen={modalOpen}
-          onClose={() => setModalOpen(false)}
-          baseCard={selectedBaseCard}
-          onConfirm={handleConfirmAdd}
-          destination={targetDestination} // On passe la destination
-          availableLists={lists} // On passe la liste des wishlists
-      />
-
-    </main>
-  );
-}
-</file>
-
 <file path="app/user/[uid]/page.tsx">
 // app/user/[uid]/page.tsx
 'use client';
@@ -1506,6 +1281,236 @@ const nextConfig: NextConfig = {
 export default nextConfig;
 </file>
 
+<file path="app/search/page.tsx">
+// app/search/page.tsx
+'use client';
+
+import { useState, useMemo } from 'react';
+import { useAuth } from '@/lib/AuthContext';
+import { db } from '@/lib/firebase';
+import { doc, setDoc, increment, serverTimestamp } from 'firebase/firestore';
+import { ScryfallRawData } from '@/lib/cardUtils';
+import { CardType } from '@/hooks/useCardCollection';
+import { useWishlists } from '@/hooks/useWishlists';
+import CardVersionPickerModal from '@/components/CardVersionPickerModal';
+import toast from 'react-hot-toast';
+
+export default function SearchPage() {
+  const { user } = useAuth();
+  const { lists } = useWishlists();
+  
+  // États de recherche
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState<ScryfallRawData[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [hasSearched, setHasSearched] = useState(false);
+
+  // États du Modal
+  const [modalOpen, setModalOpen] = useState(false);
+  const [selectedBaseCard, setSelectedBaseCard] = useState<ScryfallRawData | null>(null);
+  const [targetDestination, setTargetDestination] = useState<'collection' | 'wishlist'>('collection');
+
+  // --- 1. FONCTION DE RECHERCHE ---
+  const handleSearch = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!query.trim()) return;
+
+    setIsSearching(true);
+    setHasSearched(true);
+    setResults([]);
+
+    try {
+        const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
+        const data = await res.json();
+        
+        if (data.data) {
+            setResults(data.data);
+        } else {
+            toast.error("Aucune carte trouvée.");
+        }
+    } catch (error) {
+        console.error(error);
+        toast.error("Erreur de recherche.");
+    } finally {
+        setIsSearching(false);
+    }
+  };
+
+  // --- 2. OUVERTURE DU MODAL ---
+  const openPicker = (card: ScryfallRawData, destination: 'collection' | 'wishlist') => {
+      setSelectedBaseCard(card);
+      setTargetDestination(destination);
+      setModalOpen(true);
+  };
+
+  // --- 3. SAUVEGARDE EN BASE ---
+  const handleConfirmAdd = async (card: CardType, targetListId: string = 'default') => {
+      if (!user) return;
+
+      const destLabel = targetDestination === 'collection' ? 'Collection' : 'Wishlist';
+      const toastId = toast.loading(`Ajout à : ${destLabel}...`);
+      
+      try {
+          // Détermination du chemin Firestore
+          let collectionPath = 'collection';
+          if (targetDestination === 'wishlist') {
+              if (targetListId === 'default') {
+                  collectionPath = 'wishlist';
+              } else {
+                  collectionPath = `wishlists_data/${targetListId}/cards`;
+              }
+          }
+
+          const cardRef = doc(db, 'users', user.uid, collectionPath, card.id);
+
+          // Construction de l'objet (NETTOYAGE ET SÉCURISATION)
+          // On évite les doublons de clés ici
+          const dataToSave = {
+              ...card, // On copie toutes les propriétés de base
+              
+              // SÉCURITÉ FIRESTORE : On écrase imageBackUrl pour garantir qu'il n'est pas undefined
+              imageBackUrl: card.imageBackUrl || null,
+              
+              // Métadonnées système
+              addedAt: serverTimestamp(),
+              
+              // Logique métier
+              wishlistId: targetDestination === 'wishlist' ? targetListId : null, 
+              isForTrade: false 
+          };
+
+          // Sauvegarde (set avec merge pour gérer l'incrément si existant)
+          await setDoc(cardRef, {
+              ...dataToSave,
+              quantity: increment(card.quantity)
+          }, { merge: true });
+
+          toast.success(`Ajouté avec succès !`, { id: toastId });
+
+      } catch (error) {
+          console.error(error);
+          toast.error("Erreur lors de l'ajout", { id: toastId });
+      }
+  };
+
+  // Filtre visuel pour éviter les doublons de noms
+  const uniqueResults = useMemo(() => {
+    const seen = new Set();
+    return results.filter(c => {
+        const name = c.name.split(' // ')[0];
+        if (seen.has(name)) return false;
+        seen.add(name);
+        return true;
+    });
+  }, [results]);
+
+  return (
+    <main className="container mx-auto p-4 max-w-5xl min-h-[85vh]">
+      
+      {/* HEADER */}
+      <div className="text-center mb-8 pt-4">
+          <h1 className="text-3xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent mb-2">
+              🔍 Centre de Recherche
+          </h1>
+          <p className="text-gray-500">
+              Trouvez n&apos;importe quelle carte et ajoutez-la à votre Collection ou votre Wishlist.
+          </p>
+      </div>
+
+      {/* BARRE DE RECHERCHE */}
+      <div className="max-w-2xl mx-auto mb-10 sticky top-4 z-20">
+          <form onSubmit={handleSearch} className="relative shadow-lg rounded-full">
+              <input 
+                  type="text" 
+                  className="w-full p-4 pl-6 pr-14 rounded-full border-2 border-transparent bg-white dark:bg-gray-800 dark:text-white focus:border-blue-500 outline-none transition text-lg"
+                  placeholder="Nom de la carte (ex: Black Lotus, Sol Ring...)"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  autoFocus
+              />
+              <button 
+                  type="submit"
+                  disabled={isSearching || !query.trim()}
+                  className="absolute right-2 top-2 bottom-2 bg-blue-600 hover:bg-blue-700 text-white rounded-full w-12 flex items-center justify-center transition disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                  {isSearching ? '...' : '🔎'}
+              </button>
+          </form>
+      </div>
+
+      {/* RÉSULTATS */}
+      {isSearching ? (
+          <div className="text-center py-20">
+              <div className="inline-block w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mb-4"></div>
+              <p className="text-gray-400">Interrogation de Scryfall...</p>
+          </div>
+      ) : uniqueResults.length > 0 ? (
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+              {uniqueResults.map((card) => (
+                  <div key={card.id} className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden flex flex-col group hover:shadow-md transition">
+                      {/* Image */}
+                      <div className="relative aspect-[2.5/3.5] bg-gray-200 overflow-hidden">
+                          {card.image_uris?.normal ? (
+                              <img src={card.image_uris.normal} alt={card.name} className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110" loading="lazy" />
+                          ) : (
+                             <div className="flex items-center justify-center h-full text-gray-400 text-xs">Pas d&apos;image</div>
+                          )}
+                          
+                          {/* Overlay au survol */}
+                          <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center gap-3 p-4">
+                              <button 
+                                  onClick={() => openPicker(card, 'collection')}
+                                  className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 rounded-lg text-sm shadow-lg transform translate-y-4 group-hover:translate-y-0 transition-transform duration-300"
+                              >
+                                  + Collection
+                              </button>
+                              <button 
+                                  onClick={() => openPicker(card, 'wishlist')}
+                                  className="w-full bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 rounded-lg text-sm shadow-lg transform translate-y-4 group-hover:translate-y-0 transition-transform duration-300 delay-75"
+                              >
+                                  + Wishlist
+                              </button>
+                          </div>
+                      </div>
+
+                      <div className="p-3">
+                          <h3 className="font-bold text-gray-900 dark:text-white truncate" title={card.name}>{card.name}</h3>
+                          <p className="text-xs text-gray-500">{card.set_name}</p>
+                      </div>
+                  </div>
+              ))}
+          </div>
+      ) : hasSearched ? (
+          <div className="text-center py-20 bg-gray-50 dark:bg-gray-800/50 rounded-2xl border-2 border-dashed border-gray-200 dark:border-gray-700">
+              <p className="text-xl text-gray-500">Aucun résultat trouvé pour &quot;{query}&quot;.</p>
+          </div>
+      ) : (
+          <div className="grid md:grid-cols-2 gap-4 max-w-3xl mx-auto opacity-50 hover:opacity-100 transition-opacity">
+               <div className="p-6 border-2 border-dashed border-gray-200 dark:border-gray-700 rounded-xl text-center">
+                   <span className="text-4xl mb-2 block">📚</span>
+                   <h3 className="font-bold">Compléter ma Collection</h3>
+               </div>
+               <div className="p-6 border-2 border-dashed border-gray-200 dark:border-gray-700 rounded-xl text-center">
+                   <span className="text-4xl mb-2 block">✨</span>
+                   <h3 className="font-bold">Remplir ma Wishlist</h3>
+               </div>
+          </div>
+      )}
+
+      <CardVersionPickerModal 
+          isOpen={modalOpen}
+          onClose={() => setModalOpen(false)}
+          baseCard={selectedBaseCard}
+          onConfirm={handleConfirmAdd}
+          destination={targetDestination}
+          availableLists={lists}
+      />
+
+    </main>
+  );
+}
+</file>
+
 <file path="app/trades/new/[uid]/page.tsx">
 // app/trades/new/[uid]/page.tsx
 'use client';
@@ -2029,168 +2034,6 @@ export function useFriends() {
 }
 </file>
 
-<file path="hooks/useTradeSystem.ts">
-// hooks/useTradeSystem.ts
-import { useState, useEffect } from 'react';
-import { db } from '@/lib/firebase';
-import { 
-  collection, addDoc, query, where, onSnapshot, 
-  doc, updateDoc, serverTimestamp, orderBy, 
-  Timestamp
-} from 'firebase/firestore';
-import { useAuth } from '@/lib/AuthContext';
-import { CardType } from './useCardCollection';
-// ON IMPORTE L'ACTION SERVEUR
-import { executeServerTrade } from '@/app/actions/trade'; 
-import toast from 'react-hot-toast';
-
-export type TradeStatus = 'pending' | 'completed' | 'rejected' | 'cancelled';
-
-export type TradeRequest = {
-  id: string;
-  senderUid: string;
-  senderName: string;
-  receiverUid: string;
-  receiverName: string;
-  itemsGiven: CardType[];
-  itemsReceived: CardType[];
-  status: TradeStatus;
-  createdAt: Timestamp;
-};
-
-// Utilitaire de nettoyage pour Firestore
-const cleanCardsForFirestore = (cards: CardType[]) => {
-    return cards.map(card => {
-        const clean = { ...card };
-        Object.keys(clean).forEach(key => {
-            const k = key as keyof CardType;
-            if (clean[k] === undefined) delete clean[k];
-        });
-        return clean;
-    });
-};
-
-export function useTradeSystem() {
-  const { user, username } = useAuth();
-  
-  const [incomingTrades, setIncomingTrades] = useState<TradeRequest[]>([]);
-  const [outgoingTrades, setOutgoingTrades] = useState<TradeRequest[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [isProcessing, setIsProcessing] = useState(false); // État local
-
-  // 1. Écouter les échanges
-  useEffect(() => {
-    if (!user) return;
-
-    const qIn = query(
-      collection(db, 'trades'),
-      where('receiverUid', '==', user.uid),
-      where('status', '==', 'pending'),
-      orderBy('createdAt', 'desc')
-    );
-
-    const qOut = query(
-      collection(db, 'trades'),
-      where('senderUid', '==', user.uid),
-      where('status', '==', 'pending'),
-      orderBy('createdAt', 'desc')
-    );
-
-    const unsubIn = onSnapshot(qIn, (snap) => {
-      setIncomingTrades(snap.docs.map(d => ({ id: d.id, ...d.data() } as TradeRequest)));
-    });
-
-    const unsubOut = onSnapshot(qOut, (snap) => {
-      setOutgoingTrades(snap.docs.map(d => ({ id: d.id, ...d.data() } as TradeRequest)));
-      setLoading(false);
-    });
-
-    return () => { unsubIn(); unsubOut(); };
-  }, [user]);
-
-  // 2. Proposer
-  const proposeTrade = async (receiverUid: string, receiverName: string, toGive: CardType[], toReceive: CardType[]) => {
-    if (!user) return;
-    const toastId = toast.loading("Envoi de la proposition...");
-
-    try {
-      const cleanGiven = cleanCardsForFirestore(toGive);
-      const cleanReceived = cleanCardsForFirestore(toReceive);
-
-      await addDoc(collection(db, 'trades'), {
-        senderUid: user.uid,
-        senderName: username || user.displayName || 'Inconnu',
-        receiverUid,
-        receiverName,
-        itemsGiven: cleanGiven,    
-        itemsReceived: cleanReceived, 
-        status: 'pending',
-        createdAt: serverTimestamp()
-      });
-      toast.success("Proposition envoyée !", { id: toastId });
-      return true;
-    } catch (e) {
-      console.error("Erreur Firestore:", e);
-      toast.error("Erreur envoi", { id: toastId });
-      return false;
-    }
-  };
-
-  // 3. Accepter (C'EST ICI QUE C'ÉTAIT FAUX DANS TON FICHIER ACTUEL)
-  const acceptTrade = async (trade: TradeRequest) => {
-    if (!user) return;
-    
-    setIsProcessing(true);
-    const toastId = toast.loading("Validation sécurisée en cours...");
-
-    try {
-        // APPEL DE L'ACTION SERVEUR (Admin Mode)
-        // Note: trade.itemsGiven = Ce que l'expéditeur donne
-        // Note: trade.itemsReceived = Ce que l'expéditeur reçoit
-        const result = await executeServerTrade(
-            trade.senderUid,
-            user.uid, // Je suis le receveur
-            trade.itemsGiven,
-            trade.itemsReceived
-        );
-
-        if (result.success) {
-            // Si le serveur dit OK, on marque l'échange comme fini
-            await updateDoc(doc(db, 'trades', trade.id), { status: 'completed' });
-            toast.success("Échange terminé avec succès !", { id: toastId });
-        } else {
-            throw new Error(result.error || "Erreur serveur inconnue");
-        }
-
-    } catch (error: any) { 
-        console.error("Erreur Accept Trade:", error);
-        toast.error(error.message || "Échec de l'échange", { id: toastId });
-    } finally {
-        setIsProcessing(false);
-    }
-  };
-
-  // 4. Refuser / Annuler
-  const rejectTrade = async (tradeId: string) => {
-    if(!confirm("Refuser cet échange ?")) return;
-    await updateDoc(doc(db, 'trades', tradeId), { status: 'rejected' });
-    toast.success("Échange refusé");
-  };
-
-  const cancelTrade = async (tradeId: string) => {
-    if(!confirm("Annuler cette proposition ?")) return;
-    await updateDoc(doc(db, 'trades', tradeId), { status: 'cancelled' });
-    toast.success("Proposition annulée");
-  };
-
-  return { 
-    incomingTrades, outgoingTrades, loading, 
-    proposeTrade, acceptTrade, rejectTrade, cancelTrade,
-    isProcessing 
-  };
-}
-</file>
-
 <file path="package.json">
 {
   "name": "magicwish",
@@ -2267,6 +2110,170 @@ export async function GET(request: Request) {
       { status: 500 }
     );
   }
+}
+</file>
+
+<file path="hooks/useTradeSystem.ts">
+// hooks/useTradeSystem.ts
+import { useState, useEffect } from 'react';
+import { db } from '@/lib/firebase';
+import { 
+  collection, addDoc, query, where, onSnapshot, 
+  doc, updateDoc, serverTimestamp, orderBy, 
+  Timestamp
+} from 'firebase/firestore';
+import { useAuth } from '@/lib/AuthContext';
+import { CardType } from './useCardCollection';
+import { executeServerTrade } from '@/app/actions/trade'; 
+import toast from 'react-hot-toast';
+
+export type TradeStatus = 'pending' | 'completed' | 'rejected' | 'cancelled';
+
+export type TradeRequest = {
+  id: string;
+  senderUid: string;
+  senderName: string;
+  receiverUid: string;
+  receiverName: string;
+  itemsGiven: CardType[];
+  itemsReceived: CardType[];
+  status: TradeStatus;
+  createdAt: Timestamp;
+};
+
+const cleanCardsForFirestore = (cards: CardType[]) => {
+    return cards.map(card => {
+        const clean = { ...card };
+        Object.keys(clean).forEach(key => {
+            const k = key as keyof CardType;
+            if (clean[k] === undefined) delete clean[k];
+        });
+        return clean;
+    });
+};
+
+export function useTradeSystem() {
+  const { user, username } = useAuth();
+  
+  const [incomingTrades, setIncomingTrades] = useState<TradeRequest[]>([]);
+  const [outgoingTrades, setOutgoingTrades] = useState<TradeRequest[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [isProcessing, setIsProcessing] = useState(false);
+
+  // 1. Écouter les échanges
+  useEffect(() => {
+    if (!user) return;
+
+    const qIn = query(
+      collection(db, 'trades'),
+      where('receiverUid', '==', user.uid),
+      where('status', '==', 'pending'),
+      orderBy('createdAt', 'desc')
+    );
+
+    const qOut = query(
+      collection(db, 'trades'),
+      where('senderUid', '==', user.uid),
+      where('status', '==', 'pending'),
+      orderBy('createdAt', 'desc')
+    );
+
+    const unsubIn = onSnapshot(qIn, (snap) => {
+      setIncomingTrades(snap.docs.map(d => ({ id: d.id, ...d.data() } as TradeRequest)));
+    });
+
+    const unsubOut = onSnapshot(qOut, (snap) => {
+      setOutgoingTrades(snap.docs.map(d => ({ id: d.id, ...d.data() } as TradeRequest)));
+      setLoading(false);
+    });
+
+    return () => { unsubIn(); unsubOut(); };
+  }, [user]);
+
+  // 2. Proposer
+  const proposeTrade = async (receiverUid: string, receiverName: string, toGive: CardType[], toReceive: CardType[]) => {
+    if (!user) return;
+    const toastId = toast.loading("Envoi de la proposition...");
+
+    try {
+      const cleanGiven = cleanCardsForFirestore(toGive);
+      const cleanReceived = cleanCardsForFirestore(toReceive);
+
+      await addDoc(collection(db, 'trades'), {
+        senderUid: user.uid,
+        senderName: username || user.displayName || 'Inconnu',
+        receiverUid,
+        receiverName,
+        itemsGiven: cleanGiven,    
+        itemsReceived: cleanReceived, 
+        status: 'pending',
+        createdAt: serverTimestamp()
+      });
+      toast.success("Proposition envoyée !", { id: toastId });
+      return true;
+    } catch (e) {
+      console.error("Erreur Firestore:", e);
+      toast.error("Erreur envoi", { id: toastId });
+      return false;
+    }
+  };
+
+  // 3. Accepter
+  const acceptTrade = async (trade: TradeRequest) => {
+    if (!user) return;
+    
+    setIsProcessing(true);
+    const toastId = toast.loading("Validation sécurisée en cours...");
+
+    try {
+        const result = await executeServerTrade(
+            trade.senderUid,
+            user.uid, 
+            trade.itemsGiven,
+            trade.itemsReceived
+        );
+
+        if (result.success) {
+            await updateDoc(doc(db, 'trades', trade.id), { status: 'completed' });
+            toast.success("Échange terminé avec succès !", { id: toastId });
+        } else {
+            throw new Error(result.error || "Erreur serveur inconnue");
+        }
+
+    } catch (error: unknown) { // CORRECTION ICI : unknown au lieu de any
+        console.error("Erreur Accept Trade:", error);
+        
+        let msg = "Échec de l'échange";
+        if (error instanceof Error) {
+            msg = error.message;
+        } else if (typeof error === "string") {
+            msg = error;
+        }
+        
+        toast.error(msg, { id: toastId });
+    } finally {
+        setIsProcessing(false);
+    }
+  };
+
+  // 4. Refuser / Annuler
+  const rejectTrade = async (tradeId: string) => {
+    if(!confirm("Refuser cet échange ?")) return;
+    await updateDoc(doc(db, 'trades', tradeId), { status: 'rejected' });
+    toast.success("Échange refusé");
+  };
+
+  const cancelTrade = async (tradeId: string) => {
+    if(!confirm("Annuler cette proposition ?")) return;
+    await updateDoc(doc(db, 'trades', tradeId), { status: 'cancelled' });
+    toast.success("Proposition annulée");
+  };
+
+  return { 
+    incomingTrades, outgoingTrades, loading, 
+    proposeTrade, acceptTrade, rejectTrade, cancelTrade,
+    isProcessing 
+  };
 }
 </file>
 
@@ -2463,219 +2470,6 @@ export const normalizeCardData = (data: ScryfallRawData) => {
     scryfallData: data // On garde la donnée brute
   };
 };
-</file>
-
-<file path="components/CardVersionPickerModal.tsx">
-'use client';
-
-import { useState, useEffect, useMemo } from 'react';
-import { CardType } from '@/hooks/useCardCollection';
-import { normalizeCardData, ScryfallRawData } from '@/lib/cardUtils'; 
-import { WishlistMeta } from '@/hooks/useWishlists'; // Import du type
-import toast from 'react-hot-toast';
-
-type Props = {
-  isOpen: boolean;
-  onClose: () => void;
-  baseCard: ScryfallRawData | null; 
-  onConfirm: (card: CardType, targetListId?: string) => void; // On ajoute targetListId
-  destination?: 'collection' | 'wishlist'; // Pour savoir si on affiche le selecteur
-  availableLists?: WishlistMeta[]; // La liste des wishlists dispos
-};
-
-export default function CardVersionPickerModal({ 
-  isOpen, onClose, baseCard, onConfirm, destination, availableLists 
-}: Props) {
-  const [versions, setVersions] = useState<ScryfallRawData[]>([]);
-  const [loading, setLoading] = useState(false);
-  
-  const [selectedVersionId, setSelectedVersionId] = useState<string>('');
-  const [isFoil, setIsFoil] = useState(false);
-  const [quantity, setQuantity] = useState(1);
-  const [isFlipped, setIsFlipped] = useState(false); 
-  const [anyVersion, setAnyVersion] = useState(false);
-  
-  // État pour la wishlist sélectionnée
-  const [selectedListId, setSelectedListId] = useState<string>('default');
-
-  useEffect(() => {
-    const fetchVersions = async (oracleId: string) => {
-        setLoading(true);
-        try {
-          const res = await fetch(`https://api.scryfall.com/cards/search?q=oracle_id:${oracleId}&unique=prints&order=released`);
-          const data = await res.json();
-          
-          if (data.data && data.data.length > 0) {
-            setVersions(data.data); 
-            const defaultVer = data.data.find((c: ScryfallRawData) => c.id === baseCard?.id) || data.data[0];
-            setSelectedVersionId(defaultVer.id);
-          }
-        } catch (e) {
-          console.error(e);
-          toast.error("Impossible de charger les versions");
-        } finally {
-          setLoading(false);
-        }
-    };
-
-    if (isOpen && baseCard?.oracle_id) {
-      fetchVersions(baseCard.oracle_id as string);
-    }
-
-    setQuantity(1);
-    setIsFoil(false);
-    setIsFlipped(false);
-    setAnyVersion(false);
-    setSelectedListId('default'); // Reset wishlist par défaut
-  }, [isOpen, baseCard]); 
-
-  const currentCardRaw = useMemo(() => {
-    return versions.find(v => v.id === selectedVersionId) || baseCard;
-  }, [versions, selectedVersionId, baseCard]);
-
-  if (!isOpen || !currentCardRaw) return null;
-
-  const { imageUrl, imageBackUrl, name, setName, setCode, price } = normalizeCardData(currentCardRaw);
-  
-  const priceNormal = parseFloat(currentCardRaw.prices?.eur || "0");
-  const priceFoil = parseFloat(currentCardRaw.prices?.eur_foil || "0");
-  const currentPrice = isFoil ? (priceFoil || priceNormal) : (priceNormal || priceFoil);
-  
-  const hasFoilVersion = currentCardRaw.finishes?.includes('foil') || !!currentCardRaw.prices?.eur_foil;
-  const hasNonFoilVersion = currentCardRaw.finishes?.includes('nonfoil') || !!currentCardRaw.prices?.eur;
-
-  const handleConfirm = () => {
-    const finalCard: CardType = {
-        id: currentCardRaw.id,
-        name: name,
-        imageUrl: imageUrl,
-        imageBackUrl: imageBackUrl || undefined,
-        quantity: quantity,
-        price: currentPrice,
-        setName: setName,
-        setCode: setCode,
-        isFoil: isFoil,
-        isSpecificVersion: !anyVersion, // Si AnyVersion est true, Specific est false
-        scryfallData: currentCardRaw,
-        // On attache l'ID de la wishlist sélectionnée
-        wishlistId: destination === 'wishlist' ? selectedListId : null 
-    };
-    
-    // On renvoie la carte ET l'ID de la liste cible
-    onConfirm(finalCard, selectedListId);
-    onClose();
-  };
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 backdrop-blur-sm animate-in fade-in duration-200">
-      <div className="bg-gray-900 w-full max-w-md rounded-2xl overflow-hidden shadow-2xl border border-gray-700 flex flex-col max-h-[90vh]">
-        
-        {/* HEADER */}
-        <div className="p-4 flex justify-between items-center border-b border-gray-800">
-            <h3 className="text-white font-bold truncate pr-4">{name}</h3>
-            <button onClick={onClose} className="text-gray-400 hover:text-white px-2 text-xl">✕</button>
-        </div>
-
-        {/* CONTENU */}
-        <div className="overflow-y-auto p-6 flex flex-col items-center space-y-6 custom-scrollbar">
-            
-            {/* IMAGE */}
-            <div className="relative w-64 aspect-[2.5/3.5] rounded-xl overflow-hidden shadow-lg ring-1 ring-white/10 group cursor-pointer" onClick={() => imageBackUrl && setIsFlipped(!isFlipped)}>
-                {loading ? (
-                    <div className="w-full h-full bg-gray-800 animate-pulse flex items-center justify-center text-gray-500">Chargement...</div>
-                ) : (
-                    <img src={isFlipped && imageBackUrl ? imageBackUrl : imageUrl} alt="" className={`w-full h-full object-cover transition-transform duration-300 ${anyVersion ? 'opacity-80 grayscale-[50%]' : ''}`} />
-                )}
-                {anyVersion && (
-                    <div className="absolute inset-0 flex items-center justify-center bg-black/40 backdrop-blur-[2px]">
-                        <span className="bg-blue-600 text-white font-bold px-3 py-1 rounded-full text-sm shadow-lg border border-white/20">✨ Générique</span>
-                    </div>
-                )}
-                {isFoil && !anyVersion && <div className="absolute inset-0 bg-gradient-to-tr from-purple-500/30 to-transparent mix-blend-overlay pointer-events-none" />}
-            </div>
-
-            {/* SÉLECTION WISHLIST (Si mode wishlist) */}
-            {destination === 'wishlist' && availableLists && availableLists.length > 0 && (
-                <div className="w-full space-y-1 bg-purple-900/20 p-3 rounded-xl border border-purple-500/30">
-                    <label className="text-xs text-purple-300 font-bold uppercase tracking-wider">Ajouter à la liste :</label>
-                    <select 
-                        value={selectedListId}
-                        onChange={(e) => setSelectedListId(e.target.value)}
-                        className="w-full bg-gray-800 text-white border border-gray-600 rounded-lg p-2 text-sm focus:ring-2 focus:ring-purple-500 outline-none"
-                    >
-                        {availableLists.map(list => (
-                            <option key={list.id} value={list.id}>{list.name}</option>
-                        ))}
-                    </select>
-                </div>
-            )}
-
-            {/* ÉDITION (Masquée si Generic) */}
-            <div className={`w-full space-y-2 transition-opacity ${anyVersion ? 'opacity-50 pointer-events-none' : 'opacity-100'}`}>
-                <label className="text-xs text-gray-400 uppercase font-bold tracking-wider">Édition / Set</label>
-                <div className="relative">
-                    <select 
-                        className="w-full bg-gray-800 text-white border border-gray-700 rounded-xl p-3 appearance-none focus:ring-2 focus:ring-blue-500 outline-none text-sm"
-                        value={selectedVersionId}
-                        onChange={(e) => { setSelectedVersionId(e.target.value); setIsFoil(false); setIsFlipped(false); }}
-                    >
-                        {versions.map((v) => (
-                            <option key={v.id} value={v.id}>{v.set_name} ({v.set.toUpperCase()}) #{v.collector_number}</option>
-                        ))}
-                    </select>
-                    <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-gray-400">▼</div>
-                </div>
-            </div>
-
-            {/* OPTIONS */}
-            <div className="w-full space-y-4">
-                {/* Switch Generic */}
-                <label className="flex items-center justify-between bg-blue-900/20 p-3 rounded-xl border border-blue-900/50 cursor-pointer hover:bg-blue-900/30 transition">
-                    <div className="flex flex-col">
-                        <span className="text-sm font-bold text-blue-100">Peu importe l&apos;édition</span>
-                        <span className="text-[10px] text-blue-300">Le scanner cherchera juste le nom &quot;{name}&quot;</span>
-                    </div>
-                    <div className="relative inline-flex items-center cursor-pointer">
-                        <input type="checkbox" className="sr-only peer" checked={anyVersion} onChange={(e) => setAnyVersion(e.target.checked)} />
-                        <div className="w-11 h-6 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
-                    </div>
-                </label>
-
-                {/* Finition & Quantité */}
-                <div className="flex gap-4">
-                    <div className={`flex-1 bg-gray-800 rounded-xl p-2 flex flex-col items-center justify-center gap-1 border border-gray-700 transition-opacity ${anyVersion ? 'opacity-30 pointer-events-none' : ''}`}>
-                        <span className="text-[10px] text-gray-400 font-bold uppercase">Finition</span>
-                        <div className="flex bg-gray-900 rounded-lg p-1 w-full">
-                            <button onClick={() => setIsFoil(false)} disabled={!hasNonFoilVersion} className={`flex-1 text-[10px] py-1 rounded transition ${!isFoil ? 'bg-gray-700 text-white font-bold' : 'text-gray-500'} ${!hasNonFoilVersion && 'opacity-30'}`}>Normal</button>
-                            <button onClick={() => setIsFoil(true)} disabled={!hasFoilVersion} className={`flex-1 text-[10px] py-1 rounded transition ${isFoil ? 'bg-purple-600 text-white font-bold' : 'text-gray-500'} ${!hasFoilVersion && 'opacity-30'}`}>Foil</button>
-                        </div>
-                    </div>
-                    <div className="flex-1 bg-gray-800 rounded-xl p-2 flex flex-col items-center justify-center gap-1 border border-gray-700">
-                         <span className="text-[10px] text-gray-400 font-bold uppercase">Quantité</span>
-                         <div className="flex items-center gap-3">
-                            <button onClick={() => setQuantity(Math.max(1, quantity - 1))} className="w-6 h-6 rounded-full bg-gray-700 text-white font-bold">-</button>
-                            <span className="text-lg font-bold text-white w-4 text-center">{quantity}</span>
-                            <button onClick={() => setQuantity(quantity + 1)} className="w-6 h-6 rounded-full bg-blue-600 text-white font-bold">+</button>
-                         </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        {/* FOOTER */}
-        <div className="p-4 bg-gray-800 border-t border-gray-700">
-            <button 
-                onClick={handleConfirm}
-                className={`w-full font-bold py-4 rounded-xl text-lg transition shadow-lg transform active:scale-95 flex justify-center items-center gap-2 ${anyVersion ? 'bg-blue-600 hover:bg-blue-500 text-white' : 'bg-amber-500 hover:bg-amber-400 text-black'}`}
-            >
-                <span>{anyVersion ? '✨ Ajouter (Générique)' : '+ Ajouter (Exact)'}</span>
-                {quantity > 1 && <span className="bg-black/20 px-2 py-0.5 rounded text-sm">{quantity}</span>}
-            </button>
-        </div>
-      </div>
-    </div>
-  );
-}
 </file>
 
 <file path="hooks/useTradeMatcher.ts">
@@ -4034,6 +3828,242 @@ export default function Header() {
 }
 </file>
 
+<file path="components/CardVersionPickerModal.tsx">
+'use client';
+
+import { useState, useEffect, useMemo } from 'react';
+import { CardType } from '@/hooks/useCardCollection';
+import { normalizeCardData, ScryfallRawData } from '@/lib/cardUtils'; 
+import { WishlistMeta } from '@/hooks/useWishlists'; 
+import toast from 'react-hot-toast';
+
+type Props = {
+  isOpen: boolean;
+  onClose: () => void;
+  baseCard: ScryfallRawData | null; 
+  onConfirm: (card: CardType, targetListId?: string) => void;
+  destination?: 'collection' | 'wishlist'; 
+  availableLists?: WishlistMeta[];
+};
+
+export default function CardVersionPickerModal({ 
+  isOpen, onClose, baseCard, onConfirm, destination, availableLists 
+}: Props) {
+  const [versions, setVersions] = useState<ScryfallRawData[]>([]);
+  const [loading, setLoading] = useState(false);
+  
+  const [selectedVersionId, setSelectedVersionId] = useState<string>('');
+  const [isFoil, setIsFoil] = useState(false);
+  const [quantity, setQuantity] = useState(1);
+  const [isFlipped, setIsFlipped] = useState(false); 
+  const [anyVersion, setAnyVersion] = useState(false);
+  
+  const [selectedListId, setSelectedListId] = useState<string>('default');
+
+  useEffect(() => {
+    const fetchVersions = async (oracleId: string) => {
+        setLoading(true);
+        try {
+          const res = await fetch(`https://api.scryfall.com/cards/search?q=oracle_id:${oracleId}&unique=prints&order=released`);
+          const data = await res.json();
+          
+          if (data.data && data.data.length > 0) {
+            setVersions(data.data); 
+            const defaultVer = data.data.find((c: ScryfallRawData) => c.id === baseCard?.id) || data.data[0];
+            setSelectedVersionId(defaultVer.id);
+          }
+        } catch (e) {
+          console.error(e);
+          toast.error("Impossible de charger les versions");
+        } finally {
+          setLoading(false);
+        }
+    };
+
+    if (isOpen && baseCard?.oracle_id) {
+      fetchVersions(baseCard.oracle_id as string);
+    }
+
+    setQuantity(1);
+    setIsFoil(false);
+    setIsFlipped(false);
+    setAnyVersion(false);
+    setSelectedListId('default'); 
+  }, [isOpen, baseCard]); 
+
+  const currentCardRaw = useMemo(() => {
+    return versions.find(v => v.id === selectedVersionId) || baseCard;
+  }, [versions, selectedVersionId, baseCard]);
+
+  if (!isOpen || !currentCardRaw) return null;
+
+  const { imageUrl, imageBackUrl, name, setName, setCode, price } = normalizeCardData(currentCardRaw);
+  
+  const priceNormal = parseFloat(currentCardRaw.prices?.eur || "0");
+  const priceFoil = parseFloat(currentCardRaw.prices?.eur_foil || "0");
+  const currentPrice = isFoil ? (priceFoil || priceNormal) : (priceNormal || priceFoil);
+  
+  const hasFoilVersion = currentCardRaw.finishes?.includes('foil') || !!currentCardRaw.prices?.eur_foil;
+  const hasNonFoilVersion = currentCardRaw.finishes?.includes('nonfoil') || !!currentCardRaw.prices?.eur;
+
+  const handleConfirm = () => {
+    const finalCard: CardType = {
+        id: currentCardRaw.id,
+        name: name,
+        imageUrl: imageUrl,
+        imageBackUrl: imageBackUrl || null,
+        quantity: quantity,
+        price: currentPrice,
+        setName: setName,
+        setCode: setCode,
+        isFoil: isFoil,
+        isSpecificVersion: !anyVersion, // Si AnyVersion est coché, Specific est false
+        scryfallData: currentCardRaw,
+        wishlistId: destination === 'wishlist' ? selectedListId : undefined 
+    };
+    
+    onConfirm(finalCard, selectedListId);
+    onClose();
+  };
+
+  // --- LOGIQUE AJOUTÉE ICI : Sélection de la version la plus récente ---
+  const handleAnyVersionChange = (checked: boolean) => {
+      setAnyVersion(checked);
+      
+      if (checked && versions.length > 0) {
+          // On trie les versions par date de sortie (la plus récente en premier)
+          // Scryfall renvoie souvent déjà trié, mais on assure le coup avec un sort JS
+          const sorted = [...versions].sort((a, b) => 
+              (b.released_at || '').localeCompare(a.released_at || '')
+          );
+          
+          const newest = sorted[0];
+          if (newest) {
+              setSelectedVersionId(newest.id);
+              // On reset les options visuelles car on change de carte
+              setIsFoil(false);
+              setIsFlipped(false);
+          }
+      }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 backdrop-blur-sm animate-in fade-in duration-200">
+      <div className="bg-gray-900 w-full max-w-md rounded-2xl overflow-hidden shadow-2xl border border-gray-700 flex flex-col max-h-[90vh]">
+        
+        {/* HEADER */}
+        <div className="p-4 flex justify-between items-center border-b border-gray-800">
+            <h3 className="text-white font-bold truncate pr-4">{name}</h3>
+            <button onClick={onClose} className="text-gray-400 hover:text-white px-2 text-xl">✕</button>
+        </div>
+
+        {/* CONTENU */}
+        <div className="overflow-y-auto p-6 flex flex-col items-center space-y-6 custom-scrollbar">
+            
+            {/* IMAGE */}
+            <div className="relative w-64 aspect-[2.5/3.5] rounded-xl overflow-hidden shadow-lg ring-1 ring-white/10 group cursor-pointer" onClick={() => imageBackUrl && setIsFlipped(!isFlipped)}>
+                {loading ? (
+                    <div className="w-full h-full bg-gray-800 animate-pulse flex items-center justify-center text-gray-500">Chargement...</div>
+                ) : (
+                    <img src={isFlipped && imageBackUrl ? imageBackUrl : imageUrl} alt="" className={`w-full h-full object-cover transition-transform duration-300 ${anyVersion ? 'opacity-80 grayscale-[50%]' : ''}`} />
+                )}
+                {anyVersion && (
+                    <div className="absolute inset-0 flex items-center justify-center bg-black/40 backdrop-blur-[2px]">
+                        <span className="bg-blue-600 text-white font-bold px-3 py-1 rounded-full text-sm shadow-lg border border-white/20">✨ Générique</span>
+                    </div>
+                )}
+                {isFoil && !anyVersion && <div className="absolute inset-0 bg-gradient-to-tr from-purple-500/30 to-transparent mix-blend-overlay pointer-events-none" />}
+            </div>
+
+            {/* SÉLECTION WISHLIST */}
+            {destination === 'wishlist' && availableLists && availableLists.length > 0 && (
+                <div className="w-full space-y-1 bg-purple-900/20 p-3 rounded-xl border border-purple-500/30">
+                    <label className="text-xs text-purple-300 font-bold uppercase tracking-wider">Ajouter à la liste :</label>
+                    <select 
+                        value={selectedListId}
+                        onChange={(e) => setSelectedListId(e.target.value)}
+                        className="w-full bg-gray-800 text-white border border-gray-600 rounded-lg p-2 text-sm focus:ring-2 focus:ring-purple-500 outline-none"
+                    >
+                        {availableLists.map(list => (
+                            <option key={list.id} value={list.id}>{list.name}</option>
+                        ))}
+                    </select>
+                </div>
+            )}
+
+            {/* ÉDITION */}
+            <div className={`w-full space-y-2 transition-opacity ${anyVersion ? 'opacity-50 pointer-events-none' : 'opacity-100'}`}>
+                <label className="text-xs text-gray-400 uppercase font-bold tracking-wider">Édition / Set</label>
+                <div className="relative">
+                    <select 
+                        className="w-full bg-gray-800 text-white border border-gray-700 rounded-xl p-3 appearance-none focus:ring-2 focus:ring-blue-500 outline-none text-sm"
+                        value={selectedVersionId}
+                        onChange={(e) => { setSelectedVersionId(e.target.value); setIsFoil(false); setIsFlipped(false); }}
+                    >
+                        {versions.map((v) => (
+                            <option key={v.id} value={v.id}>{v.set_name} ({v.set.toUpperCase()}) #{v.collector_number}</option>
+                        ))}
+                    </select>
+                    <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-gray-400">▼</div>
+                </div>
+            </div>
+
+            {/* OPTIONS */}
+            <div className="w-full space-y-4">
+                {/* Switch Generic - MODIFIÉ */}
+                <label className="flex items-center justify-between bg-blue-900/20 p-3 rounded-xl border border-blue-900/50 cursor-pointer hover:bg-blue-900/30 transition">
+                    <div className="flex flex-col">
+                        <span className="text-sm font-bold text-blue-100">Peu importe l&apos;édition</span>
+                        <span className="text-[10px] text-blue-300">Sélectionnera la version la plus récente</span>
+                    </div>
+                    <div className="relative inline-flex items-center cursor-pointer">
+                        <input 
+                            type="checkbox" 
+                            className="sr-only peer" 
+                            checked={anyVersion} 
+                            onChange={(e) => handleAnyVersionChange(e.target.checked)} 
+                        />
+                        <div className="w-11 h-6 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                    </div>
+                </label>
+
+                {/* Finition & Quantité */}
+                <div className="flex gap-4">
+                    <div className={`flex-1 bg-gray-800 rounded-xl p-2 flex flex-col items-center justify-center gap-1 border border-gray-700 transition-opacity ${anyVersion ? 'opacity-30 pointer-events-none' : ''}`}>
+                        <span className="text-[10px] text-gray-400 font-bold uppercase">Finition</span>
+                        <div className="flex bg-gray-900 rounded-lg p-1 w-full">
+                            <button onClick={() => setIsFoil(false)} disabled={!hasNonFoilVersion} className={`flex-1 text-[10px] py-1 rounded transition ${!isFoil ? 'bg-gray-700 text-white font-bold' : 'text-gray-500'} ${!hasNonFoilVersion && 'opacity-30'}`}>Normal</button>
+                            <button onClick={() => setIsFoil(true)} disabled={!hasFoilVersion} className={`flex-1 text-[10px] py-1 rounded transition ${isFoil ? 'bg-purple-600 text-white font-bold' : 'text-gray-500'} ${!hasFoilVersion && 'opacity-30'}`}>Foil</button>
+                        </div>
+                    </div>
+                    <div className="flex-1 bg-gray-800 rounded-xl p-2 flex flex-col items-center justify-center gap-1 border border-gray-700">
+                         <span className="text-[10px] text-gray-400 font-bold uppercase">Quantité</span>
+                         <div className="flex items-center gap-3">
+                            <button onClick={() => setQuantity(Math.max(1, quantity - 1))} className="w-6 h-6 rounded-full bg-gray-700 text-white font-bold">-</button>
+                            <span className="text-lg font-bold text-white w-4 text-center">{quantity}</span>
+                            <button onClick={() => setQuantity(quantity + 1)} className="w-6 h-6 rounded-full bg-blue-600 text-white font-bold">+</button>
+                         </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        {/* FOOTER */}
+        <div className="p-4 bg-gray-800 border-t border-gray-700">
+            <button 
+                onClick={handleConfirm}
+                className={`w-full font-bold py-4 rounded-xl text-lg transition shadow-lg transform active:scale-95 flex justify-center items-center gap-2 ${anyVersion ? 'bg-blue-600 hover:bg-blue-500 text-white' : 'bg-amber-500 hover:bg-amber-400 text-black'}`}
+            >
+                <span>{anyVersion ? '✨ Ajouter (Générique)' : '+ Ajouter (Exact)'}</span>
+                {quantity > 1 && <span className="bg-black/20 px-2 py-0.5 rounded text-sm">{quantity}</span>}
+            </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+</file>
+
 <file path="hooks/useCardCollection.ts">
 // hooks/useCardCollection.ts
 import { useState, useEffect, useMemo } from 'react';
@@ -4053,7 +4083,7 @@ export type CardType = {
   id: string;
   name: string;
   imageUrl: string;
-  imageBackUrl?: string;
+  imageBackUrl?: string | null;
   quantity: number;
   price?: number; 
   customPrice?: number;
@@ -4608,8 +4638,11 @@ export default function CollectionPage() {
 
   // Reset pagination quand on filtre/trie
   useEffect(() => {
-    // CORRECTION : Évite le set inutile
-    setVisibleCount(prev => (prev !== ITEMS_PER_PAGE ? ITEMS_PER_PAGE : prev));
+    // On ne met à jour QUE si la valeur n'est pas déjà celle par défaut
+    if (visibleCount !== ITEMS_PER_PAGE) {
+      setVisibleCount(ITEMS_PER_PAGE);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchQuery, sortBy, filterSet, filterTrade, filterFoil]);
 
   const filteredAndSortedCards = useMemo(() => {

@@ -11,12 +11,11 @@ import { CardType } from '@/hooks/useCardCollection';
 
 export default function DashboardPage() {
   const { user, loading: authLoading, friendRequestCount, username } = useAuth();
-  const { totalPrice, cards } = useCardCollection('collection'); // Pour la valeur totale et stats
-  const { incomingTrades, outgoingTrades } = useTradeSystem(); // Pour les notifs d'échange
+  const { totalPrice, cards } = useCardCollection('collection'); 
+  const { incomingTrades, outgoingTrades } = useTradeSystem(); 
   
   const [recentCards, setRecentCards] = useState<CardType[]>([]);
 
-  // Charger les 5 dernières cartes ajoutées (Optimisation : requête dédiée)
   useEffect(() => {
     const fetchRecent = async () => {
       if (!user) return;
@@ -33,9 +32,8 @@ export default function DashboardPage() {
     fetchRecent();
   }, [user]);
 
-  if (authLoading) return <div className="flex h-screen items-center justify-center animate-pulse">Chargement MagicWish...</div>;
+  if (authLoading) return <div className="flex h-screen items-center justify-center animate-pulse">Chargement...</div>;
 
-  // Si pas connecté, Landing Page simple
   if (!user) {
     return (
       <div className="flex flex-col items-center justify-center min-h-[80vh] text-center p-4">
@@ -43,7 +41,7 @@ export default function DashboardPage() {
           MagicWish
         </h1>
         <p className="text-xl text-gray-600 dark:text-gray-300 max-w-lg mb-8">
-          Gérez votre collection Magic: The Gathering, créez vos wishlists et trouvez automatiquement des échanges avec vos amis.
+          Gerez votre collection Magic: The Gathering, creez vos wishlists et trouvez automatiquement des echanges avec vos amis.
         </p>
         <Link 
           href="/login"
@@ -55,64 +53,52 @@ export default function DashboardPage() {
     );
   }
 
-  // --- DASHBOARD CONNECTÉ ---
   return (
     <main className="container mx-auto p-4 max-w-5xl">
       <div className="mb-8">
         <h1 className="text-3xl font-bold text-gray-900 dark:text-white">
-          Bonjour, <span className="text-blue-600">{username || user.displayName}</span> 👋
+          Bonjour, <span className="text-blue-600">{username || user.displayName}</span>
         </h1>
         <p className="text-gray-500">Voici ce qui se passe sur votre compte.</p>
       </div>
 
-      {/* 1. BLOCS DE STATUTS (Alertes) */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
-        
-        {/* CARTE : ÉCHANGES */}
         <Link href="/trades" className={`p-6 rounded-2xl border transition shadow-sm hover:shadow-md ${incomingTrades.length > 0 ? 'bg-orange-50 border-orange-200 dark:bg-orange-900/20 dark:border-orange-800' : 'bg-white border-gray-100 dark:bg-gray-800 dark:border-gray-700'}`}>
             <div className="flex justify-between items-start mb-2">
-                <span className="text-2xl">🤝</span>
+                <span className="font-bold text-lg">Echanges</span>
                 {incomingTrades.length > 0 && <span className="bg-orange-500 text-white text-xs font-bold px-2 py-1 rounded-full">{incomingTrades.length} Attente</span>}
             </div>
-            <h3 className="font-bold text-lg mb-1">Échanges</h3>
             <p className="text-sm text-gray-500">
                 {incomingTrades.length > 0 
-                    ? "Vous avez des propositions à valider !" 
-                    : `${outgoingTrades.length} propositions envoyées.`}
+                    ? "Vous avez des propositions a valider !" 
+                    : `${outgoingTrades.length} propositions envoyees.`}
             </p>
         </Link>
 
-        {/* CARTE : AMIS */}
         <Link href="/contacts" className={`p-6 rounded-2xl border transition shadow-sm hover:shadow-md ${friendRequestCount > 0 ? 'bg-blue-50 border-blue-200 dark:bg-blue-900/20 dark:border-blue-800' : 'bg-white border-gray-100 dark:bg-gray-800 dark:border-gray-700'}`}>
             <div className="flex justify-between items-start mb-2">
-                <span className="text-2xl">👥</span>
-                {friendRequestCount > 0 && <span className="bg-blue-500 text-white text-xs font-bold px-2 py-1 rounded-full">{friendRequestCount} Reçues</span>}
+                <span className="font-bold text-lg">Contacts</span>
+                {friendRequestCount > 0 && <span className="bg-blue-500 text-white text-xs font-bold px-2 py-1 rounded-full">{friendRequestCount} Recues</span>}
             </div>
-            <h3 className="font-bold text-lg mb-1">Contacts</h3>
             <p className="text-sm text-gray-500">
                 {friendRequestCount > 0 
                     ? "De nouveaux joueurs veulent vous ajouter." 
-                    : "Gérez votre liste d'amis."}
+                    : "Gerez votre liste d'amis."}
             </p>
         </Link>
 
-        {/* CARTE : VALEUR */}
         <Link href="/collection" className="p-6 rounded-2xl border border-gray-100 dark:border-gray-700 bg-white dark:bg-gray-800 transition shadow-sm hover:shadow-md group">
             <div className="flex justify-between items-start mb-2">
-                <span className="text-2xl">📈</span>
-                <span className="text-green-600 font-bold bg-green-50 dark:bg-green-900/30 px-2 py-1 rounded text-xs">Total</span>
+                <span className="font-bold text-lg">Total</span>
+                <span className="text-green-600 font-bold bg-green-50 dark:bg-green-900/30 px-2 py-1 rounded text-xs">{totalPrice.toFixed(2)} EUR</span>
             </div>
-            <h3 className="font-bold text-lg mb-1">{totalPrice.toFixed(2)} €</h3>
             <p className="text-sm text-gray-500 group-hover:text-blue-500 transition-colors">
-                Valeur estimée de vos {cards.length} cartes.
+                Valeur estimee de vos {cards.length} cartes.
             </p>
         </Link>
       </div>
 
-      {/* 2. DERNIERS AJOUTS & ACTIONS RAPIDES */}
       <div className="grid lg:grid-cols-3 gap-8">
-          
-          {/* COLONNE GAUCHE : Derniers ajouts */}
           <div className="lg:col-span-2 space-y-4">
               <div className="flex justify-between items-center">
                   <h2 className="font-bold text-lg">Derniers ajouts</h2>
@@ -132,10 +118,10 @@ export default function DashboardPage() {
                               </div>
                               <div className="flex-grow">
                                   <p className="font-bold text-sm text-gray-900 dark:text-white">{card.name}</p>
-                                  <p className="text-xs text-gray-500">{card.setName} {card.isFoil && '✨ Foil'}</p>
+                                  <p className="text-xs text-gray-500">{card.setName} {card.isFoil && 'Foil'}</p>
                               </div>
                               <div className="text-right">
-                                  <span className="font-bold text-gray-700 dark:text-gray-300 text-sm">{(card.customPrice ?? card.price ?? 0).toFixed(2)} €</span>
+                                  <span className="font-bold text-gray-700 dark:text-gray-300 text-sm">{(card.customPrice ?? card.price ?? 0).toFixed(2)} EUR</span>
                               </div>
                           </div>
                       ))
@@ -143,34 +129,28 @@ export default function DashboardPage() {
               </div>
           </div>
 
-          {/* COLONNE DROITE : Actions */}
           <div className="space-y-6">
-              
-              {/* Box Raccourcis */}
               <div className="bg-gradient-to-br from-purple-600 to-blue-600 rounded-xl p-6 text-white shadow-lg">
                   <h3 className="font-bold text-lg mb-2">Action Rapide</h3>
                   <p className="text-white/80 text-sm mb-6">Vous revenez de tournoi ou d&apos;ouverture de boosters ?</p>
                   
-                  {/* MODIFICATION ICI : Lien vers /search au lieu de /collection */}
                   <Link href="/search" className="block w-full bg-white text-blue-600 font-bold text-center py-3 rounded-lg hover:bg-gray-50 transition shadow-sm">
-                      + Ajouter des cartes
+                      Ajouter des cartes
                   </Link>
                   <Link href="/trades/manual" className="block w-full mt-3 bg-blue-700 hover:bg-blue-800 text-white font-bold text-center py-3 rounded-lg border border-blue-500 transition">
-                      🖐️ Échange Manuel
+                      Echange Manuel
                   </Link>
               </div>
 
-              {/* Box Wishlist Suggestion (Statique pour l'instant) */}
               <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-100 dark:border-gray-700 p-6">
-                  <h3 className="font-bold text-gray-900 dark:text-white mb-2">Astuce 💡</h3>
+                  <h3 className="font-bold text-gray-900 dark:text-white mb-2">Astuce</h3>
                   <p className="text-sm text-gray-500 mb-4">
-                      Remplissez votre Wishlist pour permettre au scanner de trouver des échanges automatiquement avec vos amis.
+                      Remplissez votre Wishlist pour permettre au scanner de trouver des echanges automatiquement avec vos amis.
                   </p>
                   <Link href="/wishlist" className="text-sm font-bold text-purple-600 hover:text-purple-700">
-                      Gérer ma Wishlist →
+                      Gerer ma Wishlist
                   </Link>
               </div>
-
           </div>
       </div>
     </main>

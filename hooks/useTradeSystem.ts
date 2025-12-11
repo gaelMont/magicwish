@@ -1,4 +1,3 @@
-// hooks/useTradeSystem.ts
 import { useState, useEffect } from 'react';
 import { db } from '@/lib/firebase';
 import { 
@@ -44,7 +43,6 @@ export function useTradeSystem() {
   const [loading, setLoading] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
 
-  // 1. Écouter les échanges
   useEffect(() => {
     if (!user) return;
 
@@ -74,7 +72,6 @@ export function useTradeSystem() {
     return () => { unsubIn(); unsubOut(); };
   }, [user]);
 
-  // 2. Proposer
   const proposeTrade = async (receiverUid: string, receiverName: string, toGive: CardType[], toReceive: CardType[]) => {
     if (!user) return;
     const toastId = toast.loading("Envoi de la proposition...");
@@ -93,7 +90,7 @@ export function useTradeSystem() {
         status: 'pending',
         createdAt: serverTimestamp()
       });
-      toast.success("Proposition envoyée !", { id: toastId });
+      toast.success("Proposition envoyee !", { id: toastId });
       return true;
     } catch (e) {
       console.error("Erreur Firestore:", e);
@@ -102,12 +99,11 @@ export function useTradeSystem() {
     }
   };
 
-  // 3. Accepter
   const acceptTrade = async (trade: TradeRequest) => {
     if (!user) return;
     
     setIsProcessing(true);
-    const toastId = toast.loading("Validation sécurisée en cours...");
+    const toastId = toast.loading("Validation securisee en cours...");
 
     try {
         const result = await executeServerTrade(
@@ -119,15 +115,15 @@ export function useTradeSystem() {
 
         if (result.success) {
             await updateDoc(doc(db, 'trades', trade.id), { status: 'completed' });
-            toast.success("Échange terminé avec succès !", { id: toastId });
+            toast.success("Echange termine avec succes !", { id: toastId });
         } else {
             throw new Error(result.error || "Erreur serveur inconnue");
         }
 
-    } catch (error: unknown) { // CORRECTION ICI : unknown au lieu de any
+    } catch (error: unknown) { 
         console.error("Erreur Accept Trade:", error);
         
-        let msg = "Échec de l'échange";
+        let msg = "Echec de l'echange";
         if (error instanceof Error) {
             msg = error.message;
         } else if (typeof error === "string") {
@@ -140,17 +136,16 @@ export function useTradeSystem() {
     }
   };
 
-  // 4. Refuser / Annuler
   const rejectTrade = async (tradeId: string) => {
-    if(!confirm("Refuser cet échange ?")) return;
+    if(!confirm("Refuser cet echange ?")) return;
     await updateDoc(doc(db, 'trades', tradeId), { status: 'rejected' });
-    toast.success("Échange refusé");
+    toast.success("Echange refuse");
   };
 
   const cancelTrade = async (tradeId: string) => {
     if(!confirm("Annuler cette proposition ?")) return;
     await updateDoc(doc(db, 'trades', tradeId), { status: 'cancelled' });
-    toast.success("Proposition annulée");
+    toast.success("Proposition annulee");
   };
 
   return { 

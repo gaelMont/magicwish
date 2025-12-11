@@ -1,4 +1,3 @@
-// app/trades/page.tsx
 'use client';
 
 import { useState } from 'react';
@@ -9,7 +8,6 @@ import Link from 'next/link';
 import { useCardCollection, CardType } from '@/hooks/useCardCollection'; 
 import MagicCard from '@/components/MagicCard'; 
 
-// --- COMPOSANT : CARTE DE DEMANDE (INBOX) ---
 const IncomingRequestCard = ({ trade }: { trade: TradeRequest }) => {
     const { acceptTrade, rejectTrade, isProcessing } = useTradeSystem();
     const [isOpen, setIsOpen] = useState(false);
@@ -23,13 +21,13 @@ const IncomingRequestCard = ({ trade }: { trade: TradeRequest }) => {
                 <div>
                     <h3 className="font-bold text-gray-900 dark:text-white">Proposition de {trade.senderName}</h3>
                     <p className="text-sm text-gray-500">
-                        Tu reçois <span className="text-green-600 font-bold">{trade.itemsGiven.length} cartes</span> (~{valReceive.toFixed(0)}€) 
-                        contre <span className="text-red-600 font-bold">{trade.itemsReceived.length} cartes</span> (~{valGive.toFixed(0)}€)
+                        Tu recois <span className="text-green-600 font-bold">{trade.itemsGiven.length} cartes</span> (~{valReceive.toFixed(0)}EUR) 
+                        contre <span className="text-red-600 font-bold">{trade.itemsReceived.length} cartes</span> (~{valGive.toFixed(0)}EUR)
                     </p>
                 </div>
                 <div className="flex gap-2">
                     <button onClick={() => setIsOpen(!isOpen)} className="text-sm text-gray-500 underline mr-2">
-                        {isOpen ? 'Masquer' : 'Détails'}
+                        {isOpen ? 'Masquer' : 'Details'}
                     </button>
                     <button 
                         onClick={() => rejectTrade(trade.id)}
@@ -43,7 +41,7 @@ const IncomingRequestCard = ({ trade }: { trade: TradeRequest }) => {
                         disabled={isProcessing}
                         className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition shadow-sm"
                     >
-                        {isProcessing ? '...' : 'Accepter & Échanger'}
+                        {isProcessing ? '...' : 'Accepter & Echanger'}
                     </button>
                 </div>
             </div>
@@ -51,7 +49,7 @@ const IncomingRequestCard = ({ trade }: { trade: TradeRequest }) => {
             {isOpen && (
                 <div className="mt-4 pt-4 border-t border-gray-100 dark:border-gray-700 grid md:grid-cols-2 gap-4">
                     <div className="bg-green-50/50 p-3 rounded">
-                        <p className="text-xs font-bold text-green-700 mb-2">⬇️ Tu vas recevoir :</p>
+                        <p className="text-xs font-bold text-green-700 mb-2">Tu vas recevoir :</p>
                         <div className="flex flex-wrap gap-2">
                             {trade.itemsGiven.map((c: CardType) => (
                                 <div key={c.id} className="relative group w-12 h-16 bg-gray-200 rounded overflow-hidden">
@@ -62,7 +60,7 @@ const IncomingRequestCard = ({ trade }: { trade: TradeRequest }) => {
                         </div>
                     </div>
                     <div className="bg-red-50/50 p-3 rounded">
-                        <p className="text-xs font-bold text-red-700 mb-2">⬆️ Tu vas donner :</p>
+                        <p className="text-xs font-bold text-red-700 mb-2">Tu vas donner :</p>
                          <div className="flex flex-wrap gap-2">
                             {trade.itemsReceived.map((c: CardType) => (
                                 <div key={c.id} className="relative group w-12 h-16 bg-gray-200 rounded overflow-hidden">
@@ -78,7 +76,6 @@ const IncomingRequestCard = ({ trade }: { trade: TradeRequest }) => {
     );
 };
 
-// --- COMPOSANT : LIGNE DE SCANNER ---
 const TradeRowProposal = ({ proposal, onProposalSent }: { proposal: TradeProposal, onProposalSent: () => void }) => {
     const { setCustomPrice } = useCardCollection('collection');
     const { proposeTrade } = useTradeSystem(); 
@@ -113,7 +110,7 @@ const TradeRowProposal = ({ proposal, onProposalSent }: { proposal: TradeProposa
                     onClick={handlePropose}
                     className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg font-bold shadow-sm transition text-sm flex items-center gap-2"
                 >
-                    📤 Proposer l&apos;échange
+                    Proposer l&apos;echange
                 </button>
             </div>
 
@@ -121,7 +118,7 @@ const TradeRowProposal = ({ proposal, onProposalSent }: { proposal: TradeProposa
                 <div className="p-4 bg-red-50/30 dark:bg-red-900/10">
                     <h3 className="font-bold text-red-600 dark:text-red-400 mb-4 flex justify-between">
                         Tu donnerais ({proposal.toGive.length})
-                        <span className="text-sm bg-white dark:bg-gray-800 px-2 py-1 rounded shadow-sm">{totalGive.toFixed(2)} €</span>
+                        <span className="text-sm bg-white dark:bg-gray-800 px-2 py-1 rounded shadow-sm">{totalGive.toFixed(2)} EUR</span>
                     </h3>
                     <div className="space-y-3">
                         {proposal.toGive.map(card => (
@@ -136,7 +133,7 @@ const TradeRowProposal = ({ proposal, onProposalSent }: { proposal: TradeProposa
                 <div className="p-4 bg-green-50/30 dark:bg-green-900/10">
                     <h3 className="font-bold text-green-600 dark:text-green-400 mb-4 flex justify-between">
                         Tu recevrais ({proposal.toReceive.length})
-                        <span className="text-sm bg-white dark:bg-gray-800 px-2 py-1 rounded shadow-sm">{totalReceive.toFixed(2)} €</span>
+                        <span className="text-sm bg-white dark:bg-gray-800 px-2 py-1 rounded shadow-sm">{totalReceive.toFixed(2)} EUR</span>
                     </h3>
                     <div className="space-y-3">
                          {proposal.toReceive.map(card => (
@@ -147,7 +144,7 @@ const TradeRowProposal = ({ proposal, onProposalSent }: { proposal: TradeProposa
             </div>
             
             <div className="p-2 text-center text-xs text-gray-400 border-t border-gray-100 dark:border-gray-700">
-                Balance : {delta.toFixed(2)} €
+                Balance : {delta.toFixed(2)} EUR
             </div>
         </div>
     );
@@ -162,43 +159,39 @@ export default function TradesPage() {
   if (!user) return <div className="p-10 text-center">Connectez-vous.</div>;
 
   return (
-    // CONTENEUR FIXE
     <main className="container mx-auto p-4 max-w-5xl h-[calc(100vh-64px)] flex flex-col">
         
-        {/* HEADER & TABS (FIXE) */}
         <div className="flex-none flex flex-col md:flex-row justify-between items-end mb-4 gap-4 border-b border-gray-200 dark:border-gray-700 pb-4">
             <div>
-                <h1 className="text-3xl font-bold text-purple-600 dark:text-purple-400">🤝 Centre d&apos;Échanges</h1>
+                <h1 className="text-3xl font-bold text-purple-600 dark:text-purple-400">Centre d&apos;Echanges</h1>
             </div>
             <div className="flex gap-4">
                 <button 
                     onClick={() => setActiveTab('scan')}
                     className={`pb-2 px-2 font-bold transition ${activeTab === 'scan' ? 'text-purple-600 border-b-2 border-purple-600' : 'text-gray-500 hover:text-gray-700'}`}
                 >
-                    🔍 Scanner ({proposals.length})
+                    Scanner ({proposals.length})
                 </button>
                 <button 
                     onClick={() => setActiveTab('requests')}
                     className={`pb-2 px-2 font-bold transition relative ${activeTab === 'requests' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-500 hover:text-gray-700'}`}
                 >
-                    📬 Demandes 
+                    Demandes 
                     {incomingTrades.length > 0 && <span className="ml-2 bg-red-500 text-white text-[10px] px-1.5 rounded-full align-top">{incomingTrades.length}</span>}
                 </button>
             </div>
         </div>
 
-        {/* CONTENU SCROLLABLE */}
         <div className="grow overflow-y-auto custom-scrollbar pb-10">
             
-            {/* --- TAB 1 : SCANNER --- */}
             {activeTab === 'scan' && (
                 <div className="animate-in fade-in">
                     <div className="flex justify-end mb-6 gap-2 sticky top-0 bg-white/80 dark:bg-gray-900/80 backdrop-blur-sm z-10 py-2">
                          <Link href="/trades/manual" className="bg-gray-100 hover:bg-gray-200 text-gray-800 px-4 py-2 rounded-lg font-bold transition text-sm flex items-center">
-                            🖐️ Mode Manuel
+                            Mode Manuel
                         </Link>
                         <button onClick={runScan} disabled={loading} className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg font-bold shadow transition text-sm disabled:opacity-50">
-                            {loading ? status : "🚀 Lancer le Scanner"}
+                            {loading ? status : "Lancer le Scanner"}
                         </button>
                     </div>
 
@@ -216,13 +209,11 @@ export default function TradesPage() {
                 </div>
             )}
 
-            {/* --- TAB 2 : DEMANDES (INBOX) --- */}
             {activeTab === 'requests' && (
                 <div className="animate-in fade-in space-y-8">
                     
-                    {/* 1. REÇUES */}
                     <div>
-                        <h2 className="font-bold text-gray-500 uppercase text-xs mb-4 sticky top-0 bg-white dark:bg-gray-900 py-2 z-10">À traiter ({incomingTrades.length})</h2>
+                        <h2 className="font-bold text-gray-500 uppercase text-xs mb-4 sticky top-0 bg-white dark:bg-gray-900 py-2 z-10">A traiter ({incomingTrades.length})</h2>
                         {incomingTrades.length === 0 && <p className="text-gray-400 italic text-sm">Aucune demande en attente.</p>}
                         
                         {incomingTrades.map((trade: TradeRequest) => (
@@ -230,15 +221,14 @@ export default function TradesPage() {
                         ))}
                     </div>
 
-                    {/* 2. ENVOYÉES */}
                     <div>
-                        <h2 className="font-bold text-gray-500 uppercase text-xs mb-4 pt-4 border-t dark:border-gray-700">En attente de réponse ({outgoingTrades.length})</h2>
+                        <h2 className="font-bold text-gray-500 uppercase text-xs mb-4 pt-4 border-t dark:border-gray-700">En attente de reponse ({outgoingTrades.length})</h2>
                         {outgoingTrades.length === 0 && <p className="text-gray-400 italic text-sm">Aucune proposition en cours.</p>}
                         
                         {outgoingTrades.map((trade: TradeRequest) => (
                              <div key={trade.id} className="flex justify-between items-center p-3 bg-gray-50 dark:bg-gray-800/50 rounded-lg border border-gray-100 dark:border-gray-700 mb-2">
                                 <span className="text-sm text-gray-600 dark:text-gray-300">
-                                    Envoyée à <span className="font-bold">{trade.receiverName}</span> (le {new Date(trade.createdAt?.seconds * 1000).toLocaleDateString()})
+                                    Envoyee a <span className="font-bold">{trade.receiverName}</span> (le {new Date(trade.createdAt?.seconds * 1000).toLocaleDateString()})
                                 </span>
                                 <button onClick={() => cancelTrade(trade.id)} className="text-xs text-red-500 hover:underline">Annuler</button>
                             </div>

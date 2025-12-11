@@ -1,4 +1,3 @@
-// components/MagicCard.tsx
 'use client';
 
 import { useState, useEffect, memo } from 'react';
@@ -55,7 +54,6 @@ function MagicCard(props: MagicCardProps) {
   useEffect(() => {
     if (!isEditingPrice) {
         const newVal = customPrice?.toString() || price?.toString() || "0";
-        // CORRECTION ICI : Vérifier avant d'appliquer
         setTempPrice(prev => (prev !== newVal ? newVal : prev));
     }
   }, [customPrice, price, isEditingPrice]);
@@ -79,23 +77,22 @@ function MagicCard(props: MagicCardProps) {
       }
   };
 
-  // --- VUE LISTE (TRADE) ---
   if (isTradeView) {
       return (
         <div className="flex items-center gap-3 bg-white dark:bg-gray-800 p-2 rounded-lg border border-gray-100 dark:border-gray-700 content-visibility-auto">
             <div className="w-10 h-14 bg-gray-200 rounded overflow-hidden flex-shrink-0 relative group cursor-pointer" onClick={() => setIsFlipped(!isFlipped)}>
                  <img src={currentImage} className="w-full h-full object-cover" alt={name} loading="lazy" />
-                 {isFoil && <div className="absolute top-0 right-0 bg-purple-600/80 text-white text-[8px] px-1 font-bold">✨</div>}
+                 {isFoil && <div className="absolute top-0 right-0 bg-purple-600/80 text-white text-[8px] px-1 font-bold">FOIL</div>}
             </div>
             
             <div className="flex-grow min-w-0">
                 <div className="flex items-center gap-2">
                     <p className="font-bold text-sm truncate" title={name}>{name}</p>
-                    {isFoil && <span className="text-xs" title="Foil">✨</span>}
+                    {isFoil && <span className="text-xs font-bold text-purple-600">FOIL</span>}
                 </div>
                 <div className="flex items-center gap-2 text-xs text-gray-500">
                     <p className="truncate">{setName}</p>
-                    {isSpecificVersion && <span className="bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300 px-1 rounded text-[9px] border border-blue-200" title="Édition exacte requise">🔒 EXACT</span>}
+                    {isSpecificVersion && <span className="bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300 px-1 rounded text-[9px] border border-blue-200">EXACT</span>}
                 </div>
             </div>
 
@@ -109,9 +106,9 @@ function MagicCard(props: MagicCardProps) {
                     <div 
                         className={`font-bold text-sm ${customPrice ? 'text-orange-600' : 'text-gray-700 dark:text-gray-300'} ${allowPriceEdit ? 'cursor-pointer hover:underline' : ''}`}
                         onClick={() => { if (allowPriceEdit) { setTempPrice(effectivePrice.toString()); setIsEditingPrice(true); }}}
-                        title={customPrice ? "Prix personnalisé" : "Prix Scryfall"}
+                        title={customPrice ? "Prix personnalise" : "Prix Scryfall"}
                     >
-                        {effectivePrice.toFixed(2)} €
+                        {effectivePrice.toFixed(2)} EUR
                         {customPrice && <span className="text-[8px] align-top ml-0.5">*</span>}
                     </div>
                 )}
@@ -120,7 +117,6 @@ function MagicCard(props: MagicCardProps) {
       );
   }
 
-  // --- VUE NORMALE (GRILLE) ---
   return (
     <div 
         onClick={handleCardClick}
@@ -137,14 +133,14 @@ function MagicCard(props: MagicCardProps) {
       
       {!readOnly && !isSelectMode && isWishlist && onMove && (
         <div className="absolute top-2 left-2 right-2 flex justify-end z-20 pointer-events-none">
-            <button onClick={(e) => { e.stopPropagation(); onMove(); }} className="pointer-events-auto p-1.5 bg-green-100 text-green-700 hover:bg-green-600 hover:text-white rounded-full transition opacity-100 md:opacity-0 md:group-hover:opacity-100 shadow-sm" title="Déplacer vers Collection">📦</button>
+            <button onClick={(e) => { e.stopPropagation(); onMove(); }} className="pointer-events-auto p-1.5 bg-green-100 text-green-700 hover:bg-green-600 hover:text-white rounded-full transition opacity-100 md:opacity-0 md:group-hover:opacity-100 shadow-sm text-xs font-bold">Deplacer</button>
         </div>
       )}
 
       {isSelectMode && (
           <div className="absolute top-2 right-2 z-30 pointer-events-none">
               <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center transition-colors shadow-sm ${isSelected ? 'bg-blue-600 border-blue-600' : 'bg-white/90 border-gray-400'}`}>
-                  {isSelected && <span className="text-white text-sm font-bold">✓</span>}
+                  {isSelected && <span className="text-white text-sm font-bold">V</span>}
               </div>
           </div>
       )}
@@ -160,8 +156,8 @@ function MagicCard(props: MagicCardProps) {
         {isFoil && <div className="absolute inset-0 bg-gradient-to-tr from-purple-500/20 to-transparent pointer-events-none mix-blend-overlay"></div>}
 
         {imageBackUrl && !isSelectMode && (
-          <button onClick={(e) => { e.stopPropagation(); setIsFlipped(!isFlipped); }} className="absolute top-1/2 right-2 -translate-y-1/2 bg-black/50 hover:bg-black/80 text-white p-2 rounded-full backdrop-blur-sm transition-all shadow-lg border border-white/20 z-10 pointer-events-auto">
-            🔄
+          <button onClick={(e) => { e.stopPropagation(); setIsFlipped(!isFlipped); }} className="absolute top-1/2 right-2 -translate-y-1/2 bg-black/50 hover:bg-black/80 text-white p-2 rounded-full backdrop-blur-sm transition-all shadow-lg border border-white/20 z-10 pointer-events-auto font-bold text-xs">
+            FLIP
           </button>
         )}
       </div>
@@ -184,9 +180,9 @@ function MagicCard(props: MagicCardProps) {
                         : 'bg-gray-50 text-gray-400 border-gray-200 hover:bg-gray-100 dark:bg-gray-800 dark:border-gray-600'
                     }`}
                 >
-                    {isFoil ? '✨ Foil' : 'Normal'}
+                    {isFoil ? 'Foil' : 'Normal'}
                 </button>
-            ) : isFoil && ( <span className="text-[10px] bg-purple-100 text-purple-700 px-2 py-0.5 rounded border border-purple-200 font-medium">✨ Foil</span> )}
+            ) : isFoil && ( <span className="text-[10px] bg-purple-100 text-purple-700 px-2 py-0.5 rounded border border-purple-200 font-medium">Foil</span> )}
 
             {isWishlist ? (
                 onToggleAttribute && (
@@ -196,7 +192,7 @@ function MagicCard(props: MagicCardProps) {
                             isSpecificVersion ? 'bg-blue-100 text-blue-700 border-blue-200' : 'bg-gray-50 text-gray-400 border-gray-200'
                         }`}
                     >
-                        {isSpecificVersion ? '🔒 Exact' : 'Auto'}
+                        {isSpecificVersion ? 'Exact' : 'Auto'}
                     </button>
                 )
             ) : (
@@ -209,7 +205,7 @@ function MagicCard(props: MagicCardProps) {
                             : 'bg-gray-50 text-gray-400 border-gray-200 hover:bg-gray-100 dark:bg-gray-800 dark:border-gray-600'
                         }`}
                     >
-                        {isForTrade ? '🤝 Échange' : 'Privé'}
+                        {isForTrade ? 'Echange' : 'Prive'}
                     </button>
                 )
             )}
@@ -218,9 +214,9 @@ function MagicCard(props: MagicCardProps) {
                 <button 
                     onClick={(e) => { e.stopPropagation(); onMove(); }}
                     className="text-[10px] px-2 py-0.5 rounded border transition-colors font-bold flex-1 text-center bg-green-50 text-green-700 border-green-200 hover:bg-green-100 dark:bg-green-900/30 dark:text-green-300 dark:border-green-800"
-                    title="Déplacer vers Collection"
+                    title="Deplacer vers Collection"
                 >
-                    📥 J&apos;ai acheté
+                    Achete
                 </button>
             )}
         </div>
@@ -233,9 +229,9 @@ function MagicCard(props: MagicCardProps) {
           </div>
           
           <div className="text-right">
-             <p className="text-[10px] text-gray-400">Unit: {effectivePrice.toFixed(2)}€</p>
+             <p className="text-[10px] text-gray-400">Unit: {effectivePrice.toFixed(2)}</p>
              <p className={`font-bold text-sm ${customPrice ? 'text-orange-600' : 'text-gray-700 dark:text-gray-200'}`}>
-                 {(effectivePrice * quantity).toFixed(2)} €
+                 {(effectivePrice * quantity).toFixed(2)} EUR
              </p>
           </div>
         </div>
@@ -244,5 +240,4 @@ function MagicCard(props: MagicCardProps) {
   );
 }
 
-// Utilisation de memo pour éviter les re-renders inutiles
 export default memo(MagicCard);

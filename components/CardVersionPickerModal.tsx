@@ -86,7 +86,7 @@ export default function CardVersionPickerModal({
         setName: setName,
         setCode: setCode,
         isFoil: isFoil,
-        isSpecificVersion: !anyVersion, // Si AnyVersion est coché, Specific est false
+        isSpecificVersion: !anyVersion,
         scryfallData: currentCardRaw,
         wishlistId: destination === 'wishlist' ? selectedListId : undefined 
     };
@@ -95,13 +95,10 @@ export default function CardVersionPickerModal({
     onClose();
   };
 
-  // --- LOGIQUE AJOUTÉE ICI : Sélection de la version la plus récente ---
   const handleAnyVersionChange = (checked: boolean) => {
       setAnyVersion(checked);
       
       if (checked && versions.length > 0) {
-          // On trie les versions par date de sortie (la plus récente en premier)
-          // Scryfall renvoie souvent déjà trié, mais on assure le coup avec un sort JS
           const sorted = [...versions].sort((a, b) => 
               (b.released_at || '').localeCompare(a.released_at || '')
           );
@@ -109,7 +106,6 @@ export default function CardVersionPickerModal({
           const newest = sorted[0];
           if (newest) {
               setSelectedVersionId(newest.id);
-              // On reset les options visuelles car on change de carte
               setIsFoil(false);
               setIsFlipped(false);
           }
@@ -120,16 +116,13 @@ export default function CardVersionPickerModal({
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 backdrop-blur-sm animate-in fade-in duration-200">
       <div className="bg-gray-900 w-full max-w-md rounded-2xl overflow-hidden shadow-2xl border border-gray-700 flex flex-col max-h-[90vh]">
         
-        {/* HEADER */}
         <div className="p-4 flex justify-between items-center border-b border-gray-800">
             <h3 className="text-white font-bold truncate pr-4">{name}</h3>
-            <button onClick={onClose} className="text-gray-400 hover:text-white px-2 text-xl">✕</button>
+            <button onClick={onClose} className="text-gray-400 hover:text-white px-2 text-xl">X</button>
         </div>
 
-        {/* CONTENU */}
         <div className="overflow-y-auto p-6 flex flex-col items-center space-y-6 custom-scrollbar">
             
-            {/* IMAGE */}
             <div className="relative w-64 aspect-[2.5/3.5] rounded-xl overflow-hidden shadow-lg ring-1 ring-white/10 group cursor-pointer" onClick={() => imageBackUrl && setIsFlipped(!isFlipped)}>
                 {loading ? (
                     <div className="w-full h-full bg-gray-800 animate-pulse flex items-center justify-center text-gray-500">Chargement...</div>
@@ -138,16 +131,15 @@ export default function CardVersionPickerModal({
                 )}
                 {anyVersion && (
                     <div className="absolute inset-0 flex items-center justify-center bg-black/40 backdrop-blur-[2px]">
-                        <span className="bg-blue-600 text-white font-bold px-3 py-1 rounded-full text-sm shadow-lg border border-white/20">✨ Générique</span>
+                        <span className="bg-blue-600 text-white font-bold px-3 py-1 rounded-full text-sm shadow-lg border border-white/20">Generique</span>
                     </div>
                 )}
                 {isFoil && !anyVersion && <div className="absolute inset-0 bg-gradient-to-tr from-purple-500/30 to-transparent mix-blend-overlay pointer-events-none" />}
             </div>
 
-            {/* SÉLECTION WISHLIST */}
             {destination === 'wishlist' && availableLists && availableLists.length > 0 && (
                 <div className="w-full space-y-1 bg-purple-900/20 p-3 rounded-xl border border-purple-500/30">
-                    <label className="text-xs text-purple-300 font-bold uppercase tracking-wider">Ajouter à la liste :</label>
+                    <label className="text-xs text-purple-300 font-bold uppercase tracking-wider">Ajouter a la liste :</label>
                     <select 
                         value={selectedListId}
                         onChange={(e) => setSelectedListId(e.target.value)}
@@ -160,9 +152,8 @@ export default function CardVersionPickerModal({
                 </div>
             )}
 
-            {/* ÉDITION */}
             <div className={`w-full space-y-2 transition-opacity ${anyVersion ? 'opacity-50 pointer-events-none' : 'opacity-100'}`}>
-                <label className="text-xs text-gray-400 uppercase font-bold tracking-wider">Édition / Set</label>
+                <label className="text-xs text-gray-400 uppercase font-bold tracking-wider">Edition / Set</label>
                 <div className="relative">
                     <select 
                         className="w-full bg-gray-800 text-white border border-gray-700 rounded-xl p-3 appearance-none focus:ring-2 focus:ring-blue-500 outline-none text-sm"
@@ -173,17 +164,15 @@ export default function CardVersionPickerModal({
                             <option key={v.id} value={v.id}>{v.set_name} ({v.set.toUpperCase()}) #{v.collector_number}</option>
                         ))}
                     </select>
-                    <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-gray-400">▼</div>
+                    <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-gray-400">V</div>
                 </div>
             </div>
 
-            {/* OPTIONS */}
             <div className="w-full space-y-4">
-                {/* Switch Generic - MODIFIÉ */}
                 <label className="flex items-center justify-between bg-blue-900/20 p-3 rounded-xl border border-blue-900/50 cursor-pointer hover:bg-blue-900/30 transition">
                     <div className="flex flex-col">
-                        <span className="text-sm font-bold text-blue-100">Peu importe l&apos;édition</span>
-                        <span className="text-[10px] text-blue-300">Sélectionnera la version la plus récente</span>
+                        <span className="text-sm font-bold text-blue-100">Peu importe l&apos;edition</span>
+                        <span className="text-[10px] text-blue-300">Selectionnera la version la plus recente</span>
                     </div>
                     <div className="relative inline-flex items-center cursor-pointer">
                         <input 
@@ -196,7 +185,6 @@ export default function CardVersionPickerModal({
                     </div>
                 </label>
 
-                {/* Finition & Quantité */}
                 <div className="flex gap-4">
                     <div className={`flex-1 bg-gray-800 rounded-xl p-2 flex flex-col items-center justify-center gap-1 border border-gray-700 transition-opacity ${anyVersion ? 'opacity-30 pointer-events-none' : ''}`}>
                         <span className="text-[10px] text-gray-400 font-bold uppercase">Finition</span>
@@ -206,7 +194,7 @@ export default function CardVersionPickerModal({
                         </div>
                     </div>
                     <div className="flex-1 bg-gray-800 rounded-xl p-2 flex flex-col items-center justify-center gap-1 border border-gray-700">
-                         <span className="text-[10px] text-gray-400 font-bold uppercase">Quantité</span>
+                         <span className="text-[10px] text-gray-400 font-bold uppercase">Quantite</span>
                          <div className="flex items-center gap-3">
                             <button onClick={() => setQuantity(Math.max(1, quantity - 1))} className="w-6 h-6 rounded-full bg-gray-700 text-white font-bold">-</button>
                             <span className="text-lg font-bold text-white w-4 text-center">{quantity}</span>
@@ -217,13 +205,12 @@ export default function CardVersionPickerModal({
             </div>
         </div>
 
-        {/* FOOTER */}
         <div className="p-4 bg-gray-800 border-t border-gray-700">
             <button 
                 onClick={handleConfirm}
                 className={`w-full font-bold py-4 rounded-xl text-lg transition shadow-lg transform active:scale-95 flex justify-center items-center gap-2 ${anyVersion ? 'bg-blue-600 hover:bg-blue-500 text-white' : 'bg-amber-500 hover:bg-amber-400 text-black'}`}
             >
-                <span>{anyVersion ? '✨ Ajouter (Générique)' : '+ Ajouter (Exact)'}</span>
+                <span>{anyVersion ? 'Ajouter (Generique)' : 'Ajouter (Exact)'}</span>
                 {quantity > 1 && <span className="bg-black/20 px-2 py-0.5 rounded text-sm">{quantity}</span>}
             </button>
         </div>
