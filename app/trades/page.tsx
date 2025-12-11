@@ -9,6 +9,7 @@ import { useCardCollection, CardType } from '@/hooks/useCardCollection';
 import MagicCard from '@/components/MagicCard'; 
 
 const IncomingRequestCard = ({ trade }: { trade: TradeRequest }) => {
+    // ... (Code existant inchangé)
     const { acceptTrade, rejectTrade, isProcessing } = useTradeSystem();
     const [isOpen, setIsOpen] = useState(false);
 
@@ -17,7 +18,7 @@ const IncomingRequestCard = ({ trade }: { trade: TradeRequest }) => {
 
     return (
         <div className="bg-white dark:bg-gray-800 rounded-xl border-l-4 border-blue-500 shadow-sm p-4 mb-4">
-            <div className="flex justify-between items-center">
+            <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-3">
                 <div>
                     <h3 className="font-bold text-gray-900 dark:text-white">Proposition de {trade.senderName}</h3>
                     <p className="text-sm text-gray-500">
@@ -25,7 +26,7 @@ const IncomingRequestCard = ({ trade }: { trade: TradeRequest }) => {
                         contre <span className="text-red-600 font-bold">{trade.itemsReceived.length} cartes</span> (~{valGive.toFixed(0)}EUR)
                     </p>
                 </div>
-                <div className="flex gap-2">
+                <div className="flex gap-2 self-end sm:self-auto">
                     <button onClick={() => setIsOpen(!isOpen)} className="text-sm text-gray-500 underline mr-2">
                         {isOpen ? 'Masquer' : 'Details'}
                     </button>
@@ -41,7 +42,7 @@ const IncomingRequestCard = ({ trade }: { trade: TradeRequest }) => {
                         disabled={isProcessing}
                         className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition shadow-sm"
                     >
-                        {isProcessing ? '...' : 'Accepter & Echanger'}
+                        {isProcessing ? '...' : 'Accepter'}
                     </button>
                 </div>
             </div>
@@ -77,6 +78,7 @@ const IncomingRequestCard = ({ trade }: { trade: TradeRequest }) => {
 };
 
 const TradeRowProposal = ({ proposal, onProposalSent }: { proposal: TradeProposal, onProposalSent: () => void }) => {
+    // ... (Code existant inchangé)
     const { setCustomPrice } = useCardCollection('collection');
     const { proposeTrade } = useTradeSystem(); 
 
@@ -108,7 +110,7 @@ const TradeRowProposal = ({ proposal, onProposalSent }: { proposal: TradeProposa
                 </div>
                 <button
                     onClick={handlePropose}
-                    className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg font-bold shadow-sm transition text-sm flex items-center gap-2"
+                    className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg font-bold shadow-sm transition text-sm flex items-center gap-2 w-full sm:w-auto justify-center"
                 >
                     Proposer l&apos;echange
                 </button>
@@ -186,11 +188,12 @@ export default function TradesPage() {
             
             {activeTab === 'scan' && (
                 <div className="animate-in fade-in">
-                    <div className="flex justify-end mb-6 gap-2 sticky top-0 bg-white/80 dark:bg-gray-900/80 backdrop-blur-sm z-10 py-2">
-                         <Link href="/trades/manual" className="bg-gray-100 hover:bg-gray-200 text-gray-800 px-4 py-2 rounded-lg font-bold transition text-sm flex items-center">
+                    {/* EN-TÊTE SCANNER MOBILE FRIENDLY */}
+                    <div className="flex flex-col sm:flex-row justify-end mb-6 gap-3 sticky top-0 bg-white/80 dark:bg-gray-900/80 backdrop-blur-sm z-10 py-2">
+                         <Link href="/trades/manual" className="bg-gray-100 hover:bg-gray-200 text-gray-800 px-4 py-2 rounded-lg font-bold transition text-sm flex items-center justify-center">
                             Mode Manuel
                         </Link>
-                        <button onClick={runScan} disabled={loading} className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg font-bold shadow transition text-sm disabled:opacity-50">
+                        <button onClick={runScan} disabled={loading} className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg font-bold shadow transition text-sm disabled:opacity-50 w-full sm:w-auto">
                             {loading ? status : "Lancer le Scanner"}
                         </button>
                     </div>
@@ -209,32 +212,28 @@ export default function TradesPage() {
                 </div>
             )}
 
+            {/* ... (Reste inchangé) ... */}
             {activeTab === 'requests' && (
                 <div className="animate-in fade-in space-y-8">
-                    
                     <div>
                         <h2 className="font-bold text-gray-500 uppercase text-xs mb-4 sticky top-0 bg-white dark:bg-gray-900 py-2 z-10">A traiter ({incomingTrades.length})</h2>
                         {incomingTrades.length === 0 && <p className="text-gray-400 italic text-sm">Aucune demande en attente.</p>}
-                        
                         {incomingTrades.map((trade: TradeRequest) => (
                             <IncomingRequestCard key={trade.id} trade={trade} />
                         ))}
                     </div>
-
                     <div>
                         <h2 className="font-bold text-gray-500 uppercase text-xs mb-4 pt-4 border-t dark:border-gray-700">En attente de reponse ({outgoingTrades.length})</h2>
                         {outgoingTrades.length === 0 && <p className="text-gray-400 italic text-sm">Aucune proposition en cours.</p>}
-                        
                         {outgoingTrades.map((trade: TradeRequest) => (
                              <div key={trade.id} className="flex justify-between items-center p-3 bg-gray-50 dark:bg-gray-800/50 rounded-lg border border-gray-100 dark:border-gray-700 mb-2">
                                 <span className="text-sm text-gray-600 dark:text-gray-300">
-                                    Envoyee a <span className="font-bold">{trade.receiverName}</span> (le {new Date(trade.createdAt?.seconds * 1000).toLocaleDateString()})
+                                    Envoyee a <span className="font-bold">{trade.receiverName}</span>
                                 </span>
                                 <button onClick={() => cancelTrade(trade.id)} className="text-xs text-red-500 hover:underline">Annuler</button>
                             </div>
                         ))}
                     </div>
-
                 </div>
             )}
         </div>

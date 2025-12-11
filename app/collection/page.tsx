@@ -32,6 +32,9 @@ export default function CollectionPage() {
   
   const [visibleCount, setVisibleCount] = useState(ITEMS_PER_PAGE);
 
+  // NOUVEAU : État pour plier/déplier les filtres sur mobile
+  const [showFilters, setShowFilters] = useState(false);
+
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<SortOption>('date');
   const [filterSet, setFilterSet] = useState<string>('all');
@@ -126,18 +129,28 @@ export default function CollectionPage() {
   return (
     <main className="container mx-auto p-4 pb-24 relative">
       
-      <div className="flex flex-col md:flex-row justify-between items-center mb-6 gap-4">
-        <h1 className="text-3xl font-bold text-blue-700 dark:text-blue-400">
-            Ma Collection 
-            <span className="ml-3 text-lg font-normal text-gray-500">
-                ({filteredAndSortedCards.length} / {cards.reduce((acc, c) => acc + c.quantity, 0)})
-            </span>
-        </h1>
+      {/* HEADER AMÉLIORÉ POUR MOBILE */}
+      <div className="flex flex-col gap-4 mb-6">
         
-        <div className="flex items-center gap-2">
+        {/* Ligne 1 : Titre + Valeur (Mobile Friendly) */}
+        <div className="flex justify-between items-center">
+            <h1 className="text-2xl md:text-3xl font-bold text-blue-700 dark:text-blue-400">
+                Ma Collection 
+                <span className="ml-2 text-base font-normal text-gray-500">
+                    ({filteredAndSortedCards.length})
+                </span>
+            </h1>
+            <div className="bg-blue-50 dark:bg-blue-900/30 text-blue-800 dark:text-blue-100 px-3 py-1.5 rounded-lg border border-blue-200 dark:border-blue-700 text-right">
+                <span className="text-[10px] uppercase tracking-wide opacity-70 block">Total</span>
+                <span className="font-bold whitespace-nowrap">{totalPrice.toFixed(2)} EUR</span>
+            </div>
+        </div>
+        
+        {/* Ligne 2 : Actions (Défilable sur mobile pour éviter l'écrasement) */}
+        <div className="flex items-center gap-2 overflow-x-auto pb-2 scrollbar-hide -mx-4 px-4 md:mx-0 md:px-0">
            <button 
              onClick={() => { setIsSelectMode(!isSelectMode); setSelectedIds([]); }}
-             className={`px-3 py-2 rounded-lg text-sm font-medium transition shadow-sm border flex items-center gap-2 ${isSelectMode ? 'bg-blue-600 text-white border-blue-600' : 'bg-white hover:bg-gray-100 text-gray-700 border-gray-300 dark:bg-gray-800 dark:border-gray-600 dark:text-gray-200'}`}
+             className={`flex-shrink-0 px-3 py-2 rounded-lg text-sm font-medium transition shadow-sm border flex items-center gap-2 ${isSelectMode ? 'bg-blue-600 text-white border-blue-600' : 'bg-white hover:bg-gray-100 text-gray-700 border-gray-300 dark:bg-gray-800 dark:border-gray-600 dark:text-gray-200'}`}
            >
              {isSelectMode ? 'Annuler' : 'Selectionner'}
            </button>
@@ -146,79 +159,92 @@ export default function CollectionPage() {
                <>
                 <button 
                     onClick={() => setIsToolsOpen(true)}
-                    className="bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200 px-3 py-2 rounded-lg text-sm font-medium transition shadow-sm border border-gray-200 dark:border-gray-600 flex items-center gap-2"
+                    className="flex-shrink-0 bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200 px-3 py-2 rounded-lg text-sm font-medium transition shadow-sm border border-gray-200 dark:border-gray-600 flex items-center gap-2"
                 >
                     Gerer
                 </button>
 
-                <DeleteAllButton targetCollection="collection" />
+                {/* Composant DeleteAllButton modifié pour être flex-shrink-0 si possible, sinon on l'encapsule */}
+                <div className="flex-shrink-0">
+                    <DeleteAllButton targetCollection="collection" />
+                </div>
                 
                 <button 
                     onClick={() => setIsImportOpen(true)} 
-                    className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition shadow-sm"
+                    className="flex-shrink-0 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition shadow-sm"
                 >
                     Importer CSV
                 </button>
-                <div className="bg-blue-50 dark:bg-blue-900/30 text-blue-800 dark:text-blue-100 px-4 py-2 rounded-lg border border-blue-200 dark:border-blue-700 text-right min-w-[100px]">
-                    <span className="text-[10px] uppercase tracking-wide opacity-70 block">Valeur Totale</span>
-                    <span className="font-bold">{totalPrice.toFixed(2)} EUR</span>
-                </div>
                </>
            )}
         </div>
       </div>
 
-      <div className="bg-white dark:bg-gray-800 p-4 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm mb-6 space-y-4 md:space-y-0 md:flex md:items-end md:gap-4">
-          <div className="flex-grow">
-              <label className="block text-xs font-bold text-gray-500 mb-1 uppercase">Nom de la carte</label>
-              <input 
-                  type="text" 
-                  placeholder="Rechercher..." 
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full p-2.5 rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-900 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
-              />
+      {/* FILTRES COMPACTS */}
+      <div className="bg-white dark:bg-gray-800 p-4 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm mb-6">
+          <div className="flex gap-2">
+              <div className="flex-grow">
+                  <input 
+                      type="text" 
+                      placeholder="Rechercher une carte..." 
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      className="w-full p-2.5 rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-900 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                  />
+              </div>
+              {/* Bouton Toggle Filtres (Mobile uniquement) */}
+              <button 
+                onClick={() => setShowFilters(!showFilters)}
+                className="md:hidden px-3 py-2 bg-gray-100 dark:bg-gray-700 rounded-lg text-gray-600 dark:text-gray-300 border border-gray-300 dark:border-gray-600"
+              >
+                {showFilters ? '▲' : 'Filtres ▼'}
+              </button>
           </div>
-          <div className="min-w-[200px]">
-              <label className="block text-xs font-bold text-gray-500 mb-1 uppercase">Edition</label>
-              <select value={filterSet} onChange={(e) => setFilterSet(e.target.value)} className="w-full p-2.5 rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-900 text-sm cursor-pointer">
-                  <option value="all">Toutes les editions</option>
-                  {availableSets.map(set => <option key={set} value={set}>{set}</option>)}
-              </select>
-          </div>
-          <div className="min-w-[180px]">
-              <label className="block text-xs font-bold text-gray-500 mb-1 uppercase">Trier par</label>
-              <select value={sortBy} onChange={(e) => setSortBy(e.target.value as SortOption)} className="w-full p-2.5 rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-900 text-sm cursor-pointer">
-                  <option value="date">Date d&apos;ajout</option>
-                  <option value="price_desc">Prix : Haut - Bas</option>
-                  <option value="price_asc">Prix : Bas - Haut</option>
-                  <option value="name">Nom : A - Z</option>
-                  <option value="quantity">Quantite</option>
-              </select>
-          </div>
-          <div className="flex items-center gap-4 pb-3">
-              <label className="flex items-center gap-2 cursor-pointer select-none">
-                  <input type="checkbox" checked={filterFoil} onChange={(e) => setFilterFoil(e.target.checked)} className="w-4 h-4 text-blue-600 rounded" />
-                  <span className="text-sm font-medium">Foil</span>
-              </label>
-              <label className="flex items-center gap-2 cursor-pointer select-none">
-                  <input type="checkbox" checked={filterTrade} onChange={(e) => setFilterTrade(e.target.checked)} className="w-4 h-4 text-green-600 rounded" />
-                  <span className="text-sm font-medium">Echange</span>
-              </label>
+
+          {/* Zone de filtres pliable */}
+          <div className={`mt-4 space-y-4 md:space-y-0 md:flex md:items-end md:gap-4 ${showFilters ? 'block' : 'hidden md:flex'}`}>
+            <div className="min-w-[200px]">
+                <label className="block text-xs font-bold text-gray-500 mb-1 uppercase">Edition</label>
+                <select value={filterSet} onChange={(e) => setFilterSet(e.target.value)} className="w-full p-2.5 rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-900 text-sm cursor-pointer">
+                    <option value="all">Toutes les editions</option>
+                    {availableSets.map(set => <option key={set} value={set}>{set}</option>)}
+                </select>
+            </div>
+            <div className="min-w-[180px]">
+                <label className="block text-xs font-bold text-gray-500 mb-1 uppercase">Trier par</label>
+                <select value={sortBy} onChange={(e) => setSortBy(e.target.value as SortOption)} className="w-full p-2.5 rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-900 text-sm cursor-pointer">
+                    <option value="date">Date d&apos;ajout</option>
+                    <option value="price_desc">Prix : Haut - Bas</option>
+                    <option value="price_asc">Prix : Bas - Haut</option>
+                    <option value="name">Nom : A - Z</option>
+                    <option value="quantity">Quantite</option>
+                </select>
+            </div>
+            <div className="flex items-center gap-4 pb-3">
+                <label className="flex items-center gap-2 cursor-pointer select-none">
+                    <input type="checkbox" checked={filterFoil} onChange={(e) => setFilterFoil(e.target.checked)} className="w-4 h-4 text-blue-600 rounded" />
+                    <span className="text-sm font-medium">Foil</span>
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer select-none">
+                    <input type="checkbox" checked={filterTrade} onChange={(e) => setFilterTrade(e.target.checked)} className="w-4 h-4 text-green-600 rounded" />
+                    <span className="text-sm font-medium">Echange</span>
+                </label>
+            </div>
           </div>
       </div>
 
       {isSelectMode && (
           <div className="mb-4 flex items-center justify-between bg-blue-50 dark:bg-blue-900/20 p-3 rounded-lg border border-blue-100 dark:border-blue-800 animate-in fade-in slide-in-from-top-2">
               <span className="font-bold text-blue-800 dark:text-blue-200 pl-2">
-                  {selectedIds.length} carte(s) selectionnee(s)
+                  {selectedIds.length} carte(s)
               </span>
               <button onClick={handleSelectAll} className="text-sm text-blue-600 hover:text-blue-800 font-medium px-3 py-1 rounded hover:bg-blue-100 transition">
-                  {selectedIds.length === filteredAndSortedCards.length ? 'Tout deselectionner' : 'Tout selectionner'}
+                  {selectedIds.length === filteredAndSortedCards.length ? 'Deselectionner' : 'Tout selectionner'}
               </button>
           </div>
       )}
 
+      {/* GRILLE (inchangée) */}
       {filteredAndSortedCards.length === 0 ? (
         <div className="text-center py-20 bg-gray-50 dark:bg-gray-800/50 rounded-xl border-2 border-dashed border-gray-200 dark:border-gray-700">
           <p className="text-xl text-gray-500 mb-4">Aucun resultat ne correspond a vos filtres.</p>
@@ -248,24 +274,25 @@ export default function CollectionPage() {
                         onClick={() => setVisibleCount(prev => prev + ITEMS_PER_PAGE)}
                         className="bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-800 dark:text-gray-200 px-8 py-3 rounded-full font-bold shadow-sm transition flex items-center gap-2"
                     >
-                        Afficher plus de cartes ({filteredAndSortedCards.length - visibleCount} restantes) V
+                        Afficher plus ({filteredAndSortedCards.length - visibleCount}) V
                     </button>
                 </div>
             )}
         </>
       )}
 
+      {/* BARRE FLOTTANTE ACTIONS (Mobile Friendly) */}
       {isSelectMode && selectedIds.length > 0 && (
-          <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-white dark:bg-gray-800 shadow-2xl border border-gray-200 dark:border-gray-700 p-2 rounded-2xl flex items-center gap-2 z-50 animate-in slide-in-from-bottom-6 duration-300">
+          <div className="fixed bottom-6 left-4 right-4 md:left-1/2 md:right-auto md:-translate-x-1/2 bg-white dark:bg-gray-800 shadow-2xl border border-gray-200 dark:border-gray-700 p-2 rounded-2xl flex items-center justify-around gap-2 z-50 animate-in slide-in-from-bottom-6 duration-300">
               <button onClick={() => handleBulkTrade(true)} className="px-4 py-2 bg-green-100 hover:bg-green-200 text-green-800 rounded-xl text-sm font-bold transition flex flex-col items-center leading-none gap-1">
-                  <span>Trade</span><span className="text-[10px]">Ajouter</span>
+                  <span>Trade</span>
               </button>
               <button onClick={() => handleBulkTrade(false)} className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-800 rounded-xl text-sm font-bold transition flex flex-col items-center leading-none gap-1">
-                  <span>Prive</span><span className="text-[10px]">Retirer</span>
+                  <span>Prive</span>
               </button>
               <div className="w-px h-8 bg-gray-300 mx-1"></div>
               <button onClick={handleBulkDelete} className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-xl text-sm font-bold transition flex flex-col items-center leading-none gap-1 shadow-md">
-                  <span>Suppr</span><span className="text-[10px]">Definitif</span>
+                  <span>Suppr</span>
               </button>
           </div>
       )}
