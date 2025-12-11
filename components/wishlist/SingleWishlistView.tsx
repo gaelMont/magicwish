@@ -1,3 +1,4 @@
+// components/wishlist/SingleWishlistView.tsx
 'use client';
 
 import { useAuth } from '@/lib/AuthContext';
@@ -13,7 +14,8 @@ type Props = {
 };
 
 export default function SingleWishlistView({ listId, listName }: Props) {
-    const { cards, loading, updateQuantity, removeCard, totalPrice } = useCardCollection('wishlist', listId);
+    // On récupère toggleAttribute ici
+    const { cards, loading, updateQuantity, removeCard, toggleAttribute, totalPrice } = useCardCollection('wishlist', listId);
     const { user } = useAuth();
     
     const moveToCollection = async (card: CardType) => {
@@ -26,8 +28,18 @@ export default function SingleWishlistView({ listId, listName }: Props) {
 
             await runTransaction(db, async (transaction) => {
                 const colDoc = await transaction.get(collectionRef);
-                if (colDoc.exists()) transaction.update(collectionRef, { quantity: increment(card.quantity) });
-                else transaction.set(collectionRef, { ...card, wishlistId: null, addedAt: new Date() });
+                // On garde les propriétés Foil/Version lors du déplacement si la carte n'existe pas encore
+                // Sinon on incrémente juste.
+                if (colDoc.exists()) {
+                    transaction.update(collectionRef, { quantity: increment(card.quantity) });
+                } else {
+                    transaction.set(collectionRef, { 
+                        ...card, 
+                        wishlistId: null, 
+                        addedAt: new Date(),
+                        isFoil: card.isFoil || false // On garde l'info
+                    });
+                }
                 transaction.delete(wishlistRef);
             });
             toast.success("Ajoutée à la collection !", { id: toastId });
@@ -67,6 +79,8 @@ export default function SingleWishlistView({ listId, listName }: Props) {
                             }}
                             onDelete={() => { if(confirm("Supprimer ?")) removeCard(card.id); }}
                             onMove={() => moveToCollection(card)}
+                            // NOUVEAU : On passe la fonction de toggle
+                            onToggleAttribute={(field, val) => toggleAttribute(card.id, field, val)}
                         />
                     ))}
                 </div>

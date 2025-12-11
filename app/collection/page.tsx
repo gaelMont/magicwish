@@ -3,7 +3,7 @@
 
 import { useState } from 'react';
 import { useAuth } from '@/lib/AuthContext';
-import { useCardCollection } from '@/hooks/useCardCollection'; // <--- IMPORT DU HOOK
+import { useCardCollection } from '@/hooks/useCardCollection'; 
 import MagicCard from '@/components/MagicCard';
 import ImportModal from '@/components/ImportModal';
 import ConfirmModal from '@/components/ConfirmModal';
@@ -12,13 +12,16 @@ import DeleteAllButton from '@/components/DeleteAllButton';
 export default function CollectionPage() {
   const { user } = useAuth();
   
-  // TOUTE LA LOGIQUE EST ICI :
-  const { cards, loading, updateQuantity, removeCard, totalPrice } = useCardCollection('collection');
+  // 1. On récupère setCustomPrice et toggleAttribute ici
+  const { 
+    cards, loading, updateQuantity, removeCard, 
+    setCustomPrice, toggleAttribute, // <--- Important
+    totalPrice 
+  } = useCardCollection('collection');
 
   const [isImportOpen, setIsImportOpen] = useState(false);
   const [cardToDelete, setCardToDelete] = useState<string | null>(null);
 
-  // Gestion du clic sur "-"
   const handleDecrement = async (cardId: string, currentQty: number) => {
     const result = await updateQuantity(cardId, -1, currentQty);
     if (result === 'shouldDelete') {
@@ -65,9 +68,15 @@ export default function CollectionPage() {
             <MagicCard 
               key={card.id}
               {...card}
+              // Actions de base
               onIncrement={() => updateQuantity(card.id, 1, card.quantity)}
               onDecrement={() => handleDecrement(card.id, card.quantity)}
               onDelete={() => setCardToDelete(card.id)}
+              
+              // C'EST ICI QUE LA MAGIE OPÈRE (Optimisation) :
+              // On connecte les fonctions du hook parent aux props de l'enfant
+              onEditPrice={(newPrice) => setCustomPrice(card.id, newPrice)}
+              onToggleAttribute={(field, val) => toggleAttribute(card.id, field, val)}
             />
           ))}
         </div>

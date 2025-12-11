@@ -43,21 +43,27 @@ The content is organized as follows:
 .gitignore
 app/api/search/route.ts
 app/collection/page.tsx
+app/contacts/page.tsx
 app/favicon.ico
 app/globals.css
 app/layout.tsx
 app/login/page.tsx
 app/page.tsx
+app/trades/page.tsx
+app/user/[uid]/page.tsx
 app/wishlist/page.tsx
 components/ConfirmModal.tsx
 components/DeleteAllButton.tsx
 components/Header.tsx
 components/ImportModal.tsx
 components/MagicCard.tsx
+components/UsernameSetupModal.tsx
 components/wishlist/GlobalWishlistView.tsx
 components/wishlist/SingleWishlistView.tsx
 eslint.config.mjs
 hooks/useCardCollection.ts
+hooks/useFriends.ts
+hooks/useTradeMatcher.ts
 hooks/useWishlists.ts
 lib/AuthContext.tsx
 lib/cardUtils.ts
@@ -76,195 +82,6 @@ tsconfig.json
 
 <files>
 This section contains the contents of the repository's files.
-
-<file path="components/wishlist/GlobalWishlistView.tsx">
-'use client';
-
-import { useState, useEffect, useMemo } from 'react';
-import { useAuth } from '@/lib/AuthContext';
-import { WishlistMeta } from '@/hooks/useWishlists';
-import { CardType } from '@/hooks/useCardCollection';
-import MagicCard from '@/components/MagicCard';
-import { db } from '@/lib/firebase';
-import { collection, getDocs } from 'firebase/firestore';
-import toast from 'react-hot-toast';
-
-type Props = {
-    lists: WishlistMeta[];
-};
-
-export default function GlobalWishlistView({ lists }: Props) {
-    const { user } = useAuth();
-    const [allCards, setAllCards] = useState<(CardType & { sourceListName: string })[]>([]);
-    const [loading, setLoading] = useState(true);
-
-    useEffect(() => {
-        if (!user || lists.length === 0) return;
-
-        const fetchAll = async () => {
-            setLoading(true);
-            let combined: (CardType & { sourceListName: string })[] = [];
-
-            try {
-                // A. Liste par défaut
-                const defaultRef = collection(db, 'users', user.uid, 'wishlist');
-                const defaultSnap = await getDocs(defaultRef);
-                const defaultCards = defaultSnap.docs.map(d => ({ 
-                    ...d.data(), id: d.id, sourceListName: 'Liste principale' 
-                })) as (CardType & { sourceListName: string })[];
-                combined = [...defaultCards];
-
-                // B. Listes customs
-                const customLists = lists.filter(l => l.id !== 'default');
-                const promises = customLists.map(async (list) => {
-                    const colRef = collection(db, 'users', user.uid, 'wishlists_data', list.id, 'cards');
-                    const snap = await getDocs(colRef);
-                    return snap.docs.map(d => ({
-                        ...d.data(),
-                        id: d.id,
-                        sourceListName: list.name
-                    })) as (CardType & { sourceListName: string })[];
-                });
-
-                const results = await Promise.all(promises);
-                results.forEach(res => {
-                    combined = [...combined, ...res];
-                });
-
-                setAllCards(combined);
-            } catch (error) {
-                console.error("Erreur chargement global", error);
-                toast.error("Erreur chargement global");
-            } finally {
-                setLoading(false);
-            }
-        };
-
-        fetchAll();
-    }, [user, lists]);
-
-    const globalTotal = useMemo(() => {
-        return allCards.reduce((acc, card) => acc + (card.price || 0) * card.quantity, 0);
-    }, [allCards]);
-
-    if (loading) return <div className="p-10 text-center animate-pulse">Fusion des listes en cours...</div>;
-
-    return (
-        <div className="animate-in fade-in duration-300">
-             <div className="flex justify-between items-end mb-6 border-b pb-4 dark:border-gray-700 bg-gradient-to-r from-blue-50 to-transparent dark:from-blue-900/20 p-4 rounded-t-xl">
-                <div>
-                    <h2 className="text-2xl font-bold text-gray-800 dark:text-white flex items-center gap-2">
-                        🌍 Vue Globale
-                    </h2>
-                    <p className="text-sm text-gray-500 mt-1">
-                        Toutes vos cartes fusionnées ({allCards.length} cartes distinctes)
-                    </p>
-                </div>
-                <div className="text-right">
-                    <span className="text-xs text-gray-500 uppercase font-semibold">Valeur Totale</span>
-                    <p className="text-3xl font-bold text-blue-600 dark:text-blue-400">{globalTotal.toFixed(2)} €</p>
-                </div>
-            </div>
-
-            {allCards.length === 0 ? (
-                <div className="text-center py-12">
-                    <p className="text-gray-500 italic">Aucune carte trouvée.</p>
-                </div>
-            ) : (
-                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-                    {allCards.map((card, idx) => (
-                        <div key={`${card.id}-${idx}`} className="relative group">
-                            <div className="absolute top-0 right-0 z-30 bg-black/70 text-white text-[10px] px-2 py-1 rounded-bl-lg backdrop-blur-sm pointer-events-none">
-                                {card.sourceListName}
-                            </div>
-                            <MagicCard {...card} isWishlist={false} />
-                        </div>
-                    ))}
-                </div>
-            )}
-        </div>
-    );
-}
-</file>
-
-<file path="components/wishlist/SingleWishlistView.tsx">
-'use client';
-
-import { useAuth } from '@/lib/AuthContext';
-import { useCardCollection, CardType } from '@/hooks/useCardCollection';
-import MagicCard from '@/components/MagicCard';
-import { db } from '@/lib/firebase';
-import { doc, runTransaction, increment } from 'firebase/firestore';
-import toast from 'react-hot-toast';
-
-type Props = {
-    listId: string;
-    listName: string;
-};
-
-export default function SingleWishlistView({ listId, listName }: Props) {
-    const { cards, loading, updateQuantity, removeCard, totalPrice } = useCardCollection('wishlist', listId);
-    const { user } = useAuth();
-    
-    const moveToCollection = async (card: CardType) => {
-        if (!user) return;
-        const toastId = toast.loading("Déplacement...");
-        try {
-            const sourcePath = listId === 'default' ? 'wishlist' : `wishlists_data/${listId}/cards`;
-            const wishlistRef = doc(db, 'users', user.uid, sourcePath, card.id);
-            const collectionRef = doc(db, 'users', user.uid, 'collection', card.id);
-
-            await runTransaction(db, async (transaction) => {
-                const colDoc = await transaction.get(collectionRef);
-                if (colDoc.exists()) transaction.update(collectionRef, { quantity: increment(card.quantity) });
-                else transaction.set(collectionRef, { ...card, wishlistId: null, addedAt: new Date() });
-                transaction.delete(wishlistRef);
-            });
-            toast.success("Ajoutée à la collection !", { id: toastId });
-        } catch (error) {
-            console.error(error);
-            toast.error("Erreur", { id: toastId });
-        }
-    };
-
-    if (loading) return <div className="p-10 text-center text-gray-500">Chargement des cartes...</div>;
-
-    return (
-        <div className="animate-in fade-in duration-300">
-            <div className="flex justify-between items-end mb-6 border-b pb-4 dark:border-gray-700">
-                <h2 className="text-2xl font-bold text-gray-800 dark:text-white">{listName}</h2>
-                <div className="text-right">
-                    <span className="text-xs text-gray-500 uppercase font-semibold">Total estimé</span>
-                    <p className="text-2xl font-bold text-green-600 dark:text-green-400">{totalPrice.toFixed(2)} €</p>
-                </div>
-            </div>
-
-            {cards.length === 0 ? (
-                <div className="text-center py-12 bg-gray-50 dark:bg-gray-800/50 rounded-xl border border-dashed border-gray-200 dark:border-gray-700">
-                    <p className="text-gray-500 italic">Cette liste est vide.</p>
-                </div>
-            ) : (
-                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-                    {cards.map(card => (
-                        <MagicCard 
-                            key={card.id} 
-                            {...card} 
-                            isWishlist={true}
-                            onIncrement={() => updateQuantity(card.id, 1, card.quantity)}
-                            onDecrement={() => {
-                                if(card.quantity === 1) { if(confirm("Supprimer ?")) removeCard(card.id); } 
-                                else { updateQuantity(card.id, -1, card.quantity); }
-                            }}
-                            onDelete={() => { if(confirm("Supprimer ?")) removeCard(card.id); }}
-                            onMove={() => moveToCollection(card)}
-                        />
-                    ))}
-                </div>
-            )}
-        </div>
-    );
-}
-</file>
 
 <file path=".gitignore">
 # See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
@@ -339,41 +156,6 @@ body {
 }
 </file>
 
-<file path="app/layout.tsx">
-// app/layout.tsx
-import type { Metadata } from 'next';
-import { Inter } from 'next/font/google';
-import './globals.css';
-import { AuthProvider } from '@/lib/AuthContext';
-import Header from '@/components/Header'; 
-import { Toaster } from 'react-hot-toast'; // <--- IMPORT ICI
-
-const inter = Inter({ subsets: ['latin'] });
-
-export const metadata: Metadata = {
-  title: 'MagicWish',
-  description: 'Votre wishlist de cartes Magic',
-};
-
-export default function RootLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
-  return (
-    <html lang="fr">
-      <body className={inter.className}>
-        <AuthProvider>
-          <Header />
-          {children}
-          <Toaster position="bottom-right" /> {/* <--- AJOUTE ÇA ICI */}
-        </AuthProvider>
-      </body>
-    </html>
-  );
-}
-</file>
-
 <file path="app/login/page.tsx">
 // Fichier : app/login/page.tsx
 
@@ -414,6 +196,259 @@ export default function LoginPage() {
           Se connecter avec Google
         </button>
       </div>
+    </main>
+  );
+}
+</file>
+
+<file path="app/trades/page.tsx">
+// app/trades/page.tsx
+'use client';
+
+import { useAuth } from '@/lib/AuthContext';
+import { useTradeMatcher, TradeProposal } from '@/hooks/useTradeMatcher';
+import Link from 'next/link';
+import { useCardCollection } from '@/hooks/useCardCollection'; 
+import MagicCard from '@/components/MagicCard'; 
+
+// Sous-composant pour afficher une ligne de proposition
+const TradeRow = ({ proposal }: { proposal: TradeProposal }) => {
+    // Calcul des totaux pour affichage
+    const totalGive = proposal.toGive.reduce((acc, c) => acc + (c.customPrice ?? c.price ?? 0), 0);
+    const totalReceive = proposal.toReceive.reduce((acc, c) => acc + (c.customPrice ?? c.price ?? 0), 0);
+    const delta = totalGive - totalReceive;
+
+    // IMPORTANT : On récupère setCustomPrice pour pouvoir éditer NOS cartes
+    const { setCustomPrice } = useCardCollection('collection');
+
+    return (
+        <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden mb-8 animate-in fade-in slide-in-from-bottom-4">
+            {/* Header : L'ami */}
+            <div className="bg-gray-50 dark:bg-gray-900/50 p-4 border-b border-gray-100 dark:border-gray-700 flex justify-between items-center">
+                <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-white font-bold overflow-hidden">
+                        {proposal.friend.photoURL ? <img src={proposal.friend.photoURL} alt="" className="w-full h-full object-cover"/> : proposal.friend.username[0].toUpperCase()}
+                    </div>
+                    <div>
+                        <h2 className="text-xl font-bold text-gray-900 dark:text-white">Échange avec {proposal.friend.displayName}</h2>
+                        <Link href={`/user/${proposal.friend.uid}`} className="text-sm text-blue-600 hover:underline">Voir son profil complet</Link>
+                    </div>
+                </div>
+            </div>
+
+            {/* Corps : Les 2 colonnes */}
+            <div className="grid md:grid-cols-2 divide-y md:divide-y-0 md:divide-x border-gray-100 dark:border-gray-700">
+                
+                {/* 1. CE QUE JE DONNE (Mes cartes) */}
+                <div className="p-4 bg-red-50/30 dark:bg-red-900/10">
+                    <h3 className="font-bold text-red-600 dark:text-red-400 mb-4 flex items-center justify-between">
+                        📤 Je donne ({proposal.toGive.length})
+                        <span className="text-sm bg-white dark:bg-gray-800 px-2 py-1 rounded shadow-sm">{totalGive.toFixed(2)} €</span>
+                    </h3>
+                    <div className="space-y-3">
+                        {proposal.toGive.length === 0 ? <p className="text-sm italic text-gray-400">Rien à donner...</p> : 
+                            proposal.toGive.map(card => (
+                                <MagicCard 
+                                    key={card.id} 
+                                    {...card} 
+                                    isTradeView={true} 
+                                    allowPriceEdit={true} // J'ai le droit d'éditer MES prix
+                                    // CONNEXION DU SETTER :
+                                    onEditPrice={(newPrice) => setCustomPrice(card.id, newPrice)}
+                                />
+                            ))
+                        }
+                    </div>
+                </div>
+
+                {/* 2. CE QUE JE REÇOIS (Ses cartes) */}
+                <div className="p-4 bg-green-50/30 dark:bg-green-900/10">
+                    <h3 className="font-bold text-green-600 dark:text-green-400 mb-4 flex items-center justify-between">
+                        📥 Je reçois ({proposal.toReceive.length})
+                        <span className="text-sm bg-white dark:bg-gray-800 px-2 py-1 rounded shadow-sm">{totalReceive.toFixed(2)} €</span>
+                    </h3>
+                    <div className="space-y-3">
+                         {proposal.toReceive.length === 0 ? <p className="text-sm italic text-gray-400">Rien à recevoir...</p> : 
+                            proposal.toReceive.map(card => (
+                                <MagicCard 
+                                    key={card.id} 
+                                    {...card} 
+                                    isTradeView={true} 
+                                    allowPriceEdit={false} // Je ne touche pas à SES prix
+                                />
+                            ))
+                        }
+                    </div>
+                </div>
+            </div>
+
+            {/* Footer : La Balance */}
+            <div className="p-4 border-t border-gray-100 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 flex justify-between items-center">
+                <span className="text-sm text-gray-500">Balance de l'échange :</span>
+                <div className={`text-xl font-bold px-4 py-2 rounded-lg ${
+                    Math.abs(delta) < 1 ? 'bg-gray-200 text-gray-700' : 
+                    delta > 0 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+                }`}>
+                    {Math.abs(delta) < 1 
+                        ? "⚖️ Équitable" 
+                        : delta > 0 
+                            ? `Il te doit ${delta.toFixed(2)} €` 
+                            : `Tu dois ${Math.abs(delta).toFixed(2)} €`
+                    }
+                </div>
+            </div>
+        </div>
+    );
+};
+
+export default function TradesPage() {
+  const { user } = useAuth();
+  const { proposals, loading, status, runScan } = useTradeMatcher();
+
+  if (!user) return <div className="p-10 text-center">Connectez-vous.</div>;
+
+  return (
+    <main className="container mx-auto p-4 max-w-5xl min-h-[80vh]">
+        <div className="flex flex-col md:flex-row justify-between items-center mb-8 gap-4">
+            <div>
+                <h1 className="text-3xl font-bold text-purple-600 dark:text-purple-400">🤝 Proposition d'Échanges</h1>
+                <p className="text-gray-500 text-sm">Comparateur Réciproque : Wishlists vs Collections</p>
+            </div>
+            <button 
+                onClick={runScan}
+                disabled={loading}
+                className="bg-purple-600 hover:bg-purple-700 text-white px-6 py-3 rounded-xl font-bold shadow-lg transition disabled:opacity-50"
+            >
+                {loading ? <span className="animate-pulse">{status}</span> : "🚀 Lancer le comparateur"}
+            </button>
+        </div>
+
+        {proposals.length === 0 && !loading && (
+            <div className="text-center py-20 text-gray-400 border-2 border-dashed border-gray-200 dark:border-gray-700 rounded-xl">
+                Cliquez sur &quot;Lancer&quot; pour trouver des opportunités d&apos;échange.
+            </div>
+        )}
+
+        <div className="space-y-8">
+            {proposals.map(proposal => (
+                <TradeRow key={proposal.friend.uid} proposal={proposal} />
+            ))}
+        </div>
+    </main>
+  );
+}
+</file>
+
+<file path="app/user/[uid]/page.tsx">
+// app/user/[uid]/page.tsx
+'use client';
+
+import { useState, useEffect, use } from 'react';
+import { db } from '@/lib/firebase';
+import { doc, getDoc } from 'firebase/firestore';
+import { useCardCollection } from '@/hooks/useCardCollection';
+import MagicCard from '@/components/MagicCard';
+import { FriendProfile } from '@/hooks/useFriends'; // Réutilisation du type
+
+export default function UserProfilePage({ params }: { params: Promise<{ uid: string }> }) {
+  // En Next.js 15+, params est une Promise
+  const unwrappedParams = use(params);
+  const targetUid = unwrappedParams.uid;
+
+  const [profile, setProfile] = useState<FriendProfile | null>(null);
+  const [activeTab, setActiveTab] = useState<'collection' | 'wishlist'>('collection');
+  
+  // On utilise notre hook modifié avec le targetUid !
+  const { cards, loading, totalPrice } = useCardCollection(activeTab, 'default', targetUid);
+
+  // Charger les infos du profil (Nom, Avatar)
+  useEffect(() => {
+    const fetchProfile = async () => {
+      try {
+        const docRef = doc(db, 'users', targetUid, 'public_profile', 'info');
+        const snap = await getDoc(docRef);
+        if (snap.exists()) {
+            setProfile({ uid: targetUid, ...snap.data() } as FriendProfile);
+        }
+      } catch (e) {
+        console.error("Erreur profil", e);
+      }
+    };
+    fetchProfile();
+  }, [targetUid]);
+
+  if (!profile && !loading) return <div className="p-10 text-center">Profil introuvable ou privé.</div>;
+
+  return (
+    <main className="container mx-auto p-4 pb-20">
+        
+        {/* HEADER PROFIL */}
+        <div className="bg-white dark:bg-gray-800 rounded-2xl p-6 shadow-sm border border-gray-100 dark:border-gray-700 mb-6 flex flex-col md:flex-row items-center md:items-start gap-6">
+            {/* Avatar */}
+            <div className="w-24 h-24 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-white text-3xl font-bold border-4 border-white dark:border-gray-700 shadow-md overflow-hidden">
+                {profile?.photoURL ? <img src={profile.photoURL} alt="" className="w-full h-full object-cover"/> : profile?.username?.[0]?.toUpperCase()}
+            </div>
+            
+            {/* Infos */}
+            <div className="text-center md:text-left flex-grow">
+                <h1 className="text-3xl font-bold text-gray-900 dark:text-white mb-1">
+                    {profile?.displayName || 'Utilisateur'}
+                </h1>
+                <p className="text-blue-600 dark:text-blue-400 font-medium bg-blue-50 dark:bg-blue-900/30 inline-block px-3 py-1 rounded-full text-sm">
+                    @{profile?.username}
+                </p>
+            </div>
+
+            {/* Stats Valeur */}
+            <div className="bg-green-50 dark:bg-green-900/20 px-6 py-4 rounded-xl border border-green-100 dark:border-green-800 text-center">
+                <p className="text-xs uppercase text-green-600 dark:text-green-400 font-bold mb-1">Valeur affichée</p>
+                <p className="text-2xl font-bold text-green-700 dark:text-green-300">{totalPrice.toFixed(2)} €</p>
+            </div>
+        </div>
+
+        {/* TABS (Collection vs Wishlist) */}
+        <div className="flex justify-center mb-8 border-b border-gray-200 dark:border-gray-700">
+            <button 
+                onClick={() => setActiveTab('collection')}
+                className={`px-6 py-3 font-medium transition-colors border-b-2 ${
+                    activeTab === 'collection' 
+                    ? 'border-blue-600 text-blue-600' 
+                    : 'border-transparent text-gray-500 hover:text-gray-700'
+                }`}
+            >
+                📚 Sa Collection
+            </button>
+            <button 
+                onClick={() => setActiveTab('wishlist')}
+                className={`px-6 py-3 font-medium transition-colors border-b-2 ${
+                    activeTab === 'wishlist' 
+                    ? 'border-purple-600 text-purple-600' 
+                    : 'border-transparent text-gray-500 hover:text-gray-700'
+                }`}
+            >
+                ✨ Sa Wishlist
+            </button>
+        </div>
+
+        {/* GRILLE DE CARTES */}
+        {loading ? (
+            <p className="text-center p-10 text-gray-500">Chargement des cartes...</p>
+        ) : cards.length === 0 ? (
+            <div className="text-center py-16 bg-gray-50 dark:bg-gray-800/50 rounded-xl border-dashed border-2 border-gray-200 dark:border-gray-700">
+                <p className="text-gray-400 italic">Cette liste est vide.</p>
+            </div>
+        ) : (
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 animate-in fade-in slide-in-from-bottom-4 duration-500">
+                {cards.map(card => (
+                    <MagicCard 
+                        key={card.id} 
+                        {...card} 
+                        readOnly={true} // <--- Important : Mode lecture seule
+                    />
+                ))}
+            </div>
+        )}
+
     </main>
   );
 }
@@ -561,134 +596,338 @@ export default function DeleteAllButton({ targetCollection }: DeleteAllButtonPro
 }
 </file>
 
-<file path="components/MagicCard.tsx">
-// components/MagicCard.tsx
+<file path="components/UsernameSetupModal.tsx">
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { useAuth } from '@/lib/AuthContext';
+import { db } from '@/lib/firebase';
+import { doc, getDoc, writeBatch, serverTimestamp } from 'firebase/firestore';
+import toast from 'react-hot-toast';
 
-type MagicCardProps = {
-  name: string;
-  imageUrl: string;
-  imageBackUrl?: string | null; // Optionnel : Le dos de la carte
-  quantity?: number;
-  price?: number;
-  setName?: string;
+export default function UsernameSetupModal() {
+  const { user, username, loading } = useAuth();
+  const [isOpen, setIsOpen] = useState(false);
   
-  // Fonctions d'action
-  onDelete?: () => void;
-  onIncrement?: () => void;
-  onDecrement?: () => void;
-  onMove?: () => void; // Pour la wishlist
-  
-  // Style
-  isWishlist?: boolean;
-};
+  const [inputVal, setInputVal] = useState('');
+  const [isChecking, setIsChecking] = useState(false);
 
-const CARD_BACK_URL = "https://cards.scryfall.io/large/front/a/6/a6984342-f723-4e80-8e69-902d287a915f.jpg";
+  // On ouvre la modale SI : user connecté, chargement fini, ET pas de username
+  useEffect(() => {
+    if (!loading && user && !username) {
+      setIsOpen(true);
+    } else {
+      setIsOpen(false);
+    }
+  }, [user, username, loading]);
 
-export default function MagicCard({
-  name,
-  imageUrl,
-  imageBackUrl,
-  quantity = 1,
-  price,
-  setName,
-  onDelete,
-  onIncrement,
-  onDecrement,
-  onMove,
-  isWishlist = false
-}: MagicCardProps) {
-  const [isFlipped, setIsFlipped] = useState(false);
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user || !inputVal) return;
 
-  const handleFlip = (e: React.MouseEvent) => {
-    e.stopPropagation(); // Empêche de cliquer sur la carte si on clique sur le bouton flip
-    setIsFlipped(!isFlipped);
+    // 1. Nettoyage et Validation basique
+    // Uniquement lettres minuscules, chiffres et underscores
+    const cleanUsername = inputVal.trim().toLowerCase().replace(/[^a-z0-9_]/g, '');
+
+    if (cleanUsername.length < 3) {
+      toast.error("Le pseudo doit faire au moins 3 caractères.");
+      return;
+    }
+    
+    if (cleanUsername !== inputVal.trim().toLowerCase()) {
+        toast.error("Caractères spéciaux interdits (sauf _ )");
+        return;
+    }
+
+    setIsChecking(true);
+
+    try {
+      // 2. Vérification d'unicité (On check la collection 'usernames')
+      const usernameRef = doc(db, 'usernames', cleanUsername);
+      const usernameSnap = await getDoc(usernameRef);
+
+      if (usernameSnap.exists()) {
+        toast.error(`Le pseudo "${cleanUsername}" est déjà pris.`);
+        setIsChecking(false);
+        return;
+      }
+
+      // 3. Création atomique (Tout ou rien) via Batch
+      const batch = writeBatch(db);
+
+      // A. Réserver le pseudo dans la collection globale
+      batch.set(usernameRef, { uid: user.uid });
+
+      // B. Créer le profil public de l'utilisateur
+      const profileRef = doc(db, 'users', user.uid, 'public_profile', 'info');
+      batch.set(profileRef, {
+        username: cleanUsername,
+        displayName: user.displayName || 'Joueur Inconnu',
+        photoURL: user.photoURL || null,
+        createdAt: serverTimestamp(),
+        bio: "Nouveau membre MagicWish"
+      });
+
+      await batch.commit();
+
+      toast.success(`Bienvenue, @${cleanUsername} !`);
+      setIsOpen(false); // Le AuthContext va se mettre à jour auto et fermer la modale, mais on force ici pour UI instantanée
+
+    } catch (error) {
+      console.error(error);
+      toast.error("Erreur lors de la création du profil.");
+    } finally {
+      setIsChecking(false);
+    }
   };
 
-  const currentImage = isFlipped && imageBackUrl ? imageBackUrl : imageUrl;
+  if (!isOpen) return null;
 
   return (
-    <div className="relative group flex flex-col bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden p-3 gap-3 border border-gray-100 dark:border-gray-700 hover:border-blue-300 dark:hover:border-blue-500 transition-colors h-full">
-      
-      {/* --- BOUTONS D'ACTION (Top) --- */}
-      <div className="absolute top-2 left-2 right-2 flex justify-between z-20">
-        {/* Bouton Wishlist -> Collection */}
-        {isWishlist && onMove && (
-          <button
-            onClick={onMove}
-            className="p-1.5 bg-green-100 text-green-700 hover:bg-green-600 hover:text-white rounded-full transition opacity-100 md:opacity-0 md:group-hover:opacity-100 shadow-sm"
-            title="Déplacer vers Collection"
-          >
-            📦
-          </button>
-        )}
-        
-        {/* Spacer si pas de bouton gauche */}
-        {!isWishlist && <div></div>}
-
-        {/* Bouton Supprimer */}
-        {onDelete && (
-          <button
-            onClick={onDelete}
-            className="p-1.5 bg-red-50 text-gray-400 hover:text-white hover:bg-red-600 rounded-full transition opacity-100 md:opacity-0 md:group-hover:opacity-100"
-            title="Supprimer"
-          >
-            🗑️
-          </button>
-        )}
-      </div>
-
-      {/* --- IMAGE ET BOUTON FLIP --- */}
-      <div className="relative w-full aspect-[2.5/3.5] bg-gray-200 rounded-lg overflow-hidden">
-        <img
-          src={currentImage || CARD_BACK_URL}
-          alt={name}
-          className="w-full h-full object-cover transition-transform duration-300"
-          onError={(e) => { e.currentTarget.src = CARD_BACK_URL; }}
-        />
-
-        {/* BOUTON FLIP (Exactement comme Scryfall) */}
-        {imageBackUrl && (
-          <button
-            onClick={handleFlip}
-            className="absolute top-1/2 right-2 -translate-y-1/2 bg-black/50 hover:bg-black/80 text-white p-3 rounded-full backdrop-blur-sm transition-all shadow-lg border border-white/20 z-10"
-            title="Retourner la carte"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-8 h-8">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" />
-            </svg>
-          </button>
-        )}
-      </div>
-      
-      {/* --- INFO CARTE --- */}
-      <div className="flex-1 flex flex-col min-w-0">
-        <h3 className="font-bold text-sm md:text-base truncate mb-1" title={name}>
-            {/* Si c'est retourné, on peut afficher le nom du dos si on veut, mais gardons le nom principal pour simplifier */}
-            {name}
-        </h3>
-        
-        {setName && <p className="text-xs text-blue-600 dark:text-blue-400 mb-2 truncate font-medium">{setName}</p>}
-        
-        <div className="mt-auto flex justify-between items-end border-t border-gray-100 dark:border-gray-700 pt-2">
-          {/* Compteur */}
-          <div className="flex items-center gap-2">
-            <button onClick={onDecrement} className="bg-gray-200 dark:bg-gray-700 w-7 h-7 rounded hover:bg-gray-300 font-bold flex items-center justify-center">-</button>
-            <span className="font-mono text-lg w-5 text-center">{quantity}</span>
-            <button onClick={onIncrement} className="bg-blue-100 dark:bg-blue-900 text-blue-600 font-bold w-7 h-7 rounded hover:bg-blue-200 flex items-center justify-center">+</button>
-          </div>
-          
-          {/* Prix */}
-          <div className="text-right">
-             <p className="text-[10px] text-gray-400">Unit: {price}€</p>
-             <p className="font-bold text-gray-700 dark:text-gray-200">{(price ? price * quantity : 0).toFixed(2)} €</p>
-          </div>
+    <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-[100] p-4 backdrop-blur-md">
+      <div className="bg-white dark:bg-gray-800 rounded-2xl p-8 max-w-md w-full shadow-2xl border border-gray-200 dark:border-gray-700 animate-in zoom-in duration-300">
+        <div className="text-center mb-6">
+          <div className="text-4xl mb-2">👋</div>
+          <h2 className="text-2xl font-bold text-gray-900 dark:text-white">Bienvenue sur MagicWish !</h2>
+          <p className="text-gray-500 dark:text-gray-400 mt-2">
+            Pour permettre à vos amis de vous trouver, veuillez choisir un <span className="font-bold text-blue-600">nom d'utilisateur unique</span>.
+          </p>
         </div>
+
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              Votre pseudo (ex: jace_beleren)
+            </label>
+            <div className="relative">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 font-bold">@</span>
+              <input
+                type="text"
+                value={inputVal}
+                onChange={(e) => setInputVal(e.target.value.toLowerCase())}
+                className="w-full pl-8 p-3 border rounded-lg bg-gray-50 dark:bg-gray-900 dark:border-gray-600 focus:ring-2 focus:ring-blue-500 outline-none lowercase"
+                placeholder="pseudo_unique"
+                disabled={isChecking}
+                autoFocus
+              />
+            </div>
+            <p className="text-xs text-gray-400 mt-1">Lettres minuscules, chiffres et underscore (_) uniquement.</p>
+          </div>
+
+          <button
+            type="submit"
+            disabled={isChecking || inputVal.length < 3}
+            className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-xl transition shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {isChecking ? 'Vérification...' : 'Valider mon profil 🚀'}
+          </button>
+        </form>
       </div>
     </div>
   );
+}
+</file>
+
+<file path="components/wishlist/GlobalWishlistView.tsx">
+'use client';
+
+import { useState, useEffect, useMemo } from 'react';
+import { useAuth } from '@/lib/AuthContext';
+import { WishlistMeta } from '@/hooks/useWishlists';
+import { CardType } from '@/hooks/useCardCollection';
+import MagicCard from '@/components/MagicCard';
+import { db } from '@/lib/firebase';
+import { collection, getDocs } from 'firebase/firestore';
+import toast from 'react-hot-toast';
+
+type Props = {
+    lists: WishlistMeta[];
+};
+
+export default function GlobalWishlistView({ lists }: Props) {
+    const { user } = useAuth();
+    const [allCards, setAllCards] = useState<(CardType & { sourceListName: string })[]>([]);
+    const [loading, setLoading] = useState(true);
+
+    useEffect(() => {
+        if (!user || lists.length === 0) return;
+
+        const fetchAll = async () => {
+            setLoading(true);
+            let combined: (CardType & { sourceListName: string })[] = [];
+
+            try {
+                // A. Liste par défaut
+                const defaultRef = collection(db, 'users', user.uid, 'wishlist');
+                const defaultSnap = await getDocs(defaultRef);
+                const defaultCards = defaultSnap.docs.map(d => ({ 
+                    ...d.data(), id: d.id, sourceListName: 'Liste principale' 
+                })) as (CardType & { sourceListName: string })[];
+                combined = [...defaultCards];
+
+                // B. Listes customs
+                const customLists = lists.filter(l => l.id !== 'default');
+                const promises = customLists.map(async (list) => {
+                    const colRef = collection(db, 'users', user.uid, 'wishlists_data', list.id, 'cards');
+                    const snap = await getDocs(colRef);
+                    return snap.docs.map(d => ({
+                        ...d.data(),
+                        id: d.id,
+                        sourceListName: list.name
+                    })) as (CardType & { sourceListName: string })[];
+                });
+
+                const results = await Promise.all(promises);
+                results.forEach(res => {
+                    combined = [...combined, ...res];
+                });
+
+                setAllCards(combined);
+            } catch (error) {
+                console.error("Erreur chargement global", error);
+                toast.error("Erreur chargement global");
+            } finally {
+                setLoading(false);
+            }
+        };
+
+        fetchAll();
+    }, [user, lists]);
+
+    const globalTotal = useMemo(() => {
+        return allCards.reduce((acc, card) => acc + (card.price || 0) * card.quantity, 0);
+    }, [allCards]);
+
+    if (loading) return <div className="p-10 text-center animate-pulse">Fusion des listes en cours...</div>;
+
+    return (
+        <div className="animate-in fade-in duration-300">
+             <div className="flex justify-between items-end mb-6 border-b pb-4 dark:border-gray-700 bg-gradient-to-r from-blue-50 to-transparent dark:from-blue-900/20 p-4 rounded-t-xl">
+                <div>
+                    <h2 className="text-2xl font-bold text-gray-800 dark:text-white flex items-center gap-2">
+                        🌍 Vue Globale
+                    </h2>
+                    <p className="text-sm text-gray-500 mt-1">
+                        Toutes vos cartes fusionnées ({allCards.length} cartes distinctes)
+                    </p>
+                </div>
+                <div className="text-right">
+                    <span className="text-xs text-gray-500 uppercase font-semibold">Valeur Totale</span>
+                    <p className="text-3xl font-bold text-blue-600 dark:text-blue-400">{globalTotal.toFixed(2)} €</p>
+                </div>
+            </div>
+
+            {allCards.length === 0 ? (
+                <div className="text-center py-12">
+                    <p className="text-gray-500 italic">Aucune carte trouvée.</p>
+                </div>
+            ) : (
+                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                    {allCards.map((card, idx) => (
+                        <div key={`${card.id}-${idx}`} className="relative group">
+                            <div className="absolute top-0 right-0 z-30 bg-black/70 text-white text-[10px] px-2 py-1 rounded-bl-lg backdrop-blur-sm pointer-events-none">
+                                {card.sourceListName}
+                            </div>
+                            <MagicCard {...card} isWishlist={false} />
+                        </div>
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+}
+</file>
+
+<file path="components/wishlist/SingleWishlistView.tsx">
+// components/wishlist/SingleWishlistView.tsx
+'use client';
+
+import { useAuth } from '@/lib/AuthContext';
+import { useCardCollection, CardType } from '@/hooks/useCardCollection';
+import MagicCard from '@/components/MagicCard';
+import { db } from '@/lib/firebase';
+import { doc, runTransaction, increment } from 'firebase/firestore';
+import toast from 'react-hot-toast';
+
+type Props = {
+    listId: string;
+    listName: string;
+};
+
+export default function SingleWishlistView({ listId, listName }: Props) {
+    // On récupère toggleAttribute ici
+    const { cards, loading, updateQuantity, removeCard, toggleAttribute, totalPrice } = useCardCollection('wishlist', listId);
+    const { user } = useAuth();
+    
+    const moveToCollection = async (card: CardType) => {
+        if (!user) return;
+        const toastId = toast.loading("Déplacement...");
+        try {
+            const sourcePath = listId === 'default' ? 'wishlist' : `wishlists_data/${listId}/cards`;
+            const wishlistRef = doc(db, 'users', user.uid, sourcePath, card.id);
+            const collectionRef = doc(db, 'users', user.uid, 'collection', card.id);
+
+            await runTransaction(db, async (transaction) => {
+                const colDoc = await transaction.get(collectionRef);
+                // On garde les propriétés Foil/Version lors du déplacement si la carte n'existe pas encore
+                // Sinon on incrémente juste.
+                if (colDoc.exists()) {
+                    transaction.update(collectionRef, { quantity: increment(card.quantity) });
+                } else {
+                    transaction.set(collectionRef, { 
+                        ...card, 
+                        wishlistId: null, 
+                        addedAt: new Date(),
+                        isFoil: card.isFoil || false // On garde l'info
+                    });
+                }
+                transaction.delete(wishlistRef);
+            });
+            toast.success("Ajoutée à la collection !", { id: toastId });
+        } catch (error) {
+            console.error(error);
+            toast.error("Erreur", { id: toastId });
+        }
+    };
+
+    if (loading) return <div className="p-10 text-center text-gray-500">Chargement des cartes...</div>;
+
+    return (
+        <div className="animate-in fade-in duration-300">
+            <div className="flex justify-between items-end mb-6 border-b pb-4 dark:border-gray-700">
+                <h2 className="text-2xl font-bold text-gray-800 dark:text-white">{listName}</h2>
+                <div className="text-right">
+                    <span className="text-xs text-gray-500 uppercase font-semibold">Total estimé</span>
+                    <p className="text-2xl font-bold text-green-600 dark:text-green-400">{totalPrice.toFixed(2)} €</p>
+                </div>
+            </div>
+
+            {cards.length === 0 ? (
+                <div className="text-center py-12 bg-gray-50 dark:bg-gray-800/50 rounded-xl border border-dashed border-gray-200 dark:border-gray-700">
+                    <p className="text-gray-500 italic">Cette liste est vide.</p>
+                </div>
+            ) : (
+                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                    {cards.map(card => (
+                        <MagicCard 
+                            key={card.id} 
+                            {...card} 
+                            isWishlist={true}
+                            onIncrement={() => updateQuantity(card.id, 1, card.quantity)}
+                            onDecrement={() => {
+                                if(card.quantity === 1) { if(confirm("Supprimer ?")) removeCard(card.id); } 
+                                else { updateQuantity(card.id, -1, card.quantity); }
+                            }}
+                            onDelete={() => { if(confirm("Supprimer ?")) removeCard(card.id); }}
+                            onMove={() => moveToCollection(card)}
+                            // NOUVEAU : On passe la fonction de toggle
+                            onToggleAttribute={(field, val) => toggleAttribute(card.id, field, val)}
+                        />
+                    ))}
+                </div>
+            )}
+        </div>
+    );
 }
 </file>
 
@@ -711,6 +950,183 @@ const eslintConfig = defineConfig([
 ]);
 
 export default eslintConfig;
+</file>
+
+<file path="hooks/useTradeMatcher.ts">
+// hooks/useTradeMatcher.ts
+import { useState } from 'react';
+import { useAuth } from '@/lib/AuthContext';
+import { db } from '@/lib/firebase';
+import { collection, getDocs, doc, updateDoc } from 'firebase/firestore';
+import { useWishlists } from './useWishlists';
+import { useFriends, FriendProfile } from './useFriends';
+import { CardType } from './useCardCollection';
+
+export type TradeProposal = {
+  friend: FriendProfile;
+  toReceive: CardType[]; 
+  toGive: CardType[];    
+  balance: number;       
+};
+
+export function useTradeMatcher() {
+  const { user } = useAuth();
+  const { lists } = useWishlists();
+  const { friends } = useFriends();
+  
+  const [proposals, setProposals] = useState<TradeProposal[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [status, setStatus] = useState("");
+
+  const fetchAllCards = async (uid: string, mode: 'collection' | 'wishlist', userLists: any[] = []) => {
+    const cardsMap = new Map<string, CardType>();
+
+    if (mode === 'collection') {
+        const snap = await getDocs(collection(db, 'users', uid, 'collection'));
+        snap.forEach(d => cardsMap.set(d.id, { id: d.id, ...d.data() } as CardType));
+    } else {
+        const defSnap = await getDocs(collection(db, 'users', uid, 'wishlist'));
+        defSnap.forEach(d => cardsMap.set(d.id, { id: d.id, ...d.data() } as CardType));
+        
+        if (userLists.length > 0) {
+            for (const list of userLists) {
+                 if (list.id === 'default') continue;
+                 const snap = await getDocs(collection(db, 'users', uid, 'wishlists_data', list.id, 'cards'));
+                 snap.forEach(d => cardsMap.set(d.id, { id: d.id, ...d.data() } as CardType));
+            }
+        } else {
+            const metaSnap = await getDocs(collection(db, 'users', uid, 'wishlists_meta'));
+            for (const meta of metaSnap.docs) {
+                const snap = await getDocs(collection(db, 'users', uid, 'wishlists_data', meta.id, 'cards'));
+                snap.forEach(d => cardsMap.set(d.id, { id: d.id, ...d.data() } as CardType));
+            }
+        }
+    }
+    return cardsMap;
+  };
+
+  const refreshPrices = async (cardsToUpdate: CardType[], uid: string, collectionName: string) => {
+     for (const card of cardsToUpdate) {
+         try {
+             const res = await fetch(`https://api.scryfall.com/cards/${card.id}`);
+             if (res.ok) {
+                 const scryfallData = await res.json();
+                 const newPrice = parseFloat(scryfallData.prices?.eur || "0");
+                 
+                 if (newPrice !== card.price) {
+                     if (collectionName === 'collection') {
+                        const ref = doc(db, 'users', uid, 'collection', card.id);
+                        updateDoc(ref, { price: newPrice });
+                     }
+                     card.price = newPrice;
+                 }
+             }
+         } catch (e) { console.error("Err price fetch", e); }
+     }
+  };
+
+  const runScan = async () => {
+    if (!user || friends.length === 0) return;
+    setLoading(true);
+    setStatus("Chargement de vos données...");
+
+    try {
+        // 1. CHARGER MES DONNÉES
+        const myCollectionMap = await fetchAllCards(user.uid, 'collection');
+        const myWishlistMap = await fetchAllCards(user.uid, 'wishlist', lists);
+
+        // --- PRÉPARATION DE MA WISHLIST (HYBRIDE) ---
+        const myWishlistNames = new Set<string>(); // Pour les cartes "N'importe quelle version"
+        const myWishlistIds = new Set<string>();   // Pour les cartes "Version Exacte"
+
+        myWishlistMap.forEach(card => {
+            if (card.isSpecificVersion) {
+                myWishlistIds.add(card.id); // ID Scryfall exact
+            } else {
+                myWishlistNames.add(card.name); // Nom uniquement
+            }
+        });
+
+        // --- PRÉPARATION DE MA COLLECTION (POUR CE QUE JE DONNE) ---
+        // Ici, c'est plus simple : on propose ce qu'on a. C'est l'autre qui décide si ça lui va.
+        // Donc on garde Map et Noms pour matcher les désirs de l'autre.
+        const myCollectionNames = new Set<string>();
+        myCollectionMap.forEach(card => myCollectionNames.add(card.name));
+
+        const newProposals: TradeProposal[] = [];
+
+        // 2. BOUCLE SUR AMIS
+        let i = 0;
+        for (const friend of friends) {
+            i++;
+            setStatus(`Analyse de ${friend.username} (${i}/${friends.length})...`);
+            
+            const friendCollectionMap = await fetchAllCards(friend.uid, 'collection');
+            const friendWishlistMap = await fetchAllCards(friend.uid, 'wishlist');
+
+            const toReceive: CardType[] = [];
+            const toGive: CardType[] = [];
+
+            // MATCH A : Ce qu'il a (sa Collection) que je veux (ma Wishlist)
+            friendCollectionMap.forEach((card) => {
+                // 1. Est-ce que cette carte précise est dans ma liste stricte ?
+                if (myWishlistIds.has(card.id)) {
+                    toReceive.push(card);
+                } 
+                // 2. Sinon, est-ce que son NOM est dans ma liste générique ?
+                else if (myWishlistNames.has(card.name)) {
+                    toReceive.push(card);
+                }
+            });
+
+            // MATCH B : Ce que j'ai (ma Collection) qu'il veut (sa Wishlist)
+            // On doit analyser SA wishlist pour savoir s'il est strict ou pas
+            const friendWishlistNames = new Set<string>();
+            const friendWishlistIds = new Set<string>();
+
+            friendWishlistMap.forEach(c => {
+                if (c.isSpecificVersion) friendWishlistIds.add(c.id);
+                else friendWishlistNames.add(c.name);
+            });
+
+            myCollectionMap.forEach((card) => {
+                // Même logique : est-ce que ma carte matche ses critères ?
+                if (friendWishlistIds.has(card.id)) {
+                    toGive.push(card);
+                }
+                else if (friendWishlistNames.has(card.name)) {
+                    toGive.push(card);
+                }
+            });
+
+            if (toReceive.length > 0 || toGive.length > 0) {
+                await refreshPrices(toReceive, friend.uid, 'collection');
+                await refreshPrices(toGive, user.uid, 'collection');
+
+                const valueReceive = toReceive.reduce((sum, c) => sum + (c.customPrice ?? c.price ?? 0), 0);
+                const valueGive = toGive.reduce((sum, c) => sum + (c.customPrice ?? c.price ?? 0), 0);
+
+                newProposals.push({
+                    friend,
+                    toReceive,
+                    toGive,
+                    balance: valueGive - valueReceive
+                });
+            }
+        }
+
+        setProposals(newProposals);
+
+    } catch (error) {
+        console.error("Erreur scan", error);
+    } finally {
+        setLoading(false);
+        setStatus("");
+    }
+  };
+
+  return { proposals, loading, status, runScan };
+}
 </file>
 
 <file path="hooks/useWishlists.ts">
@@ -966,201 +1382,423 @@ Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/bui
 }
 </file>
 
-<file path="hooks/useCardCollection.ts">
-// hooks/useCardCollection.ts
-import { useState, useEffect, useMemo } from 'react';
-import { db } from '@/lib/firebase';
-import { collection, onSnapshot, doc, updateDoc, deleteDoc, increment } from 'firebase/firestore';
-import { useAuth } from '@/lib/AuthContext';
-import toast from 'react-hot-toast';
+<file path="app/layout.tsx">
+// app/layout.tsx
+import type { Metadata } from 'next';
+import { Inter } from 'next/font/google';
+import './globals.css';
+import { AuthProvider } from '@/lib/AuthContext';
+import Header from '@/components/Header'; 
+import { Toaster } from 'react-hot-toast';
+import UsernameSetupModal from '@/components/UsernameSetupModal'; // <--- IMPORT
 
-export type CardType = {
-  id: string;
-  name: string;
-  imageUrl: string;
-  imageBackUrl?: string;
-  quantity: number;
-  price?: number;
-  setName?: string;
-  setCode?: string;
-  wishlistId?: string; // Utile pour la vue globale
+const inter = Inter({ subsets: ['latin'] });
+
+export const metadata: Metadata = {
+  title: 'MagicWish',
+  description: 'Votre wishlist de cartes Magic',
 };
 
-// MODIFICATION: On accepte maintenant un path explicite ou un listId
-export function useCardCollection(target: 'collection' | 'wishlist', listId: string = 'default') {
-  const { user, loading: authLoading } = useAuth();
-  const [cards, setCards] = useState<CardType[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    if (!user || authLoading) {
-        if (!authLoading) setLoading(false);
-        return;
-    }
-
-    setLoading(true);
-
-    // LOGIQUE DE CHEMIN DYNAMIQUE
-    let collectionPath = '';
-    
-    if (target === 'collection') {
-        // La collection reste unique (pour l'instant)
-        collectionPath = `users/${user.uid}/collection`;
-    } else {
-        // Gestion des Wishlists
-        if (listId === 'default') {
-            // Rétro-compatibilité : l'ancienne wishlist
-            collectionPath = `users/${user.uid}/wishlist`;
-        } else {
-            // Nouvelles wishlists
-            collectionPath = `users/${user.uid}/wishlists_data/${listId}/cards`;
-        }
-    }
-
-    const colRef = collection(db, collectionPath);
-
-    const unsubscribe = onSnapshot(colRef, (snapshot) => {
-      const items = snapshot.docs.map((doc) => ({
-        id: doc.id,
-        wishlistId: listId, // On marque l'origine
-        ...doc.data(),
-      })) as CardType[];
-      
-      setCards(items);
-      setLoading(false);
-    }, (error) => {
-      console.error("Erreur Firestore:", error);
-      setLoading(false);
-    });
-
-    return () => unsubscribe();
-  }, [user, target, listId, authLoading]);
-
-  // Tri
-  const sortedCards = useMemo(() => {
-    return [...cards].sort((a, b) => a.name.localeCompare(b.name));
-  }, [cards]);
-
-  // Helpers pour retrouver le bon chemin pour les updates
-  const getDocRef = (cardId: string) => {
-      if (!user) return null;
-      let path = '';
-      if (target === 'collection') path = `users/${user.uid}/collection`;
-      else if (listId === 'default') path = `users/${user.uid}/wishlist`;
-      else path = `users/${user.uid}/wishlists_data/${listId}/cards`;
-      return doc(db, path, cardId);
-  };
-
-  const updateQuantity = async (cardId: string, amount: number, currentQuantity: number) => {
-    if (!user) return;
-    const ref = getDocRef(cardId);
-    if (!ref) return;
-
-    if (currentQuantity + amount <= 0) return 'shouldDelete';
-
-    try {
-      await updateDoc(ref, { quantity: increment(amount) });
-      return 'updated';
-    } catch (err) {
-      toast.error("Erreur update");
-      return 'error';
-    }
-  };
-
-  const removeCard = async (cardId: string) => {
-    if (!user) return;
-    const ref = getDocRef(cardId);
-    if(ref) {
-        await deleteDoc(ref);
-        toast.success('Carte retirée', { icon: '🗑️' });
-    }
-  };
-
-  const totalPrice = useMemo(() => {
-    return cards.reduce((acc, card) => acc + (card.price || 0) * card.quantity, 0);
-  }, [cards]);
-
-  return { cards: sortedCards, loading, updateQuantity, removeCard, totalPrice };
+export default function RootLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  return (
+    <html lang="fr">
+      <body className={inter.className}>
+        <AuthProvider>
+          <Header />
+          {children}
+          
+          {/* Composants Globaux */}
+          <UsernameSetupModal /> {/* <--- AJOUTE ÇA ICI */}
+          <Toaster position="bottom-right" />
+        </AuthProvider>
+      </body>
+    </html>
+  );
 }
 </file>
 
-<file path="lib/AuthContext.tsx">
+<file path="components/MagicCard.tsx">
+// components/MagicCard.tsx
 'use client';
 
-import { createContext, useContext, useEffect, useState, useMemo } from 'react';
+import { useState } from 'react';
+
+type MagicCardProps = {
+  id?: string;
+  name: string;
+  imageUrl: string;
+  imageBackUrl?: string | null;
+  quantity?: number;
+  price?: number;
+  customPrice?: number; 
+  setName?: string;
+  
+  // NOUVELLES PROPS
+  isFoil?: boolean;
+  isSpecificVersion?: boolean;
+  
+  onDelete?: () => void;
+  onIncrement?: () => void;
+  onDecrement?: () => void;
+  onMove?: () => void;
+  
+  // Fonctions d'édition passées par le parent (Optimisation)
+  onEditPrice?: (newPrice: number) => void;
+  onToggleAttribute?: (field: 'isFoil' | 'isSpecificVersion', currentValue: boolean) => void;
+  
+  isWishlist?: boolean;
+  readOnly?: boolean;
+  isTradeView?: boolean;
+  allowPriceEdit?: boolean;
+};
+
+const CARD_BACK_URL = "https://cards.scryfall.io/large/front/a/6/a6984342-f723-4e80-8e69-902d287a915f.jpg";
+
+export default function MagicCard(props: MagicCardProps) {
+  const { 
+      id, name, imageUrl, imageBackUrl, quantity = 1, 
+      price, customPrice, setName, 
+      isFoil, isSpecificVersion, // Récupération
+      isTradeView, allowPriceEdit, 
+      onEditPrice, onToggleAttribute, 
+      readOnly, isWishlist,
+      onDelete, onIncrement, onDecrement, onMove
+  } = props;
+  
+  const [isFlipped, setIsFlipped] = useState(false);
+  const [isEditingPrice, setIsEditingPrice] = useState(false);
+  const [tempPrice, setTempPrice] = useState(customPrice?.toString() || price?.toString() || "0");
+
+  const effectivePrice = customPrice !== undefined ? customPrice : (price || 0);
+
+  const handleSavePrice = () => {
+      if (onEditPrice) {
+          onEditPrice(parseFloat(tempPrice));
+          setIsEditingPrice(false);
+      }
+  };
+
+  const currentImage = isFlipped && imageBackUrl ? imageBackUrl : imageUrl;
+
+  // --- VUE LISTE COMPACTE (TRADE) ---
+  if (isTradeView) {
+      return (
+        <div className="flex items-center gap-3 bg-white dark:bg-gray-800 p-2 rounded-lg border border-gray-100 dark:border-gray-700">
+            <div className="w-10 h-14 bg-gray-200 rounded overflow-hidden flex-shrink-0 relative group cursor-pointer" onClick={() => setIsFlipped(!isFlipped)}>
+                 <img src={currentImage} className="w-full h-full object-cover" alt={name} />
+                 {/* Badges Miniatures */}
+                 {isFoil && <div className="absolute top-0 right-0 bg-purple-600/80 text-white text-[8px] px-1 font-bold">✨</div>}
+            </div>
+            
+            <div className="flex-grow min-w-0">
+                <div className="flex items-center gap-2">
+                    <p className="font-bold text-sm truncate" title={name}>{name}</p>
+                    {isFoil && <span className="text-xs" title="Foil">✨</span>}
+                </div>
+                <div className="flex items-center gap-2 text-xs text-gray-500">
+                    <p className="truncate">{setName}</p>
+                    {isSpecificVersion && <span className="bg-gray-200 dark:bg-gray-700 px-1 rounded text-[9px] border border-gray-400" title="Édition exacte requise">🔒 EXACT</span>}
+                </div>
+            </div>
+
+            <div className="text-right flex flex-col items-end">
+                {isEditingPrice ? (
+                    <div className="flex items-center gap-1">
+                        <input type="number" value={tempPrice} onChange={(e) => setTempPrice(e.target.value)} className="w-16 p-1 text-xs border rounded text-black" autoFocus />
+                        <button onClick={handleSavePrice} className="text-green-600 text-xs font-bold">OK</button>
+                    </div>
+                ) : (
+                    <div 
+                        className={`font-bold text-sm ${customPrice ? 'text-orange-600' : 'text-gray-700 dark:text-gray-300'} ${allowPriceEdit ? 'cursor-pointer hover:underline' : ''}`}
+                        onClick={() => { if (allowPriceEdit) { setTempPrice(effectivePrice.toString()); setIsEditingPrice(true); }}}
+                        title={customPrice ? "Prix personnalisé" : "Prix Scryfall"}
+                    >
+                        {effectivePrice.toFixed(2)} €
+                        {customPrice && <span className="text-[8px] align-top ml-0.5">*</span>}
+                    </div>
+                )}
+            </div>
+        </div>
+      );
+  }
+
+  // --- VUE NORMALE (GRILLE) ---
+  return (
+    <div className={`relative group flex flex-col bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden p-3 gap-3 border transition-colors h-full ${isFoil ? 'border-purple-300 dark:border-purple-800 shadow-purple-100 dark:shadow-none' : 'border-gray-100 dark:border-gray-700 hover:border-blue-300 dark:hover:border-blue-500'}`}>
+      
+      {/* --- BADGES ET TOGGLES (Sur l'image) --- */}
+      <div className="absolute top-14 left-4 z-10 flex flex-col gap-1">
+        {/* Toggle Foil */}
+        {isWishlist && !readOnly && onToggleAttribute && (
+            <button 
+                onClick={() => onToggleAttribute('isFoil', !!isFoil)}
+                className={`w-6 h-6 rounded-full flex items-center justify-center text-xs shadow-md border ${isFoil ? 'bg-purple-600 text-white border-purple-400' : 'bg-white/80 text-gray-400 border-gray-300 hover:text-purple-600'}`}
+                title="Basculer Foil"
+            >
+                ✨
+            </button>
+        )}
+        {/* Toggle Specific */}
+        {isWishlist && !readOnly && onToggleAttribute && (
+            <button 
+                onClick={() => onToggleAttribute('isSpecificVersion', !!isSpecificVersion)}
+                className={`w-6 h-6 rounded-full flex items-center justify-center text-xs shadow-md border ${isSpecificVersion ? 'bg-blue-600 text-white border-blue-400' : 'bg-white/80 text-gray-400 border-gray-300 hover:text-blue-600'}`}
+                title={isSpecificVersion ? "Version exacte requise" : "N'importe quelle version"}
+            >
+                {isSpecificVersion ? '🔒' : '🌍'}
+            </button>
+        )}
+      </div>
+
+      {/* --- BOUTONS D'ACTION (Top) --- */}
+      {!readOnly && (
+        <div className="absolute top-2 left-2 right-2 flex justify-between z-20 pointer-events-none">
+            {isWishlist && onMove && (
+            <button onClick={onMove} className="pointer-events-auto p-1.5 bg-green-100 text-green-700 hover:bg-green-600 hover:text-white rounded-full transition opacity-100 md:opacity-0 md:group-hover:opacity-100 shadow-sm" title="Déplacer vers Collection">📦</button>
+            )}
+            
+            {!isWishlist && <div></div>} 
+
+            {onDelete && (
+            <button onClick={onDelete} className="pointer-events-auto p-1.5 bg-red-50 text-gray-400 hover:text-white hover:bg-red-600 rounded-full transition opacity-100 md:opacity-0 md:group-hover:opacity-100" title="Supprimer">🗑️</button>
+            )}
+        </div>
+      )}
+
+      {/* --- IMAGE --- */}
+      <div className="relative w-full aspect-[2.5/3.5] bg-gray-200 rounded-lg overflow-hidden">
+        <img
+          src={currentImage || CARD_BACK_URL}
+          alt={name}
+          className="w-full h-full object-cover transition-transform duration-300"
+          onError={(e) => { e.currentTarget.src = CARD_BACK_URL; }}
+        />
+        {isFoil && <div className="absolute inset-0 bg-gradient-to-tr from-purple-500/20 to-transparent pointer-events-none mix-blend-overlay"></div>}
+
+        {imageBackUrl && (
+          <button onClick={() => setIsFlipped(!isFlipped)} className="absolute top-1/2 right-2 -translate-y-1/2 bg-black/50 hover:bg-black/80 text-white p-2 rounded-full backdrop-blur-sm transition-all shadow-lg border border-white/20 z-10 pointer-events-auto">
+            🔄
+          </button>
+        )}
+      </div>
+      
+      {/* --- INFO CARTE --- */}
+      <div className="flex-1 flex flex-col min-w-0">
+        <div className="flex justify-between items-start">
+            <h3 className="font-bold text-sm md:text-base truncate mb-1 flex-grow" title={name}>{name}</h3>
+        </div>
+        
+        <div className="flex items-center gap-2 mb-2">
+            <p className="text-xs text-blue-600 dark:text-blue-400 truncate font-medium max-w-[70%]">{setName}</p>
+            {/* Indicateurs passifs si ReadOnly */}
+            {readOnly && isFoil && <span className="text-[10px] bg-purple-100 text-purple-700 px-1 rounded border border-purple-200">Foil</span>}
+            {readOnly && isSpecificVersion && <span className="text-[10px] bg-gray-100 text-gray-700 px-1 rounded border border-gray-200">Exact</span>}
+        </div>
+        
+        <div className="mt-auto flex justify-between items-end border-t border-gray-100 dark:border-gray-700 pt-2">
+          
+          <div className="flex items-center gap-2">
+            {!readOnly && <button onClick={onDecrement} className="bg-gray-200 dark:bg-gray-700 w-7 h-7 rounded hover:bg-gray-300 font-bold flex items-center justify-center">-</button>}
+            <span className={`font-mono text-lg ${readOnly ? 'font-bold text-gray-800 dark:text-white' : 'w-5 text-center'}`}>{readOnly && "x"}{quantity}</span>
+            {!readOnly && <button onClick={onIncrement} className="bg-blue-100 dark:bg-blue-900 text-blue-600 font-bold w-7 h-7 rounded hover:bg-blue-200 flex items-center justify-center">+</button>}
+          </div>
+          
+          <div className="text-right cursor-help" title="Prix unitaire Scryfall ou Perso">
+             <p className="text-[10px] text-gray-400">Unit: {effectivePrice.toFixed(2)}€</p>
+             <p className={`font-bold ${customPrice ? 'text-orange-600' : 'text-gray-700 dark:text-gray-200'}`}>
+                 {(effectivePrice * quantity).toFixed(2)} €
+             </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+</file>
+
+<file path="hooks/useFriends.ts">
+// hooks/useFriends.ts
+import { useState, useEffect } from 'react';
+import { db } from '@/lib/firebase';
+import { useAuth } from '@/lib/AuthContext';
 import { 
-  onAuthStateChanged, 
-  signInWithPopup, 
-  GoogleAuthProvider, 
-  signOut, 
-  User 
-} from 'firebase/auth';
-import { auth } from './firebase';
+  doc, setDoc, deleteDoc, 
+  collection, onSnapshot, serverTimestamp, writeBatch,
+  query, collectionGroup, where, getDocs, limit 
+} from 'firebase/firestore';
 import toast from 'react-hot-toast';
 
-type AuthContextType = {
-  user: User | null;
-  loading: boolean;
-  signInWithGoogle: () => Promise<void>;
-  logOut: () => Promise<void>;
+export type FriendProfile = {
+  uid: string;
+  username: string;
+  displayName: string;
+  photoURL?: string;
 };
 
-const AuthContext = createContext<AuthContextType>({
-  user: null,
-  loading: true,
-  signInWithGoogle: async () => {},
-  logOut: async () => {},
-});
-
-export const useAuth = () => useContext(AuthContext);
-
-export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
-  const [user, setUser] = useState<User | null>(null);
+export function useFriends() {
+  const { user, username } = useAuth();
+  
+  const [friends, setFriends] = useState<FriendProfile[]>([]);
+  const [requestsReceived, setRequestsReceived] = useState<FriendProfile[]>([]);
   const [loading, setLoading] = useState(true);
 
+  // Écouter les amis et les demandes en temps réel
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
-      setUser(currentUser);
+    if (!user) {
+      setFriends([]);
+      setRequestsReceived([]);
       setLoading(false);
+      return;
+    }
+
+    // 1. Écoute Mes Amis
+    const friendsRef = collection(db, 'users', user.uid, 'friends');
+    const unsubFriends = onSnapshot(friendsRef, (snap) => {
+      const list = snap.docs.map(d => d.data() as FriendProfile);
+      setFriends(list);
     });
-    return () => unsubscribe();
-  }, []);
 
-  const signInWithGoogle = async () => {
+    // 2. Écoute Demandes Reçues
+    const reqRef = collection(db, 'users', user.uid, 'friend_requests_received');
+    const unsubReq = onSnapshot(reqRef, (snap) => {
+      const list = snap.docs.map(d => ({ uid: d.id, ...d.data() } as FriendProfile));
+      setRequestsReceived(list);
+    });
+
+    setLoading(false);
+
+    return () => {
+      unsubFriends();
+      unsubReq();
+    };
+  }, [user]);
+
+  // --- ACTIONS ---
+
+  // 1. Rechercher des utilisateurs (Partiel : "Commence par...")
+  const searchUsers = async (searchTerm: string) => {
+    const term = searchTerm.trim().toLowerCase();
+    if (term.length < 2) return [];
+
+    // Technique Firestore pour "Starts With"
+    const usersQuery = query(
+      collectionGroup(db, 'public_profile'), // Cherche dans TOUS les profils publics
+      where('username', '>=', term),
+      where('username', '<=', term + '\uf8ff'),
+      limit(5)
+    );
+
+    const snapshot = await getDocs(usersQuery);
+    
+    const results: FriendProfile[] = [];
+    snapshot.forEach(doc => {
+      const data = doc.data();
+      // Retrouver l'UID parent (users/{uid}/public_profile/info)
+      const foundUid = doc.ref.parent.parent?.id;
+
+      if (foundUid && foundUid !== user?.uid) {
+        results.push({
+            uid: foundUid,
+            username: data.username,
+            displayName: data.displayName,
+            photoURL: data.photoURL
+        });
+      }
+    });
+
+    return results;
+  };
+
+  // 2. Envoyer une demande
+  const sendFriendRequest = async (targetUser: FriendProfile) => {
+    if (!user || !username) return;
+
+    // Check si déjà ami
+    if (friends.some(f => f.uid === targetUser.uid)) {
+      toast.error("Vous êtes déjà amis !");
+      return;
+    }
+
     try {
-      const provider = new GoogleAuthProvider();
-      await signInWithPopup(auth, provider);
-      toast.success('Connexion réussie !');
+      // On écrit dans SA collection 'friend_requests_received'
+      await setDoc(doc(db, 'users', targetUser.uid, 'friend_requests_received', user.uid), {
+        uid: user.uid,
+        username: username,
+        displayName: user.displayName,
+        photoURL: user.photoURL,
+        sentAt: serverTimestamp()
+      });
+      
+      toast.success(`Demande envoyée à @${targetUser.username}`);
     } catch (error) {
       console.error(error);
-      toast.error("Erreur lors de la connexion Google");
+      toast.error("Erreur lors de l'envoi.");
     }
   };
 
-  const logOut = async () => {
+  // 3. Accepter une demande (Transaction Batch)
+  const acceptRequest = async (sender: FriendProfile) => {
+    if (!user || !username) return;
+
     try {
-      await signOut(auth);
-      toast.success('Déconnecté');
-    } catch (error) {
-      console.error(error);
-      toast.error("Erreur déconnexion");
+      const batch = writeBatch(db);
+
+      // A. Ajouter dans MES amis
+      const myFriendRef = doc(db, 'users', user.uid, 'friends', sender.uid);
+      batch.set(myFriendRef, sender);
+
+      // B. Ajouter MOI dans SES amis
+      const hisFriendRef = doc(db, 'users', sender.uid, 'friends', user.uid);
+      batch.set(hisFriendRef, {
+        uid: user.uid,
+        username: username,
+        displayName: user.displayName,
+        photoURL: user.photoURL
+      });
+
+      // C. Supprimer la demande reçue
+      const reqRef = doc(db, 'users', user.uid, 'friend_requests_received', sender.uid);
+      batch.delete(reqRef);
+
+      await batch.commit();
+      toast.success(`Ami ajouté : @${sender.username}`);
+    } catch (err) {
+      console.error(err);
+      toast.error("Erreur validation");
     }
   };
 
-  // Optimisation : on ne recrée l'objet value que si user ou loading change
-  const value = useMemo(() => ({
-    user,
-    loading,
-    signInWithGoogle,
-    logOut
-  }), [user, loading]);
+  // 4. Refuser
+  const declineRequest = async (senderUid: string) => {
+    if (!user) return;
+    await deleteDoc(doc(db, 'users', user.uid, 'friend_requests_received', senderUid));
+    toast.success("Demande supprimée");
+  };
+  
+  // 5. Supprimer ami
+  const removeFriend = async (friendUid: string) => {
+      if(!user) return;
+      if(!confirm("Retirer cet ami ?")) return;
+      
+      await deleteDoc(doc(db, 'users', user.uid, 'friends', friendUid));
+      toast.success("Ami retiré");
+  };
 
-  return (
-    <AuthContext.Provider value={value}>
-      {children}
-    </AuthContext.Provider>
-  );
-};
+  return { 
+    friends, 
+    requestsReceived, 
+    loading, 
+    searchUsers, 
+    sendFriendRequest, 
+    acceptRequest, 
+    declineRequest,
+    removeFriend
+  };
+}
 </file>
 
 <file path="lib/firebase.ts">
@@ -1306,6 +1944,566 @@ export async function GET(request: Request) {
 }
 </file>
 
+<file path="hooks/useCardCollection.ts">
+// hooks/useCardCollection.ts
+import { useState, useEffect, useMemo } from 'react';
+import { db } from '@/lib/firebase';
+import { collection, onSnapshot, doc, updateDoc, deleteDoc, increment } from 'firebase/firestore';
+import { useAuth } from '@/lib/AuthContext';
+import toast from 'react-hot-toast';
+
+export type CardType = {
+  id: string;
+  name: string;
+  imageUrl: string;
+  imageBackUrl?: string;
+  quantity: number;
+  price?: number; 
+  customPrice?: number;
+  setName?: string;
+  setCode?: string;
+  wishlistId?: string;
+  
+  // --- NOUVEAUX CHAMPS ---
+  isFoil?: boolean;             // L'utilisateur veut-il (ou a-t-il) une version Foil ?
+  isSpecificVersion?: boolean;  // Si true : Je veux CETTE édition précise. Si false : N'importe laquelle.
+};
+
+export function useCardCollection(
+    target: 'collection' | 'wishlist', 
+    listId: string = 'default',
+    targetUid?: string
+) {
+  const { user, loading: authLoading } = useAuth();
+  const [cards, setCards] = useState<CardType[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const effectiveUid = targetUid || user?.uid;
+  const isOwner = user?.uid === effectiveUid; 
+
+  useEffect(() => {
+    if (!effectiveUid || authLoading) {
+        if (!authLoading && !effectiveUid) setLoading(false);
+        return;
+    }
+    setLoading(true);
+
+    let collectionPath = '';
+    if (target === 'collection') {
+        collectionPath = `users/${effectiveUid}/collection`;
+    } else {
+        if (listId === 'default') collectionPath = `users/${effectiveUid}/wishlist`;
+        else collectionPath = `users/${effectiveUid}/wishlists_data/${listId}/cards`;
+    }
+
+    const colRef = collection(db, collectionPath);
+    const unsubscribe = onSnapshot(colRef, (snapshot) => {
+      const items = snapshot.docs.map((doc) => ({
+        id: doc.id,
+        wishlistId: listId,
+        ...doc.data(),
+      })) as CardType[];
+      setCards(items);
+      setLoading(false);
+    });
+    return () => unsubscribe();
+  }, [effectiveUid, target, listId, authLoading]);
+
+  // --- ACTIONS ---
+
+  const getDocRef = (cardId: string) => {
+      if (!isOwner || !effectiveUid) return null;
+      let path = '';
+      if (target === 'collection') path = `users/${effectiveUid}/collection`;
+      else if (listId === 'default') path = `users/${effectiveUid}/wishlist`;
+      else path = `users/${effectiveUid}/wishlists_data/${listId}/cards`;
+      return doc(db, path, cardId);
+  };
+
+  const setCustomPrice = async (cardId: string, price: number) => {
+      if (!isOwner) return;
+      const ref = getDocRef(cardId);
+      if (ref) {
+          await updateDoc(ref, { customPrice: price });
+          toast.success("Prix mis à jour");
+      }
+  };
+
+  // NOUVEAU : Fonction pour changer Foil / Version stricte
+  const toggleAttribute = async (cardId: string, field: 'isFoil' | 'isSpecificVersion', currentValue: boolean) => {
+      if (!isOwner) return;
+      const ref = getDocRef(cardId);
+      if (ref) {
+          await updateDoc(ref, { [field]: !currentValue });
+          // Pas de toast ici pour ne pas spammer l'UI, le switch visuel suffit
+      }
+  };
+
+  const updateQuantity = async (cardId: string, amount: number, currentQuantity: number) => {
+    if (!isOwner) return;
+    const ref = getDocRef(cardId);
+    if (!ref) return;
+    if (currentQuantity + amount <= 0) return 'shouldDelete';
+    try {
+      await updateDoc(ref, { quantity: increment(amount) });
+      return 'updated';
+    } catch (err) { return 'error'; }
+  };
+
+  const removeCard = async (cardId: string) => {
+    if (!isOwner) return;
+    const ref = getDocRef(cardId);
+    if(ref) { await deleteDoc(ref); toast.success('Carte retirée', { icon: '🗑️' }); }
+  };
+
+  const totalPrice = useMemo(() => {
+    return cards.reduce((acc, card) => {
+        const effectivePrice = card.customPrice !== undefined ? card.customPrice : (card.price || 0);
+        return acc + effectivePrice * card.quantity;
+    }, 0);
+  }, [cards]);
+
+  return { 
+      cards, loading, isOwner, totalPrice,
+      updateQuantity, removeCard, setCustomPrice, toggleAttribute // Export de la nouvelle fonction
+  };
+}
+</file>
+
+<file path="lib/AuthContext.tsx">
+'use client';
+
+import { createContext, useContext, useEffect, useState, useMemo } from 'react';
+import { 
+  onAuthStateChanged, 
+  signInWithPopup, 
+  GoogleAuthProvider, 
+  signOut, 
+  User 
+} from 'firebase/auth';
+import { doc, onSnapshot, collection } from 'firebase/firestore'; 
+import { auth, db } from './firebase'; 
+import toast from 'react-hot-toast';
+
+type AuthContextType = {
+  user: User | null;
+  username: string | null;
+  loading: boolean;
+  friendRequestCount: number; // Compteur pour les notifications
+  signInWithGoogle: () => Promise<void>;
+  logOut: () => Promise<void>;
+};
+
+const AuthContext = createContext<AuthContextType>({
+  user: null,
+  username: null,
+  loading: true,
+  friendRequestCount: 0,
+  signInWithGoogle: async () => {},
+  logOut: async () => {},
+});
+
+export const useAuth = () => useContext(AuthContext);
+
+export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
+  const [user, setUser] = useState<User | null>(null);
+  const [username, setUsername] = useState<string | null>(null);
+  const [friendRequestCount, setFriendRequestCount] = useState(0);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const unsubscribeAuth = onAuthStateChanged(auth, (currentUser) => {
+      setUser(currentUser);
+
+      if (currentUser) {
+        // 1. Écoute du Pseudo (Profil Public)
+        const profileRef = doc(db, 'users', currentUser.uid, 'public_profile', 'info');
+        const unsubProfile = onSnapshot(profileRef, (docSnap) => {
+          if (docSnap.exists()) {
+            setUsername(docSnap.data().username);
+          } else {
+            setUsername(null);
+          }
+          // On ne met loading à false qu'ici pour être sûr d'avoir le username
+          setLoading(false);
+        });
+
+        // 2. Écoute des Demandes d'amis (Notifications)
+        const requestsRef = collection(db, 'users', currentUser.uid, 'friend_requests_received');
+        const unsubRequests = onSnapshot(requestsRef, (snap) => {
+          setFriendRequestCount(snap.docs.length);
+        });
+
+        // Nettoyage quand l'utilisateur change ou se déconnecte
+        return () => {
+          unsubProfile();
+          unsubRequests();
+        };
+      } else {
+        setUsername(null);
+        setFriendRequestCount(0);
+        setLoading(false);
+      }
+    });
+
+    return () => unsubscribeAuth();
+  }, []);
+
+  const signInWithGoogle = async () => {
+    try {
+      const provider = new GoogleAuthProvider();
+      await signInWithPopup(auth, provider);
+      toast.success('Connexion réussie !');
+    } catch (error) {
+      console.error(error);
+      toast.error("Erreur lors de la connexion Google");
+    }
+  };
+
+  const logOut = async () => {
+    try {
+      await signOut(auth);
+      toast.success('Déconnecté');
+    } catch (error) {
+      console.error(error);
+      toast.error("Erreur déconnexion");
+    }
+  };
+
+  const value = useMemo(() => ({
+    user,
+    username,
+    friendRequestCount,
+    loading,
+    signInWithGoogle,
+    logOut
+  }), [user, username, loading, friendRequestCount]);
+
+  return (
+    <AuthContext.Provider value={value}>
+      {children}
+    </AuthContext.Provider>
+  );
+};
+</file>
+
+<file path="app/collection/page.tsx">
+// app/collection/page.tsx
+'use client';
+
+import { useState } from 'react';
+import { useAuth } from '@/lib/AuthContext';
+import { useCardCollection } from '@/hooks/useCardCollection'; 
+import MagicCard from '@/components/MagicCard';
+import ImportModal from '@/components/ImportModal';
+import ConfirmModal from '@/components/ConfirmModal';
+import DeleteAllButton from '@/components/DeleteAllButton';
+
+export default function CollectionPage() {
+  const { user } = useAuth();
+  
+  // 1. On récupère setCustomPrice et toggleAttribute ici
+  const { 
+    cards, loading, updateQuantity, removeCard, 
+    setCustomPrice, toggleAttribute, // <--- Important
+    totalPrice 
+  } = useCardCollection('collection');
+
+  const [isImportOpen, setIsImportOpen] = useState(false);
+  const [cardToDelete, setCardToDelete] = useState<string | null>(null);
+
+  const handleDecrement = async (cardId: string, currentQty: number) => {
+    const result = await updateQuantity(cardId, -1, currentQty);
+    if (result === 'shouldDelete') {
+      setCardToDelete(cardId);
+    }
+  };
+
+  if (loading) return <p className="text-center p-10 text-gray-500">Chargement de votre collection...</p>;
+  if (!user) return <p className="text-center p-10">Veuillez vous connecter.</p>;
+
+  return (
+    <main className="container mx-auto p-4 pb-20">
+      {/* HEADER */}
+      <div className="flex flex-col md:flex-row justify-between items-center mb-8 gap-4">
+        <div className="flex items-center gap-4">
+          <h1 className="text-3xl font-bold text-blue-700 dark:text-blue-400">
+            Ma Collection <span className="ml-3 text-lg font-normal text-gray-500">({cards.reduce((acc, c) => acc + c.quantity, 0)})</span>
+          </h1>
+          <button 
+            onClick={() => setIsImportOpen(true)} 
+            className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition flex items-center gap-2 shadow-sm"
+          >
+            📂 Importer CSV
+          </button>
+        </div>
+        
+        <div className="flex items-center gap-4">
+           <DeleteAllButton targetCollection="collection" />
+           <div className="bg-blue-50 dark:bg-blue-900/30 text-blue-800 dark:text-blue-100 px-6 py-3 rounded-xl shadow-sm border border-blue-200 dark:border-blue-700">
+             <span className="text-sm uppercase tracking-wide opacity-80">Valeur</span>
+             <div className="text-2xl font-bold">{totalPrice.toFixed(2)} €</div>
+           </div>
+        </div>
+      </div>
+
+      {/* LISTE DES CARTES */}
+      {cards.length === 0 ? (
+        <div className="text-center py-20 bg-gray-50 dark:bg-gray-800/50 rounded-xl border-2 border-dashed border-gray-200 dark:border-gray-700">
+          <p className="text-xl text-gray-500 mb-4">Votre collection est vide.</p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+          {cards.map((card) => (
+            <MagicCard 
+              key={card.id}
+              {...card}
+              // Actions de base
+              onIncrement={() => updateQuantity(card.id, 1, card.quantity)}
+              onDecrement={() => handleDecrement(card.id, card.quantity)}
+              onDelete={() => setCardToDelete(card.id)}
+              
+              // C'EST ICI QUE LA MAGIE OPÈRE (Optimisation) :
+              // On connecte les fonctions du hook parent aux props de l'enfant
+              onEditPrice={(newPrice) => setCustomPrice(card.id, newPrice)}
+              onToggleAttribute={(field, val) => toggleAttribute(card.id, field, val)}
+            />
+          ))}
+        </div>
+      )}
+
+      {/* MODALES */}
+      <ImportModal isOpen={isImportOpen} onClose={() => setIsImportOpen(false)} targetCollection="collection" />
+      
+      <ConfirmModal 
+        isOpen={!!cardToDelete} 
+        onClose={() => setCardToDelete(null)} 
+        onConfirm={() => { if(cardToDelete) removeCard(cardToDelete); }} 
+        title="Retirer ?" 
+        message="Cette carte sera retirée de votre collection."
+      />
+    </main>
+  );
+}
+</file>
+
+<file path="app/contacts/page.tsx">
+// app/contacts/page.tsx
+'use client';
+
+import { useState, useEffect } from 'react'; // <--- Ajout de useEffect
+import Link from 'next/link';
+import { useAuth } from '@/lib/AuthContext';
+import { useFriends, FriendProfile } from '@/hooks/useFriends';
+import toast from 'react-hot-toast';
+
+// Liste des Planeswalkers pour l'exemple aléatoire
+const PLANESWALKERS = [
+  "Jace", "Liliana", "Chandra", "Ajani", "Garruk", 
+  "Teferi", "Nissa", "Gideon", "Nicol_Bolas", "Ugin", 
+  "Karn", "Sorin", "Elspeth", "Tezzeret", "Sarkhan",
+  "Vraska", "Domri", "Ral_Zarek", "Kaya", "Narset"
+];
+
+export default function ContactsPage() {
+  const { user } = useAuth();
+  
+  const { 
+    friends, requestsReceived, loading,
+    searchUsers, 
+    sendFriendRequest, acceptRequest, declineRequest, removeFriend
+  } = useFriends();
+
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<FriendProfile[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+  
+  // État pour le placeholder aléatoire
+  const [randomPlaceholder, setRandomPlaceholder] = useState("ex: Jace...");
+
+  // Au chargement, on choisit un nom au hasard
+  useEffect(() => {
+    const randomName = PLANESWALKERS[Math.floor(Math.random() * PLANESWALKERS.length)];
+    setRandomPlaceholder(`ex: ${randomName} (pour trouver ${randomName.toLowerCase()}_fan...)`);
+  }, []);
+
+  if (!user) return <div className="p-10 text-center">Veuillez vous connecter pour gérer vos contacts.</div>;
+
+  const handleSearch = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!searchQuery.trim()) return;
+    
+    setIsSearching(true);
+    setSearchResults([]);
+    
+    try {
+      const results = await searchUsers(searchQuery);
+      setSearchResults(results);
+      
+      if (results.length === 0) {
+        toast("Aucun utilisateur trouvé", { icon: '🤷‍♂️' });
+      }
+    } catch (err: any) {
+        console.error(err);
+        if (err.message && err.message.includes("indexes")) {
+            toast.error("Configuration serveur requise (voir console F12)");
+        } else {
+            toast.error("Erreur lors de la recherche");
+        }
+    } finally {
+      setIsSearching(false);
+    }
+  };
+
+  return (
+    <main className="container mx-auto p-4 max-w-4xl min-h-[80vh]">
+      <h1 className="text-3xl font-bold mb-8 text-blue-600 dark:text-blue-400 flex items-center gap-2">
+        👥 Mes Contacts
+      </h1>
+
+      <div className="grid md:grid-cols-2 gap-8">
+        
+        {/* --- COLONNE GAUCHE : RECHERCHE & DEMANDES --- */}
+        <div className="space-y-8">
+            
+            {/* 1. MODULE DE RECHERCHE */}
+            <div className="bg-white dark:bg-gray-800 p-6 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700">
+                <h2 className="font-bold text-lg mb-4 text-gray-800 dark:text-white">Chercher un ami</h2>
+                
+                <form onSubmit={handleSearch} className="flex gap-2 mb-4">
+                    <div className="relative flex-grow">
+                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">@</span>
+                        <input 
+                            type="text" 
+                            placeholder={randomPlaceholder} // <--- Placeholder dynamique ici
+                            className="w-full pl-7 p-2 border rounded-lg bg-gray-50 dark:bg-gray-900 dark:border-gray-600 outline-none focus:ring-2 focus:ring-blue-500 lowercase text-gray-900 dark:text-white"
+                            value={searchQuery}
+                            onChange={e => setSearchQuery(e.target.value.toLowerCase())}
+                        />
+                    </div>
+                    <button 
+                        type="submit" 
+                        disabled={isSearching}
+                        className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-bold transition disabled:opacity-50"
+                    >
+                        {isSearching ? '...' : '🔍'}
+                    </button>
+                </form>
+
+                {/* LISTE DES RÉSULTATS DE RECHERCHE */}
+                <div className="space-y-2 max-h-60 overflow-y-auto custom-scrollbar">
+                    {searchResults.map(result => (
+                        <div key={result.uid} className="flex items-center justify-between bg-blue-50 dark:bg-blue-900/20 p-3 rounded-lg border border-blue-100 dark:border-blue-800 animate-in fade-in">
+                            <div className="flex items-center gap-3">
+                                {/* Avatar */}
+                                <div className="w-8 h-8 rounded-full bg-blue-200 flex items-center justify-center text-blue-700 font-bold text-xs overflow-hidden">
+                                    {result.photoURL ? <img src={result.photoURL} alt="" className="w-full h-full object-cover"/> : result.username[0].toUpperCase()}
+                                </div>
+                                {/* Infos */}
+                                <div>
+                                    <p className="font-bold text-sm text-gray-900 dark:text-white">{result.displayName}</p>
+                                    <p className="text-xs text-blue-600 dark:text-blue-400">@{result.username}</p>
+                                </div>
+                            </div>
+                            {/* Bouton Ajouter */}
+                            <button 
+                                onClick={() => sendFriendRequest(result)}
+                                className="text-xs bg-blue-600 text-white px-3 py-1.5 rounded-full hover:bg-blue-700 transition shadow-sm"
+                            >
+                                Ajouter +
+                            </button>
+                        </div>
+                    ))}
+                </div>
+            </div>
+
+            {/* 2. DEMANDES D'AMIS REÇUES */}
+            {requestsReceived.length > 0 && (
+                <div className="bg-white dark:bg-gray-800 p-6 rounded-xl shadow-sm border border-orange-200 dark:border-orange-900/50 animate-in slide-in-from-left-4">
+                    <h2 className="font-bold text-lg mb-4 text-orange-600 dark:text-orange-400 flex items-center gap-2">
+                        🔔 Demandes reçues <span className="bg-orange-100 text-orange-800 text-xs px-2 py-0.5 rounded-full">{requestsReceived.length}</span>
+                    </h2>
+                    <div className="space-y-3">
+                        {requestsReceived.map(req => (
+                            <div key={req.uid} className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
+                                <div className="flex items-center gap-3">
+                                    <div className="w-10 h-10 rounded-full bg-gray-300 overflow-hidden">
+                                        {req.photoURL ? <img src={req.photoURL} alt="" className="w-full h-full object-cover"/> : <span className="flex items-center justify-center h-full font-bold text-gray-500">{req.username[0].toUpperCase()}</span>}
+                                    </div>
+                                    <div>
+                                        <p className="font-bold text-sm text-gray-900 dark:text-white">{req.displayName}</p>
+                                        <p className="text-xs text-gray-500">@{req.username}</p>
+                                    </div>
+                                </div>
+                                <div className="flex gap-2">
+                                    <button onClick={() => acceptRequest(req)} className="p-2 bg-green-100 text-green-700 hover:bg-green-200 rounded-full transition" title="Accepter">✓</button>
+                                    <button onClick={() => declineRequest(req.uid)} className="p-2 bg-red-100 text-red-700 hover:bg-red-200 rounded-full transition" title="Refuser">✕</button>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )}
+        </div>
+
+        {/* --- COLONNE DROITE : LISTE MES AMIS --- */}
+        <div className="bg-white dark:bg-gray-800 p-6 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 h-fit">
+            <h2 className="font-bold text-lg mb-4 flex items-center gap-2 text-gray-800 dark:text-white">
+                Mes Amis <span className="text-gray-400 font-normal">({friends.length})</span>
+            </h2>
+            
+            {loading ? (
+                <p className="text-gray-500 text-sm">Chargement...</p>
+            ) : friends.length === 0 ? (
+                <div className="text-center py-10 text-gray-400 italic">
+                    <p>Aucun ami pour l'instant.</p>
+                </div>
+            ) : (
+                <div className="space-y-2">
+                    {friends.map(friend => (
+                        <div key={friend.uid} className="group flex items-center justify-between p-3 hover:bg-gray-50 dark:hover:bg-gray-700/50 rounded-lg transition border border-transparent hover:border-gray-100 dark:hover:border-gray-600">
+                            
+                            {/* Identité Ami */}
+                            <div className="flex items-center gap-3">
+                                <div className="w-10 h-10 rounded-full bg-gradient-to-br from-purple-500 to-blue-500 flex items-center justify-center text-white font-bold shadow-sm overflow-hidden">
+                                    {friend.photoURL ? <img src={friend.photoURL} alt="" className="w-full h-full object-cover" /> : friend.username[0].toUpperCase()}
+                                </div>
+                                <div>
+                                    <p className="font-bold text-gray-800 dark:text-gray-200">{friend.displayName}</p>
+                                    <p className="text-xs text-gray-500">@{friend.username}</p>
+                                </div>
+                            </div>
+                            
+                            {/* Actions (Visibles au survol sur desktop) */}
+                            <div className="flex items-center gap-2 opacity-100 md:opacity-0 group-hover:opacity-100 transition-opacity">
+                                {/* BOUTON VOIR PROFIL */}
+                                <Link 
+                                    href={`/user/${friend.uid}`}
+                                    className="text-xs bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300 px-3 py-1.5 rounded hover:bg-blue-200 dark:hover:bg-blue-800 transition font-medium"
+                                >
+                                    Voir
+                                </Link>
+                                
+                                <button 
+                                    onClick={() => removeFriend(friend.uid)} 
+                                    className="text-red-400 hover:text-red-600 text-xs px-2 py-1"
+                                    title="Retirer cet ami"
+                                >
+                                    ✕
+                                </button>
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            )}
+        </div>
+
+      </div>
+    </main>
+  );
+}
+</file>
+
 <file path="components/Header.tsx">
 // components/Header.tsx
 'use client';
@@ -1316,7 +2514,7 @@ import { useAuth } from '@/lib/AuthContext';
 import { usePathname } from 'next/navigation';
 
 export default function Header() {
-  const { user, logOut } = useAuth();
+  const { user, logOut, friendRequestCount } = useAuth();
   const pathname = usePathname();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
 
@@ -1345,10 +2543,23 @@ export default function Header() {
             {user ? (
               <>
                 {/* NAVIGATION DESKTOP (Cachée sur mobile) */}
-                <nav className="hidden md:flex gap-6 mr-4">
+                <nav className="hidden md:flex gap-6 mr-4 items-center">
                   <Link href="/" className={linkClass('/')}>Recherche</Link>
                   <Link href="/wishlist" className={linkClass('/wishlist')}>Ma Wishlist</Link>
                   <Link href="/collection" className={linkClass('/collection')}>Ma Collection</Link>
+                  
+                  {/* NOUVEAU LIEN ÉCHANGES */}
+                  <Link href="/trades" className={linkClass('/trades')}>🤝 Échanges</Link>
+
+                  {/* LIEN CONTACTS AVEC PASTILLE DE NOTIF */}
+                  <Link href="/contacts" className={`${linkClass('/contacts')} relative flex items-center gap-1`}>
+                    👥 Contacts
+                    {friendRequestCount > 0 && (
+                      <span className="absolute -top-2 -right-3 bg-red-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full animate-bounce">
+                        {friendRequestCount}
+                      </span>
+                    )}
+                  </Link>
                 </nav>
 
                 <div className="h-6 w-px bg-gray-300 dark:bg-gray-600 hidden md:block"></div>
@@ -1414,6 +2625,21 @@ export default function Header() {
                <Link href="/collection" className={linkClass('/collection')} onClick={() => setIsMenuOpen(false)}>
                  📚 Ma Collection
                </Link>
+               
+               {/* NOUVEAU LIEN MOBILE */}
+               <Link href="/trades" className={linkClass('/trades')} onClick={() => setIsMenuOpen(false)}>
+                 🤝 Centre d&apos;Échanges
+               </Link>
+
+               <Link href="/contacts" className={`${linkClass('/contacts')} flex items-center justify-between`} onClick={() => setIsMenuOpen(false)}>
+                 <span>👥 Mes Contacts</span>
+                 {friendRequestCount > 0 && (
+                    <span className="bg-red-500 text-white text-xs font-bold px-2 py-0.5 rounded-full">
+                        {friendRequestCount}
+                    </span>
+                 )}
+               </Link>
+
                <button 
                  onClick={() => { logOut(); setIsMenuOpen(false); }}
                  className="text-left py-2 text-red-600 font-medium hover:bg-red-50 dark:hover:bg-red-900/10 rounded"
@@ -1429,97 +2655,6 @@ export default function Header() {
 }
 </file>
 
-<file path="app/collection/page.tsx">
-// app/collection/page.tsx
-'use client';
-
-import { useState } from 'react';
-import { useAuth } from '@/lib/AuthContext';
-import { useCardCollection } from '@/hooks/useCardCollection'; // <--- IMPORT DU HOOK
-import MagicCard from '@/components/MagicCard';
-import ImportModal from '@/components/ImportModal';
-import ConfirmModal from '@/components/ConfirmModal';
-import DeleteAllButton from '@/components/DeleteAllButton';
-
-export default function CollectionPage() {
-  const { user } = useAuth();
-  
-  // TOUTE LA LOGIQUE EST ICI :
-  const { cards, loading, updateQuantity, removeCard, totalPrice } = useCardCollection('collection');
-
-  const [isImportOpen, setIsImportOpen] = useState(false);
-  const [cardToDelete, setCardToDelete] = useState<string | null>(null);
-
-  // Gestion du clic sur "-"
-  const handleDecrement = async (cardId: string, currentQty: number) => {
-    const result = await updateQuantity(cardId, -1, currentQty);
-    if (result === 'shouldDelete') {
-      setCardToDelete(cardId);
-    }
-  };
-
-  if (loading) return <p className="text-center p-10 text-gray-500">Chargement de votre collection...</p>;
-  if (!user) return <p className="text-center p-10">Veuillez vous connecter.</p>;
-
-  return (
-    <main className="container mx-auto p-4 pb-20">
-      {/* HEADER */}
-      <div className="flex flex-col md:flex-row justify-between items-center mb-8 gap-4">
-        <div className="flex items-center gap-4">
-          <h1 className="text-3xl font-bold text-blue-700 dark:text-blue-400">
-            Ma Collection <span className="ml-3 text-lg font-normal text-gray-500">({cards.reduce((acc, c) => acc + c.quantity, 0)})</span>
-          </h1>
-          <button 
-            onClick={() => setIsImportOpen(true)} 
-            className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition flex items-center gap-2 shadow-sm"
-          >
-            📂 Importer CSV
-          </button>
-        </div>
-        
-        <div className="flex items-center gap-4">
-           <DeleteAllButton targetCollection="collection" />
-           <div className="bg-blue-50 dark:bg-blue-900/30 text-blue-800 dark:text-blue-100 px-6 py-3 rounded-xl shadow-sm border border-blue-200 dark:border-blue-700">
-             <span className="text-sm uppercase tracking-wide opacity-80">Valeur</span>
-             <div className="text-2xl font-bold">{totalPrice.toFixed(2)} €</div>
-           </div>
-        </div>
-      </div>
-
-      {/* LISTE DES CARTES */}
-      {cards.length === 0 ? (
-        <div className="text-center py-20 bg-gray-50 dark:bg-gray-800/50 rounded-xl border-2 border-dashed border-gray-200 dark:border-gray-700">
-          <p className="text-xl text-gray-500 mb-4">Votre collection est vide.</p>
-        </div>
-      ) : (
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-          {cards.map((card) => (
-            <MagicCard 
-              key={card.id}
-              {...card}
-              onIncrement={() => updateQuantity(card.id, 1, card.quantity)}
-              onDecrement={() => handleDecrement(card.id, card.quantity)}
-              onDelete={() => setCardToDelete(card.id)}
-            />
-          ))}
-        </div>
-      )}
-
-      {/* MODALES */}
-      <ImportModal isOpen={isImportOpen} onClose={() => setIsImportOpen(false)} targetCollection="collection" />
-      
-      <ConfirmModal 
-        isOpen={!!cardToDelete} 
-        onClose={() => setCardToDelete(null)} 
-        onConfirm={() => { if(cardToDelete) removeCard(cardToDelete); }} 
-        title="Retirer ?" 
-        message="Cette carte sera retirée de votre collection."
-      />
-    </main>
-  );
-}
-</file>
-
 <file path="app/page.tsx">
 // app/page.tsx
 'use client'; 
@@ -1528,7 +2663,7 @@ import { useState } from 'react';
 import { useAuth } from '@/lib/AuthContext';
 import { db } from '@/lib/firebase';
 import { doc, setDoc, updateDoc, getDoc, increment } from 'firebase/firestore'; 
-import { useWishlists } from '@/hooks/useWishlists'; // <--- NOUVEL IMPORT
+import { useWishlists } from '@/hooks/useWishlists';
 import toast from 'react-hot-toast';
 
 // --- TYPES ---
@@ -1539,24 +2674,13 @@ type ScryfallCard = {
   set_name: string;
   set: string;
   released_at: string;
-  image_uris?: {
-    small: string;
-    normal: string;
-  };
-  card_faces?: {
-    image_uris?: {
-      small: string;
-      normal: string;
-    };
-  }[];
-  prices?: {
-    eur?: string;
-  };
+  image_uris?: { small: string; normal: string; };
+  card_faces?: { image_uris?: { small: string; normal: string; }; }[];
+  prices?: { eur?: string; };
 };
 
 const CARD_BACK_URL = "https://cards.scryfall.io/large/front/a/6/a6984342-f723-4e80-8e69-902d287a915f.jpg";
 
-// --- FONCTION UTILITAIRE IMAGE ---
 const getCardImage = (card: ScryfallCard): string => {
   if (card.image_uris?.normal) return card.image_uris.normal;
   if (card.card_faces && card.card_faces[0]?.image_uris?.normal) {
@@ -1565,21 +2689,14 @@ const getCardImage = (card: ScryfallCard): string => {
   return CARD_BACK_URL;
 };
 
-// --- SOUS-COMPOSANT : Gère l'affichage d'une carte ---
-// PROPS AJOUTÉE : targetListId
-const CardGroup = ({ 
-  name, 
-  versions, 
-  targetListId 
-}: { 
-  name: string, 
-  versions: ScryfallCard[], 
-  targetListId: string 
-}) => {
+// --- SOUS-COMPOSANT CARTE ---
+const CardGroup = ({ name, versions, targetListId }: { name: string, versions: ScryfallCard[], targetListId: string }) => {
   const { user } = useAuth();
-  
-  // Par défaut, on prend la première version
   const [selectedCard, setSelectedCard] = useState<ScryfallCard>(versions[0]);
+  
+  // NOUVEAUX ÉTATS LOCAUX POUR LES OPTIONS
+  const [isFoil, setIsFoil] = useState(false);
+  const [isSpecificVersion, setIsSpecificVersion] = useState(false);
 
   const handleVersionChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const newVersion = versions.find(v => v.id === e.target.value);
@@ -1593,8 +2710,6 @@ const CardGroup = ({
     }
 
     const card = selectedCard; 
-    
-    // --- LOGIQUE DE CHEMIN DYNAMIQUE ---
     let collectionPath = '';
     if (targetListId === 'default') {
         collectionPath = `users/${user.uid}/wishlist`;
@@ -1603,8 +2718,6 @@ const CardGroup = ({
     }
     
     const wishlistRef = doc(db, collectionPath, card.id);
-    // ------------------------------------
-
     const validImageUrl = getCardImage(card);
     const priceNumber = card.prices?.eur ? parseFloat(card.prices.eur) : 0;
     const cleanName = card.name.split(' // ')[0];
@@ -1614,7 +2727,10 @@ const CardGroup = ({
       if (docSnap.exists()) {
         await updateDoc(wishlistRef, { 
           quantity: increment(1),
-          price: priceNumber // Mise à jour du prix au cas où il a changé
+          price: priceNumber,
+          // On met à jour les préférences si elles changent
+          isFoil: isFoil,
+          isSpecificVersion: isSpecificVersion
         });
         toast.success(`+1 exemplaire (${card.set_name})`);
       } else {
@@ -1625,7 +2741,10 @@ const CardGroup = ({
           price: priceNumber,
           setName: card.set_name,
           setCode: card.set,
-          addedAt: new Date()
+          addedAt: new Date(),
+          // Sauvegarde des préférences
+          isFoil: isFoil,
+          isSpecificVersion: isSpecificVersion
         });
         toast.success(`Ajoutée : ${card.set_name}`);
       }
@@ -1637,19 +2756,13 @@ const CardGroup = ({
 
   return (
     <div className="relative group flex flex-col h-full bg-white dark:bg-gray-800 rounded-xl shadow-md border border-gray-100 dark:border-gray-700 overflow-hidden">
-      {/* Image */}
       <div className="relative w-full min-h-[250px] bg-gray-200 dark:bg-gray-900 flex items-center justify-center p-2">
-        <img
-          src={getCardImage(selectedCard)}
-          alt={name}
-          className="w-full h-full object-contain max-h-[350px]"
-        />
+        <img src={getCardImage(selectedCard)} alt={name} className="w-full h-full object-contain max-h-[350px]" />
       </div>
 
       <div className="p-3 flex flex-col flex-grow gap-2">
         <h3 className="font-bold text-center truncate" title={name}>{name}</h3>
 
-        {/* --- SÉLECTEUR D'ÉDITION --- */}
         <select 
           value={selectedCard.id}
           onChange={handleVersionChange}
@@ -1662,7 +2775,20 @@ const CardGroup = ({
           ))}
         </select>
 
-        {/* PRIX et BOUTON */}
+        {/* --- OPTIONS DE WISHLIST --- */}
+        {user && (
+            <div className="flex justify-between items-center text-xs text-gray-600 dark:text-gray-300 px-1">
+                <label className="flex items-center gap-1 cursor-pointer select-none">
+                    <input type="checkbox" checked={isSpecificVersion} onChange={e => setIsSpecificVersion(e.target.checked)} className="rounded text-blue-600 focus:ring-blue-500" />
+                    <span>Version exacte</span>
+                </label>
+                <label className="flex items-center gap-1 cursor-pointer select-none">
+                    <input type="checkbox" checked={isFoil} onChange={e => setIsFoil(e.target.checked)} className="rounded text-purple-600 focus:ring-purple-500" />
+                    <span>Foil ✨</span>
+                </label>
+            </div>
+        )}
+
         <div className="flex justify-between items-center mt-auto pt-2 border-t border-gray-100 dark:border-gray-700">
           <span className="font-bold text-blue-600 dark:text-blue-400">
              {selectedCard.prices?.eur ? `${selectedCard.prices.eur} €` : "Prix N/A"}
@@ -1682,12 +2808,9 @@ const CardGroup = ({
   );
 };
 
-
 // --- COMPOSANT PRINCIPAL ---
 export default function HomePage() {
   const { user } = useAuth();
-  
-  // --- NOUVEAU HOOK POUR LES LISTES ---
   const { lists, loading: listsLoading } = useWishlists();
   const [selectedTargetList, setSelectedTargetList] = useState<string>('default');
 
@@ -1698,7 +2821,6 @@ export default function HomePage() {
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!query.trim()) return;
-
     setIsSearching(true);
     setGroupedResults([]); 
 
@@ -1708,7 +2830,6 @@ export default function HomePage() {
       const data = await response.json();
       const rawCards: ScryfallCard[] = data.data || [];
 
-      // Groupement
       const groups = new Map<string, ScryfallCard[]>();
       rawCards.forEach(card => {
         const cleanName = card.name.split(' // ')[0];
@@ -1717,12 +2838,9 @@ export default function HomePage() {
       });
 
       const resultsArray = Array.from(groups.entries()).map(([cleanName, versions]) => ({
-        name: cleanName, 
-        versions: versions
+        name: cleanName, versions: versions
       }));
-
       setGroupedResults(resultsArray);
-
     } catch (err) {
       toast.error("Aucune carte trouvée.");
     } finally {
@@ -1732,37 +2850,25 @@ export default function HomePage() {
 
   return (
     <main className="container mx-auto p-4 max-w-7xl">
-      <h1 className="text-3xl font-bold mb-8 text-center mt-8 text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-purple-600">
-        MagicWish ✨
-      </h1>
+      <h1 className="text-3xl font-bold mb-8 text-center mt-8 text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-purple-600">MagicWish ✨</h1>
 
       <div className="max-w-xl mx-auto mb-10 space-y-3">
-        {/* FORMULAIRE DE RECHERCHE */}
         <form onSubmit={handleSearch} className="flex gap-2">
             <input
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Rechercher (ex: Black Lotus)..."
-            className="flex-grow p-3 border rounded-lg shadow-sm outline-none transition-colors
-                bg-white text-gray-900 border-gray-300 placeholder-gray-500
-                dark:bg-gray-800 dark:text-white dark:border-gray-600 dark:placeholder-gray-400 focus:border-blue-500"
+            className="flex-grow p-3 border rounded-lg shadow-sm outline-none transition-colors bg-white text-gray-900 border-gray-300 placeholder-gray-500 dark:bg-gray-800 dark:text-white dark:border-gray-600 dark:placeholder-gray-400 focus:border-blue-500"
             />
-            <button 
-            type="submit" 
-            disabled={isSearching}
-            className="bg-blue-600 hover:bg-blue-700 text-white px-6 rounded-lg font-semibold disabled:opacity-50 transition shadow-sm"
-            >
+            <button type="submit" disabled={isSearching} className="bg-blue-600 hover:bg-blue-700 text-white px-6 rounded-lg font-semibold disabled:opacity-50 transition shadow-sm">
             {isSearching ? '...' : '🔍'}
             </button>
         </form>
 
-        {/* SÉLECTEUR DE LISTE CIBLE (Visible seulement si connecté) */}
         {user && (
             <div className="flex justify-end items-center gap-2 animate-in fade-in slide-in-from-top-1">
-                <label htmlFor="targetList" className="text-sm text-gray-500 dark:text-gray-400">
-                    Ajouter dans :
-                </label>
+                <label htmlFor="targetList" className="text-sm text-gray-500 dark:text-gray-400">Ajouter dans :</label>
                 <div className="relative">
                     <select
                         id="targetList"
@@ -1771,18 +2877,8 @@ export default function HomePage() {
                         disabled={listsLoading}
                         className="appearance-none bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 text-gray-700 dark:text-gray-200 py-1.5 pl-3 pr-8 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer shadow-sm"
                     >
-                        {/* Si chargement ou vide, option par défaut */}
-                        {lists.length === 0 ? (
-                            <option value="default">Liste principale</option>
-                        ) : (
-                            lists.map((list) => (
-                                <option key={list.id} value={list.id}>
-                                    {list.name}
-                                </option>
-                            ))
-                        )}
+                        {lists.length === 0 ? <option value="default">Liste principale</option> : lists.map((list) => <option key={list.id} value={list.id}>{list.name}</option>)}
                     </select>
-                    {/* Petite flèche custom pour le style */}
                     <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-gray-500">
                         <svg className="fill-current h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><path d="M9.293 12.95l.707.707L15.657 8l-1.414-1.414L10 10.828 5.757 6.586 4.343 8z"/></svg>
                     </div>
@@ -1791,15 +2887,9 @@ export default function HomePage() {
         )}
       </div>
 
-      {/* GRILLE D'AFFICHAGE */}
       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
         {groupedResults.map((group) => (
-          <CardGroup 
-            key={group.name} 
-            name={group.name} 
-            versions={group.versions} 
-            targetListId={selectedTargetList} // <--- ON PASSE L'ID DE LA LISTE CHOISIE
-          />
+          <CardGroup key={group.name} name={group.name} versions={group.versions} targetListId={selectedTargetList} />
         ))}
       </div>
     </main>
