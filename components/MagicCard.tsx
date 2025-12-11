@@ -180,7 +180,7 @@ export default function MagicCard(props: MagicCardProps) {
                             className="text-[10px] px-2 py-0.5 rounded border transition-colors font-bold flex-1 text-center bg-green-50 text-green-700 border-green-200 hover:bg-green-100 dark:bg-green-900/30 dark:text-green-300 dark:border-green-800"
                             title="Déplacer vers Collection"
                         >
-                            📥 J&apos;ai acheté
+                            J&apos;ai acheté
                         </button>
                     )}
                 </>
