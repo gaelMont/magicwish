@@ -1,13 +1,10 @@
-// app/trades/manual/page.tsx
 'use client';
 
-import { useState } from 'react';
+import { useState, useMemo } from 'react'; // <--- Ajout de useMemo
 import { useAuth } from '@/lib/AuthContext';
 import { useCardCollection, CardType } from '@/hooks/useCardCollection';
 import { useTradeTransaction } from '@/hooks/useTradeTransaction';
-import MagicCard from '@/components/MagicCard';
 import toast from 'react-hot-toast';
-// 1. IMPORT DU NOUVEAU COMPOSANT
 import CardVersionPickerModal, { ScryfallCardRaw } from '@/components/CardVersionPickerModal';
 
 export default function ManualTradePage() {
@@ -25,13 +22,12 @@ export default function ManualTradePage() {
   const [searchResults, setSearchResults] = useState<ScryfallCardRaw[]>([]);
   const [isSearching, setIsSearching] = useState(false);
 
-  // 2. ÉTAT POUR LA MODALE DE SÉLECTION
+  // État pour la modale de sélection
   const [cardToPick, setCardToPick] = useState<ScryfallCardRaw | null>(null);
 
   // --- LOGIQUE AJOUT / RETRAIT ---
   
   const handleAddToGive = (card: CardType) => {
-      // (Code existant inchangé pour "Je donne")
       const existing = toGive.find(c => c.id === card.id);
       if (existing) {
           if (existing.quantity < card.quantity) { 
@@ -49,7 +45,6 @@ export default function ManualTradePage() {
       if (!remoteSearch.trim()) return;
       setIsSearching(true);
       try {
-          // On ajoute &unique=prints pour avoir moins de doublons visuels dans la recherche initiale
           const res = await fetch(`/api/search?q=${remoteSearch}`); 
           const data = await res.json();
           setSearchResults(data.data || []);
@@ -57,15 +52,14 @@ export default function ManualTradePage() {
       finally { setIsSearching(false); }
   };
 
-  // 3. FONCTION DÉCLENCHEUR (Click sur résultat recherche)
+  // Click sur résultat recherche -> Ouvre la modale
   const handleSearchResultClick = (scryfallCard: ScryfallCardRaw) => {
-    // Au lieu d'ajouter direct, on ouvre la modale
     setCardToPick(scryfallCard);
   };
 
-  // 4. FONCTION DE CONFIRMATION (Retour de la modale)
+  // Retour de la modale -> Ajoute à la liste "Je reçois"
   const handleConfirmReceive = (card: CardType) => {
-      const existing = toReceive.find(c => c.id === card.id && c.isFoil === card.isFoil); // On distingue les foils
+      const existing = toReceive.find(c => c.id === card.id && c.isFoil === card.isFoil); 
       
       if (existing) {
           setToReceive(prev => prev.map(c => 
@@ -77,7 +71,7 @@ export default function ManualTradePage() {
           setToReceive(prev => [...prev, card]);
       }
       
-      // On ferme la recherche pour plus de clarté
+      // On vide la recherche pour nettoyer l'interface
       setSearchResults([]); 
       setRemoteSearch("");
       toast.success(`Ajouté : ${card.name}`);
@@ -85,7 +79,6 @@ export default function ManualTradePage() {
 
   // --- VALIDATION ---
   const handleValidate = async () => {
-      // (Code existant inchangé)
       if (toGive.length === 0 && toReceive.length === 0) return;
       if (!confirm("Confirmer cet échange ? Vos cartes données seront retirées de votre collection.")) return;
 
@@ -97,10 +90,21 @@ export default function ManualTradePage() {
       }
   };
 
-  // --- CALCULS ---
-  // On prend en compte le customPrice s'il existe (non pertinent pour l'externe mais bon pour la structure)
+  // --- CALCULS & FILTRES ---
   const valGive = toGive.reduce((acc, c) => acc + (c.customPrice ?? c.price ?? 0) * c.quantity, 0);
   const valReceive = toReceive.reduce((acc, c) => acc + (c.price || 0) * c.quantity, 0);
+
+  // ⚡ NOUVEAU : On filtre les doublons de nom pour l'affichage
+  const uniqueSearchResults = useMemo(() => {
+    const seen = new Set();
+    return searchResults.filter(card => {
+      // On nettoie le nom (gestion des cartes doubles faces "Name // Name")
+      const name = card.name.split(' // ')[0];
+      if (seen.has(name)) return false;
+      seen.add(name);
+      return true;
+    });
+  }, [searchResults]);
 
   if (!user) return <div className="p-10 text-center">Connectez-vous.</div>;
 
@@ -112,10 +116,10 @@ export default function ManualTradePage() {
 
         <div className="grid lg:grid-cols-2 gap-8 h-[calc(100vh-200px)]">
             
-            {/* --- COLONNE GAUCHE (Inchinchangé) --- */}
+            {/* --- COLONNE GAUCHE : JE DONNE --- */}
             <div className="flex flex-col bg-red-50/50 dark:bg-red-900/10 rounded-xl border border-red-100 dark:border-red-900 p-4">
                 <h2 className="font-bold text-red-600 mb-2">📤 Je donne (De ma collection)</h2>
-                {/* ... (Reste du code de la colonne gauche inchangé) ... */}
+                
                  <div className="flex-none mb-4 space-y-2 min-h-[100px] bg-white dark:bg-gray-800 p-2 rounded border border-gray-200 dark:border-gray-700 overflow-y-auto max-h-[30vh]">
                     {toGive.length === 0 && <p className="text-xs text-gray-400 italic text-center py-4">Aucune carte sélectionnée</p>}
                     {toGive.map(card => (
@@ -125,6 +129,7 @@ export default function ManualTradePage() {
                         </div>
                     ))}
                 </div>
+                
                 <input 
                     type="text" 
                     placeholder="Chercher dans ma collection..." 
@@ -132,7 +137,8 @@ export default function ManualTradePage() {
                     value={localSearch}
                     onChange={e => setLocalSearch(e.target.value)}
                 />
-                <div className="flex-grow overflow-y-auto custom-scrollbar space-y-2 pr-1">
+                
+                <div className="grow overflow-y-auto custom-scrollbar space-y-2 pr-1">
                     {loading ? <p>Chargement...</p> : 
                         myCollection
                             .filter(c => c.name.toLowerCase().includes(localSearch.toLowerCase()))
@@ -140,7 +146,7 @@ export default function ManualTradePage() {
                             .map(card => (
                                 <div key={card.id} onClick={() => handleAddToGive(card)} className="cursor-pointer hover:bg-red-100 dark:hover:bg-red-900/30 p-2 rounded flex items-center gap-2 border border-transparent hover:border-red-200 transition">
                                     <img src={card.imageUrl} className="w-8 h-11 rounded object-cover bg-gray-200" alt="" />
-                                    <div className="flex-grow min-w-0">
+                                    <div className="grow min-w-0">
                                         <p className="font-bold text-xs truncate dark:text-gray-200">{card.name}</p>
                                         <p className="text-[10px] text-gray-500">{card.setName} - En stock: {card.quantity}</p>
                                     </div>
@@ -151,7 +157,7 @@ export default function ManualTradePage() {
                 </div>
             </div>
 
-            {/* --- COLONNE DROITE : JE REÇOIS (Modifiée) --- */}
+            {/* --- COLONNE DROITE : JE REÇOIS --- */}
             <div className="flex flex-col bg-green-50/50 dark:bg-green-900/10 rounded-xl border border-green-100 dark:border-green-900 p-4">
                 <h2 className="font-bold text-green-600 mb-2">📥 Je reçois (Ajout libre)</h2>
 
@@ -179,24 +185,26 @@ export default function ManualTradePage() {
                     <input 
                         type="text" 
                         placeholder="Rechercher carte à recevoir..." 
-                        className="flex-grow p-2 rounded border dark:bg-gray-800 dark:text-white"
+                        className="grow p-2 rounded border dark:bg-gray-800 dark:text-white"
                         value={remoteSearch}
                         onChange={e => setRemoteSearch(e.target.value)}
                     />
                     <button type="submit" className="bg-green-600 text-white px-3 rounded">🔍</button>
                 </form>
 
-                {/* 3. Résultats Scryfall (Click ouvre la modale) */}
-                 <div className="flex-grow overflow-y-auto custom-scrollbar space-y-2 pr-1">
+                {/* 3. Résultats Scryfall (FILTRÉS) */}
+                 <div className="grow overflow-y-auto custom-scrollbar space-y-2 pr-1">
                     {isSearching && <p className="text-xs">Recherche...</p>}
-                    {searchResults.map(card => (
+                    
+                    {/* On utilise uniqueSearchResults ici ! */}
+                    {uniqueSearchResults.map(card => (
                         <div key={card.id} onClick={() => handleSearchResultClick(card)} className="cursor-pointer hover:bg-green-100 dark:hover:bg-green-900/30 p-2 rounded flex items-center gap-2 border border-transparent hover:border-green-200 transition">
                              <div className="w-8 h-11 bg-gray-200 rounded overflow-hidden">
                                 {card.image_uris?.small && <img src={card.image_uris.small} className="w-full h-full object-cover" alt="" />}
                              </div>
-                             <div className="flex-grow min-w-0">
+                             <div className="grow min-w-0">
                                 <p className="font-bold text-xs truncate dark:text-gray-200">{card.name}</p>
-                                <p className="text-[10px] text-gray-500">{card.set_name}</p>
+                                <p className="text-[10px] text-gray-500 italic">Sélectionner version...</p>
                              </div>
                              <span className="text-xs font-bold text-gray-400">Choisir ›</span>
                         </div>
@@ -220,7 +228,7 @@ export default function ManualTradePage() {
             </button>
         </div>
 
-        {/* 5. INTÉGRATION DE LA MODALE */}
+        {/* MODALE DE SÉLECTION DE VERSION */}
         <CardVersionPickerModal 
             isOpen={!!cardToPick}
             baseCard={cardToPick}
