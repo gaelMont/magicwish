@@ -43,7 +43,7 @@ export default function CollectionPage() {
             onClick={() => setIsImportOpen(true)} 
             className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition flex items-center gap-2 shadow-sm"
           >
-            📂 Importer CSV
+            Importer des cartes
           </button>
         </div>
         
