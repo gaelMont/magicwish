@@ -40,6 +40,8 @@ export default function Header() {
                   <Link href="/" className={linkClass('/')}>Recherche</Link>
                   <Link href="/wishlist" className={linkClass('/wishlist')}>Ma Wishlist</Link>
                   <Link href="/collection" className={linkClass('/collection')}>Ma Collection</Link>
+                  {/* AJOUT DU LIEN CONTACTS */}
+                  <Link href="/contacts" className={linkClass('/contacts')}>👥 Contacts</Link>
                 </nav>
 
                 <div className="h-6 w-px bg-gray-300 dark:bg-gray-600 hidden md:block"></div>
@@ -104,6 +106,10 @@ export default function Header() {
                </Link>
                <Link href="/collection" className={linkClass('/collection')} onClick={() => setIsMenuOpen(false)}>
                  📚 Ma Collection
+               </Link>
+               {/* AJOUT DU LIEN CONTACTS MOBILE */}
+               <Link href="/contacts" className={linkClass('/contacts')} onClick={() => setIsMenuOpen(false)}>
+                 👥 Mes Contacts
                </Link>
                <button 
                  onClick={() => { logOut(); setIsMenuOpen(false); }}
