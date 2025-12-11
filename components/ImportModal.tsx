@@ -226,12 +226,19 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
             {/* ÉTAPE 1 : UPLOAD */}
             {step === 'upload' && (
                 <div className="p-12 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-xl text-center hover:bg-gray-50 dark:hover:bg-gray-700/50 transition relative cursor-pointer group">
-                    <input type="file" accept=".csv" onChange={handleFileUpload} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
+                    
+                    {/* CORRECTION ICI : Ajout de 'z-50' pour le mettre au premier plan */}
+                    <input 
+                        type="file" 
+                        accept=".csv" 
+                        onChange={handleFileUpload} 
+                        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-50" 
+                    />
+                    
                     <div className="text-6xl mb-4 group-hover:scale-110 transition-transform">📂</div>
                     <p className="font-bold text-lg">Déposer CSV Manabox</p>
-                </div>
+                </div>  
             )}
-
             {/* ÉTAPE 2 : PREVIEW & CONFIRMATION */}
             {step === 'preview' && (
                 <div className="flex flex-col h-full">
