@@ -9,12 +9,11 @@ import Link from 'next/link';
 import { useCardCollection, CardType } from '@/hooks/useCardCollection'; 
 import MagicCard from '@/components/MagicCard'; 
 
-// --- COMPOSANT : CARTE DE DEMANDE REÇUE (INBOX) ---
+// --- COMPOSANT : CARTE DE DEMANDE (INBOX) ---
 const IncomingRequestCard = ({ trade }: { trade: TradeRequest }) => {
     const { acceptTrade, rejectTrade, isProcessing } = useTradeSystem();
     const [isOpen, setIsOpen] = useState(false);
 
-    // FIX 1 : Typage explicite ajouté pour éviter l'erreur 'any'
     const valReceive = trade.itemsGiven.reduce((acc: number, c: CardType) => acc + (c.price || 0), 0); 
     const valGive = trade.itemsReceived.reduce((acc: number, c: CardType) => acc + (c.price || 0), 0);
 
@@ -49,13 +48,11 @@ const IncomingRequestCard = ({ trade }: { trade: TradeRequest }) => {
                 </div>
             </div>
 
-            {/* DÉTAILS DÉPLIABLES */}
             {isOpen && (
                 <div className="mt-4 pt-4 border-t border-gray-100 dark:border-gray-700 grid md:grid-cols-2 gap-4">
                     <div className="bg-green-50/50 p-3 rounded">
                         <p className="text-xs font-bold text-green-700 mb-2">⬇️ Tu vas recevoir :</p>
                         <div className="flex flex-wrap gap-2">
-                            {/* FIX 2 : Typage explicite dans le map */}
                             {trade.itemsGiven.map((c: CardType) => (
                                 <div key={c.id} className="relative group w-12 h-16 bg-gray-200 rounded overflow-hidden">
                                      <img src={c.imageUrl} className="w-full h-full object-cover" alt="" title={c.name} />
@@ -67,7 +64,6 @@ const IncomingRequestCard = ({ trade }: { trade: TradeRequest }) => {
                     <div className="bg-red-50/50 p-3 rounded">
                         <p className="text-xs font-bold text-red-700 mb-2">⬆️ Tu vas donner :</p>
                          <div className="flex flex-wrap gap-2">
-                            {/* FIX 3 : Typage explicite dans le map */}
                             {trade.itemsReceived.map((c: CardType) => (
                                 <div key={c.id} className="relative group w-12 h-16 bg-gray-200 rounded overflow-hidden">
                                      <img src={c.imageUrl} className="w-full h-full object-cover" alt="" title={c.name} />
@@ -82,7 +78,7 @@ const IncomingRequestCard = ({ trade }: { trade: TradeRequest }) => {
     );
 };
 
-// --- COMPOSANT : LIGNE DE SCANNER (PROPOSITION) ---
+// --- COMPOSANT : LIGNE DE SCANNER ---
 const TradeRowProposal = ({ proposal, onProposalSent }: { proposal: TradeProposal, onProposalSent: () => void }) => {
     const { setCustomPrice } = useCardCollection('collection');
     const { proposeTrade } = useTradeSystem(); 
@@ -98,13 +94,11 @@ const TradeRowProposal = ({ proposal, onProposalSent }: { proposal: TradeProposa
             proposal.toGive,
             proposal.toReceive 
         );
-        if (success) {
-            onProposalSent();
-        }
+        if (success) onProposalSent();
     };
 
     return (
-        <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden mb-8">
+        <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden mb-8 shrink-0">
             <div className="bg-gray-50 dark:bg-gray-900/50 p-4 border-b border-gray-100 dark:border-gray-700 flex flex-col sm:flex-row justify-between items-center gap-4">
                 <div className="flex items-center gap-3">
                     <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-white font-bold overflow-hidden">
@@ -115,12 +109,10 @@ const TradeRowProposal = ({ proposal, onProposalSent }: { proposal: TradeProposa
                         <Link href={`/user/${proposal.friend.uid}`} className="text-sm text-blue-600 hover:underline">Voir profil</Link>
                     </div>
                 </div>
-
                 <button
                     onClick={handlePropose}
                     className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg font-bold shadow-sm transition text-sm flex items-center gap-2"
                 >
-                    {/* FIX 4 : Apostrophe échappée */}
                     📤 Proposer l&apos;échange
                 </button>
             </div>
@@ -170,12 +162,12 @@ export default function TradesPage() {
   if (!user) return <div className="p-10 text-center">Connectez-vous.</div>;
 
   return (
-    <main className="container mx-auto p-4 max-w-5xl min-h-[80vh]">
+    // CONTENEUR FIXE
+    <main className="container mx-auto p-4 max-w-5xl h-[calc(100vh-64px)] flex flex-col">
         
-        {/* HEADER & TABS */}
-        <div className="flex flex-col md:flex-row justify-between items-end mb-6 gap-4 border-b border-gray-200 dark:border-gray-700 pb-4">
+        {/* HEADER & TABS (FIXE) */}
+        <div className="flex-none flex flex-col md:flex-row justify-between items-end mb-4 gap-4 border-b border-gray-200 dark:border-gray-700 pb-4">
             <div>
-                {/* FIX 5 : Apostrophe échappée */}
                 <h1 className="text-3xl font-bold text-purple-600 dark:text-purple-400">🤝 Centre d&apos;Échanges</h1>
             </div>
             <div className="flex gap-4">
@@ -195,66 +187,67 @@ export default function TradesPage() {
             </div>
         </div>
 
-        {/* --- CONTENU TAB 1 : SCANNER --- */}
-        {activeTab === 'scan' && (
-            <div className="animate-in fade-in">
-                <div className="flex justify-end mb-4 gap-2">
-                     <Link href="/trades/manual" className="bg-gray-100 hover:bg-gray-200 text-gray-800 px-4 py-2 rounded-lg font-bold transition text-sm flex items-center">
-                        🖐️ Mode Manuel
-                    </Link>
-                    <button onClick={runScan} disabled={loading} className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg font-bold shadow transition text-sm disabled:opacity-50">
-                        {loading ? status : "🚀 Lancer le Scanner"}
-                    </button>
-                </div>
-
-                {proposals.length === 0 && !loading && (
-                    <div className="text-center py-20 text-gray-400 border-2 border-dashed border-gray-200 dark:border-gray-700 rounded-xl">
-                        {/* FIX 6 : Guillemets échappés */}
-                        Lancez le scanner pour trouver des &quot;matchs&quot; avec vos amis.
+        {/* CONTENU SCROLLABLE */}
+        <div className="grow overflow-y-auto custom-scrollbar pb-10">
+            
+            {/* --- TAB 1 : SCANNER --- */}
+            {activeTab === 'scan' && (
+                <div className="animate-in fade-in">
+                    <div className="flex justify-end mb-6 gap-2 sticky top-0 bg-white/80 dark:bg-gray-900/80 backdrop-blur-sm z-10 py-2">
+                         <Link href="/trades/manual" className="bg-gray-100 hover:bg-gray-200 text-gray-800 px-4 py-2 rounded-lg font-bold transition text-sm flex items-center">
+                            🖐️ Mode Manuel
+                        </Link>
+                        <button onClick={runScan} disabled={loading} className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg font-bold shadow transition text-sm disabled:opacity-50">
+                            {loading ? status : "🚀 Lancer le Scanner"}
+                        </button>
                     </div>
-                )}
 
-                <div className="space-y-8">
-                    {proposals.map(proposal => (
-                        <TradeRowProposal key={proposal.friend.uid} proposal={proposal} onProposalSent={runScan} />
-                    ))}
-                </div>
-            </div>
-        )}
-
-        {/* --- CONTENU TAB 2 : DEMANDES (INBOX) --- */}
-        {activeTab === 'requests' && (
-            <div className="animate-in fade-in space-y-8">
-                
-                {/* 1. REÇUES */}
-                <div>
-                    <h2 className="font-bold text-gray-500 uppercase text-xs mb-4">À traiter ({incomingTrades.length})</h2>
-                    {incomingTrades.length === 0 && <p className="text-gray-400 italic text-sm">Aucune demande en attente.</p>}
-                    
-                    {/* FIX 7 : Typage explicite du trade */}
-                    {incomingTrades.map((trade: TradeRequest) => (
-                        <IncomingRequestCard key={trade.id} trade={trade} />
-                    ))}
-                </div>
-
-                {/* 2. ENVOYÉES */}
-                <div>
-                    <h2 className="font-bold text-gray-500 uppercase text-xs mb-4 pt-4 border-t dark:border-gray-700">En attente de réponse ({outgoingTrades.length})</h2>
-                    {outgoingTrades.length === 0 && <p className="text-gray-400 italic text-sm">Aucune proposition en cours.</p>}
-                    
-                    {/* FIX 8 : Typage explicite du trade */}
-                    {outgoingTrades.map((trade: TradeRequest) => (
-                         <div key={trade.id} className="flex justify-between items-center p-3 bg-gray-50 dark:bg-gray-800/50 rounded-lg border border-gray-100 dark:border-gray-700 mb-2">
-                            <span className="text-sm text-gray-600 dark:text-gray-300">
-                                Envoyée à <span className="font-bold">{trade.receiverName}</span> (le {new Date(trade.createdAt?.seconds * 1000).toLocaleDateString()})
-                            </span>
-                            <button onClick={() => cancelTrade(trade.id)} className="text-xs text-red-500 hover:underline">Annuler</button>
+                    {proposals.length === 0 && !loading && (
+                        <div className="text-center py-20 text-gray-400 border-2 border-dashed border-gray-200 dark:border-gray-700 rounded-xl">
+                            Lancez le scanner pour trouver des &quot;matchs&quot; avec vos amis.
                         </div>
-                    ))}
-                </div>
+                    )}
 
-            </div>
-        )}
+                    <div className="space-y-8">
+                        {proposals.map(proposal => (
+                            <TradeRowProposal key={proposal.friend.uid} proposal={proposal} onProposalSent={runScan} />
+                        ))}
+                    </div>
+                </div>
+            )}
+
+            {/* --- TAB 2 : DEMANDES (INBOX) --- */}
+            {activeTab === 'requests' && (
+                <div className="animate-in fade-in space-y-8">
+                    
+                    {/* 1. REÇUES */}
+                    <div>
+                        <h2 className="font-bold text-gray-500 uppercase text-xs mb-4 sticky top-0 bg-white dark:bg-gray-900 py-2 z-10">À traiter ({incomingTrades.length})</h2>
+                        {incomingTrades.length === 0 && <p className="text-gray-400 italic text-sm">Aucune demande en attente.</p>}
+                        
+                        {incomingTrades.map((trade: TradeRequest) => (
+                            <IncomingRequestCard key={trade.id} trade={trade} />
+                        ))}
+                    </div>
+
+                    {/* 2. ENVOYÉES */}
+                    <div>
+                        <h2 className="font-bold text-gray-500 uppercase text-xs mb-4 pt-4 border-t dark:border-gray-700">En attente de réponse ({outgoingTrades.length})</h2>
+                        {outgoingTrades.length === 0 && <p className="text-gray-400 italic text-sm">Aucune proposition en cours.</p>}
+                        
+                        {outgoingTrades.map((trade: TradeRequest) => (
+                             <div key={trade.id} className="flex justify-between items-center p-3 bg-gray-50 dark:bg-gray-800/50 rounded-lg border border-gray-100 dark:border-gray-700 mb-2">
+                                <span className="text-sm text-gray-600 dark:text-gray-300">
+                                    Envoyée à <span className="font-bold">{trade.receiverName}</span> (le {new Date(trade.createdAt?.seconds * 1000).toLocaleDateString()})
+                                </span>
+                                <button onClick={() => cancelTrade(trade.id)} className="text-xs text-red-500 hover:underline">Annuler</button>
+                            </div>
+                        ))}
+                    </div>
+
+                </div>
+            )}
+        </div>
 
     </main>
   );

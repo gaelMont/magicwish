@@ -18,16 +18,14 @@ export default function DirectTradePage({ params }: { params: Promise<{ uid: str
   const router = useRouter();
   const { proposeTrade } = useTradeSystem();
 
-  // --- CHARGEMENT DES COLLECTIONS ---
+  // --- CHARGEMENT ---
   const { cards: myCollection, loading: loadingMe } = useCardCollection('collection');
   const { cards: friendCollection, loading: loadingHim } = useCardCollection('collection', 'default', targetUid);
 
   // --- ÉTATS ---
   const [targetName, setTargetName] = useState('L\'ami');
-  
   const [toGive, setToGive] = useState<CardType[]>([]);
   const [toReceive, setToReceive] = useState<CardType[]>([]);
-
   const [searchMe, setSearchMe] = useState('');
   const [searchHim, setSearchHim] = useState('');
 
@@ -41,12 +39,10 @@ export default function DirectTradePage({ params }: { params: Promise<{ uid: str
     if (targetUid) fetchName();
   }, [targetUid]);
 
-  // --- LOGIQUE DE SÉLECTION ---
-
+  // --- ACTIONS ---
   const handleSelectCard = (card: CardType, listType: 'give' | 'receive') => {
     const targetList = listType === 'give' ? toGive : toReceive;
     const setTarget = listType === 'give' ? setToGive : setToReceive;
-
     const existing = targetList.find(c => c.id === card.id);
     const maxStock = card.quantity;
     const currentSelected = existing ? existing.quantity : 0;
@@ -58,7 +54,7 @@ export default function DirectTradePage({ params }: { params: Promise<{ uid: str
             setTarget(prev => [...prev, { ...card, quantity: 1 }]);
         }
     } else {
-        toast.error("Stock maximum atteint pour cette carte");
+        toast.error("Stock maximum atteint");
     }
   };
 
@@ -67,149 +63,185 @@ export default function DirectTradePage({ params }: { params: Promise<{ uid: str
     setTarget(prev => prev.filter(c => c.id !== cardId));
   };
 
-  // --- VALIDATION ---
   const handlePropose = async () => {
     if (toGive.length === 0 && toReceive.length === 0) return;
-    
     const success = await proposeTrade(targetUid, targetName, toGive, toReceive);
-    if (success) {
-        router.push('/trades'); 
-    }
+    if (success) router.push('/trades'); 
   };
 
+  // CALCULS
   const valGive = toGive.reduce((acc, c) => acc + (c.customPrice ?? c.price ?? 0) * c.quantity, 0);
   const valReceive = toReceive.reduce((acc, c) => acc + (c.customPrice ?? c.price ?? 0) * c.quantity, 0);
+  const balance = valGive - valReceive;
 
   if (!user) return <div className="p-10 text-center">Connexion requise.</div>;
 
   return (
-    <div className="container mx-auto p-4 min-h-screen pb-24">
+    <div className="container mx-auto p-4 h-[calc(100vh-64px)] flex flex-col">
         
         {/* HEADER */}
-        <div className="flex items-center gap-4 mb-6">
+        <div className="flex-none flex items-center gap-4 mb-4">
             <button onClick={() => router.back()} className="text-gray-500 hover:text-gray-700 bg-gray-100 px-3 py-1 rounded-lg text-sm">
                 ← Retour
             </button>
-            <h1 className="text-2xl font-bold">
+            <h1 className="text-2xl font-bold truncate">
                 Échange avec <span className="text-blue-600">{targetName}</span>
             </h1>
         </div>
 
-        <div className="grid lg:grid-cols-2 gap-8 h-[calc(100vh-200px)]">
+        {/* GRILLE PRINCIPALE */}
+        <div className="grid lg:grid-cols-2 gap-6 grow overflow-hidden pb-24">
             
-            {/* --- COLONNE GAUCHE : CE QUE JE DONNE --- */}
-            <div className="flex flex-col bg-red-50/50 dark:bg-red-900/10 rounded-xl border border-red-100 dark:border-red-900 p-4">
-                <h2 className="font-bold text-red-600 mb-2">📤 Je donne (Ma Collection)</h2>
+            {/* --- COLONNE GAUCHE (MOI) --- */}
+            <div className="flex flex-col h-full bg-red-50/50 dark:bg-red-900/10 rounded-xl border border-red-100 dark:border-red-900 overflow-hidden relative shadow-sm">
+                <div className="p-4 pb-0 flex-none">
+                     <h2 className="font-bold text-red-600 mb-2">📤 Je donne (Ma Collection)</h2>
+                     <input 
+                        type="text" 
+                        placeholder="Filtrer ma collection..." 
+                        className="w-full p-2 mb-2 rounded border dark:bg-gray-800 dark:text-white dark:border-gray-600 text-sm"
+                        value={searchMe}
+                        onChange={e => setSearchMe(e.target.value)}
+                    />
+                </div>
                 
-                {/* 1. Liste des cartes SÉLECTIONNÉES */}
-                <div className="flex-none mb-4 space-y-2 min-h-[100px] bg-white dark:bg-gray-800 p-2 rounded border border-gray-200 dark:border-gray-700 overflow-y-auto max-h-[25vh]">
-                    {toGive.length === 0 && <p className="text-xs text-gray-400 italic text-center py-4">Rien sélectionné</p>}
-                    {toGive.map(card => (
-                        <div key={card.id} className="flex justify-between items-center text-sm p-1 border-b dark:border-gray-700">
-                            <span>{card.quantity}x {card.name} <span className="text-gray-400 text-xs">({card.setName})</span></span>
-                            <button onClick={() => handleRemoveCard(card.id, 'give')} className="text-red-500 font-bold px-2">✕</button>
+                {/* LISTE DÉFILANTE UNIQUE (Sélectionnés en haut, Dispos en bas) */}
+                <div className="grow overflow-y-auto custom-scrollbar p-4 pt-0 space-y-4">
+                    
+                    {/* SÉLECTIONNÉS */}
+                    {toGive.length > 0 && (
+                        <div className="bg-white dark:bg-gray-800 rounded-lg border border-red-200 dark:border-red-800 overflow-hidden">
+                            <div className="bg-red-100 dark:bg-red-900/30 px-3 py-1 text-xs font-bold text-red-700 dark:text-red-300">
+                                SÉLECTION ({toGive.reduce((a,c)=>a+c.quantity,0)})
+                            </div>
+                            {toGive.map(card => (
+                                <div key={card.id} className="flex justify-between items-center text-sm p-2 border-b dark:border-gray-700 last:border-0 hover:bg-gray-50 dark:hover:bg-gray-700/50">
+                                    <span className="truncate">{card.quantity}x {card.name}</span>
+                                    <button onClick={() => handleRemoveCard(card.id, 'give')} className="text-red-500 hover:bg-red-50 rounded px-2">✕</button>
+                                </div>
+                            ))}
                         </div>
-                    ))}
+                    )}
+
+                    {/* DISPONIBLES */}
+                    <div className="space-y-1">
+                        <p className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Mon Classeur d&apos;échange</p>
+                        {loadingMe ? <p className="text-sm">Chargement...</p> : 
+                            myCollection
+                                .filter(c => c.isForTrade) // <--- FILTRE AJOUTÉ ICI
+                                .filter(c => c.name.toLowerCase().includes(searchMe.toLowerCase()))
+                                .slice(0, 50) 
+                                .map(card => (
+                                    <div key={card.id} onClick={() => handleSelectCard(card, 'give')} className="cursor-pointer bg-white dark:bg-gray-800/50 hover:bg-red-100 dark:hover:bg-red-900/30 p-2 rounded flex items-center gap-2 border border-transparent hover:border-red-200 transition shadow-sm group">
+                                        <div className="w-8 h-11 bg-gray-200 rounded shrink-0 overflow-hidden relative">
+                                            <img src={card.imageUrl} className="w-full h-full object-cover" alt="" />
+                                            {card.isForTrade && <div className="absolute bottom-0 right-0 bg-green-500 text-white text-[8px] px-1">🤝</div>}
+                                        </div>
+                                        <div className="grow min-w-0">
+                                            <p className="font-bold text-xs truncate dark:text-gray-200">{card.name}</p>
+                                            <p className="text-[10px] text-gray-500">{card.setName} - Dispo: {card.quantity}</p>
+                                        </div>
+                                        <span className="text-xs font-bold text-gray-400 group-hover:text-red-500 transition-colors shrink-0">+</span>
+                                    </div>
+                                ))
+                        }
+                    </div>
                 </div>
 
-                {/* 2. Filtre Recherche */}
-                <input 
-                    type="text" 
-                    placeholder="Filtrer ma collection..." 
-                    className="w-full p-2 mb-2 rounded border dark:bg-gray-800 dark:text-white"
-                    value={searchMe}
-                    onChange={e => setSearchMe(e.target.value)}
-                />
-
-                {/* 3. Liste DISPONIBLE */}
-                <div className="grow overflow-y-auto custom-scrollbar space-y-2 pr-1">
-                    {loadingMe ? <p>Chargement...</p> : 
-                        myCollection
-                            .filter(c => c.name.toLowerCase().includes(searchMe.toLowerCase()))
-                            .slice(0, 50) 
-                            .map(card => (
-                                <div key={card.id} onClick={() => handleSelectCard(card, 'give')} className="cursor-pointer hover:bg-red-100 dark:hover:bg-red-900/30 p-2 rounded flex items-center gap-2 border border-transparent hover:border-red-200 transition">
-                                    <div className="w-8 h-11 bg-gray-200 rounded shrink-0 overflow-hidden relative">
-                                         <img src={card.imageUrl} className="w-full h-full object-cover" alt="" />
-                                         {/* Indicateur si la carte est marquée à l'échange chez MOI (Info visuelle) */}
-                                         {card.isForTrade && <div className="absolute bottom-0 right-0 bg-green-500 text-white text-[8px] px-1">🤝</div>}
-                                    </div>
-                                    <div className="grow min-w-0">
-                                        <p className="font-bold text-xs truncate dark:text-gray-200">{card.name}</p>
-                                        <p className="text-[10px] text-gray-500">{card.setName} - Dispo: {card.quantity}</p>
-                                    </div>
-                                    <span className="text-xs font-bold text-gray-400">+</span>
-                                </div>
-                            ))
-                    }
+                {/* TOTAL COLONNE GAUCHE (Fixe en bas de colonne) */}
+                <div className="flex-none bg-red-50 dark:bg-red-900/20 p-3 border-t border-red-100 dark:border-red-900 text-center">
+                    <span className="text-xs text-red-600 dark:text-red-400 font-bold uppercase">Total Donné</span>
+                    <div className="text-xl font-bold text-red-700 dark:text-red-300">{valGive.toFixed(2)} €</div>
                 </div>
             </div>
 
-            {/* --- COLONNE DROITE : CE QUE JE VEUX (SA COLLECTION) --- */}
-            <div className="flex flex-col bg-blue-50/50 dark:bg-blue-900/10 rounded-xl border border-blue-100 dark:border-blue-900 p-4">
-                <h2 className="font-bold text-blue-600 mb-2">📥 Je reçois (Sa Collection)</h2>
-
-                {/* 1. Liste SÉLECTIONNÉE */}
-                <div className="flex-none mb-4 space-y-2 min-h-[100px] bg-white dark:bg-gray-800 p-2 rounded border border-gray-200 dark:border-gray-700 overflow-y-auto max-h-[25vh]">
-                    {toReceive.length === 0 && <p className="text-xs text-gray-400 italic text-center py-4">Rien sélectionné</p>}
-                    {toReceive.map(card => (
-                        <div key={card.id} className="flex justify-between items-center text-sm p-1 border-b dark:border-gray-700">
-                            <span>{card.quantity}x {card.name} <span className="text-gray-400 text-xs">({card.setName})</span></span>
-                            <button onClick={() => handleRemoveCard(card.id, 'receive')} className="text-red-500 font-bold px-2">✕</button>
-                        </div>
-                    ))}
+            {/* --- COLONNE DROITE (AMI) --- */}
+            <div className="flex flex-col h-full bg-blue-50/50 dark:bg-blue-900/10 rounded-xl border border-blue-100 dark:border-blue-900 overflow-hidden relative shadow-sm">
+                <div className="p-4 pb-0 flex-none">
+                    <h2 className="font-bold text-blue-600 mb-2">📥 Je reçois (Sa Collection)</h2>
+                    <input 
+                        type="text" 
+                        placeholder={`Filtrer chez ${targetName}...`}
+                        className="w-full p-2 mb-2 rounded border dark:bg-gray-800 dark:text-white dark:border-gray-600 text-sm"
+                        value={searchHim}
+                        onChange={e => setSearchHim(e.target.value)}
+                    />
                 </div>
 
-                {/* 2. Filtre Recherche */}
-                <input 
-                    type="text" 
-                    placeholder={`Filtrer la collection de ${targetName}...`}
-                    className="w-full p-2 mb-2 rounded border dark:bg-gray-800 dark:text-white"
-                    value={searchHim}
-                    onChange={e => setSearchHim(e.target.value)}
-                />
-
-                {/* 3. Liste DISPONIBLE (Source Ami) - FILTRÉE PAR isForTrade */}
-                <div className="grow overflow-y-auto custom-scrollbar space-y-2 pr-1">
-                    {loadingHim ? <p>Chargement...</p> : 
-                        friendCollection
-                            // 🔒 FILTRE CRUCIAL : On ne montre que ce qui est "En Échange"
-                            .filter(c => c.isForTrade) 
-                            // -----------------------------------------------------------
-                            .filter(c => c.name.toLowerCase().includes(searchHim.toLowerCase()))
-                            .slice(0, 50)
-                            .map(card => (
-                                <div key={card.id} onClick={() => handleSelectCard(card, 'receive')} className="cursor-pointer hover:bg-blue-100 dark:hover:bg-blue-900/30 p-2 rounded flex items-center gap-2 border border-transparent hover:border-blue-200 transition">
-                                    <div className="w-8 h-11 bg-gray-200 rounded shrink-0 overflow-hidden relative">
-                                        <img src={card.imageUrl} className="w-full h-full object-cover" alt="" />
-                                        <div className="absolute bottom-0 right-0 bg-green-500 text-white text-[8px] px-1">🤝</div>
-                                    </div>
-                                    <div className="grow min-w-0">
-                                        <p className="font-bold text-xs truncate dark:text-gray-200">{card.name}</p>
-                                        <p className="text-[10px] text-gray-500">{card.setName} - Dispo: {card.quantity}</p>
-                                    </div>
-                                    <span className="text-xs font-bold text-gray-400">+</span>
+                {/* LISTE DÉFILANTE UNIQUE */}
+                <div className="grow overflow-y-auto custom-scrollbar p-4 pt-0 space-y-4">
+                     {/* SÉLECTIONNÉS */}
+                     {toReceive.length > 0 && (
+                        <div className="bg-white dark:bg-gray-800 rounded-lg border border-blue-200 dark:border-blue-800 overflow-hidden">
+                            <div className="bg-blue-100 dark:bg-blue-900/30 px-3 py-1 text-xs font-bold text-blue-700 dark:text-blue-300">
+                                SÉLECTION ({toReceive.reduce((a,c)=>a+c.quantity,0)})
+                            </div>
+                            {toReceive.map(card => (
+                                <div key={card.id} className="flex justify-between items-center text-sm p-2 border-b dark:border-gray-700 last:border-0 hover:bg-gray-50 dark:hover:bg-gray-700/50">
+                                    <span className="truncate">{card.quantity}x {card.name}</span>
+                                    <button onClick={() => handleRemoveCard(card.id, 'receive')} className="text-red-500 hover:bg-red-50 rounded px-2">✕</button>
                                 </div>
-                            ))
-                    }
+                            ))}
+                        </div>
+                    )}
+
+                    {/* DISPONIBLES */}
+                    <div className="space-y-1">
+                        <p className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Son Classeur d&apos;échange</p>
+                        {loadingHim ? <p className="text-sm">Chargement...</p> : 
+                            friendCollection
+                                .filter(c => c.isForTrade) // FILTRE DÉJÀ PRÉSENT
+                                .filter(c => c.name.toLowerCase().includes(searchHim.toLowerCase()))
+                                .slice(0, 50)
+                                .map(card => (
+                                    <div key={card.id} onClick={() => handleSelectCard(card, 'receive')} className="cursor-pointer bg-white dark:bg-gray-800/50 hover:bg-blue-100 dark:hover:bg-blue-900/30 p-2 rounded flex items-center gap-2 border border-transparent hover:border-blue-200 transition shadow-sm group">
+                                        <div className="w-8 h-11 bg-gray-200 rounded shrink-0 overflow-hidden relative">
+                                            <img src={card.imageUrl} className="w-full h-full object-cover" alt="" />
+                                            <div className="absolute bottom-0 right-0 bg-green-500 text-white text-[8px] px-1">🤝</div>
+                                        </div>
+                                        <div className="grow min-w-0">
+                                            <p className="font-bold text-xs truncate dark:text-gray-200">{card.name}</p>
+                                            <p className="text-[10px] text-gray-500">{card.setName} - Dispo: {card.quantity}</p>
+                                        </div>
+                                        <span className="text-xs font-bold text-gray-400 group-hover:text-blue-500 transition-colors shrink-0">+</span>
+                                    </div>
+                                ))
+                        }
+                    </div>
+                </div>
+
+                {/* TOTAL COLONNE DROITE (Fixe en bas de colonne) */}
+                <div className="flex-none bg-blue-50 dark:bg-blue-900/20 p-3 border-t border-blue-100 dark:border-blue-900 text-center">
+                    <span className="text-xs text-blue-600 dark:text-blue-400 font-bold uppercase">Total Reçu</span>
+                    <div className="text-xl font-bold text-blue-700 dark:text-blue-300">{valReceive.toFixed(2)} €</div>
                 </div>
             </div>
-
         </div>
 
-        {/* --- FOOTER DE VALIDATION --- */}
-        <div className="fixed bottom-0 left-0 right-0 p-4 bg-white dark:bg-gray-900 border-t dark:border-gray-800 flex justify-between items-center z-40 shadow-2xl">
-            <div className="flex gap-4 text-sm">
-                <div>Donne: <span className="font-bold">{valGive.toFixed(2)}€</span></div>
-                <div>Reçoit: <span className="font-bold">{valReceive.toFixed(2)}€</span></div>
+        {/* FOOTER PRINCIPAL AVEC BALANCE CENTRÉE */}
+        <div className="fixed bottom-0 left-0 right-0 h-20 bg-white dark:bg-gray-900 border-t dark:border-gray-800 flex items-center px-6 z-40 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)]">
+            
+            {/* Espace vide à gauche pour l'équilibre */}
+            <div className="flex-1"></div>
+
+            {/* BALANCE CENTRALE */}
+            <div className="flex-1 flex flex-col items-center justify-center">
+                <span className="text-xs text-gray-400 font-bold uppercase tracking-widest">Valeur Résiduelle</span>
+                <div className={`text-2xl font-black ${balance >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                    {balance > 0 ? '+' : ''}{balance.toFixed(2)} €
+                </div>
             </div>
-            <button 
-                onClick={handlePropose}
-                disabled={toGive.length === 0 && toReceive.length === 0}
-                className="bg-purple-600 hover:bg-purple-700 text-white px-8 py-3 rounded-xl font-bold disabled:opacity-50 transition shadow-lg flex items-center gap-2"
-            >
-                <span>🚀</span> Proposer l&apos;échange
-            </button>
+
+            {/* BOUTON D'ACTION À DROITE */}
+            <div className="flex-1 flex justify-end">
+                <button 
+                    onClick={handlePropose}
+                    disabled={toGive.length === 0 && toReceive.length === 0}
+                    className="bg-purple-600 hover:bg-purple-700 text-white px-8 py-3 rounded-xl font-bold disabled:opacity-50 transition shadow-lg transform active:scale-95 flex items-center gap-2"
+                >
+                    <span>🚀</span> Proposer
+                </button>
+            </div>
         </div>
 
     </div>
