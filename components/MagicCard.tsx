@@ -15,7 +15,7 @@ type MagicCardProps = {
   
   isFoil?: boolean;
   isSpecificVersion?: boolean;
-  isForTrade?: boolean; // <--- Nouveau
+  isForTrade?: boolean; 
   
   onDelete?: () => void;
   onIncrement?: () => void;
@@ -23,7 +23,6 @@ type MagicCardProps = {
   onMove?: () => void;
   
   onEditPrice?: (newPrice: number) => void;
-  // Signature mise à jour pour accepter isForTrade
   onToggleAttribute?: (field: 'isFoil' | 'isSpecificVersion' | 'isForTrade', currentValue: boolean) => void;
   
   isWishlist?: boolean;
@@ -50,7 +49,6 @@ export default function MagicCard(props: MagicCardProps) {
   
   const [tempPrice, setTempPrice] = useState(customPrice?.toString() || price?.toString() || "0");
 
-  // Synchronisation du prix
   useEffect(() => {
     if (!isEditingPrice) {
         const newVal = customPrice?.toString() || price?.toString() || "0";
@@ -85,7 +83,7 @@ export default function MagicCard(props: MagicCardProps) {
                 </div>
                 <div className="flex items-center gap-2 text-xs text-gray-500">
                     <p className="truncate">{setName}</p>
-                    {isSpecificVersion && <span className="bg-gray-200 dark:bg-gray-700 px-1 rounded text-[9px] border border-gray-400" title="Édition exacte requise">🔒 EXACT</span>}
+                    {isSpecificVersion && <span className="bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300 px-1 rounded text-[9px] border border-blue-200" title="Édition exacte requise">🔒 EXACT</span>}
                 </div>
             </div>
 
@@ -112,50 +110,9 @@ export default function MagicCard(props: MagicCardProps) {
 
   // --- VUE NORMALE (GRILLE) ---
   return (
-    <div className={`relative group flex flex-col bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden p-3 gap-3 border transition-colors h-full ${isFoil ? 'border-purple-300 dark:border-purple-800 shadow-purple-100 dark:shadow-none' : 'border-gray-100 dark:border-gray-700 hover:border-blue-300 dark:hover:border-blue-500'}`}>
+    <div className={`relative group flex flex-col bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden p-3 gap-2 border transition-colors h-full ${isFoil ? 'border-purple-300 dark:border-purple-800 shadow-purple-100 dark:shadow-none' : 'border-gray-100 dark:border-gray-700 hover:border-blue-300 dark:hover:border-blue-500'}`}>
       
-      {/* --- BADGES ET TOGGLES --- */}
-      <div className="absolute top-14 left-4 z-10 flex flex-col gap-1">
-        
-        {/* BOUTON FOIL */}
-        {isWishlist && !readOnly && onToggleAttribute && (
-            <button 
-                onClick={() => onToggleAttribute('isFoil', !!isFoil)}
-                className={`w-6 h-6 rounded-full flex items-center justify-center text-xs shadow-md border ${isFoil ? 'bg-purple-600 text-white border-purple-400' : 'bg-white/80 text-gray-400 border-gray-300 hover:text-purple-600'}`}
-                title="Basculer Foil"
-            >
-                ✨
-            </button>
-        )}
-
-        {/* BOUTON VERSION EXACTE */}
-        {isWishlist && !readOnly && onToggleAttribute && (
-            <button 
-                onClick={() => onToggleAttribute('isSpecificVersion', !!isSpecificVersion)}
-                className={`w-6 h-6 rounded-full flex items-center justify-center text-xs shadow-md border ${isSpecificVersion ? 'bg-blue-600 text-white border-blue-400' : 'bg-white/80 text-gray-400 border-gray-300 hover:text-blue-600'}`}
-                title={isSpecificVersion ? "Version exacte requise" : "N'importe quelle version"}
-            >
-                {isSpecificVersion ? '🔒' : '🌍'}
-            </button>
-        )}
-
-        {/* --- NOUVEAU : BOUTON TRADE (COLLECTION SEULEMENT) --- */}
-        {!isWishlist && !readOnly && onToggleAttribute && (
-            <button 
-                onClick={() => onToggleAttribute('isForTrade', !!isForTrade)}
-                className={`w-8 h-8 rounded-full flex items-center justify-center text-sm shadow-md border transition-all ${
-                    isForTrade 
-                    ? 'bg-green-500 text-white border-green-600 scale-110' 
-                    : 'bg-white/90 text-gray-300 border-gray-300 hover:text-green-500 grayscale'
-                }`}
-                title={isForTrade ? "Disponible à l'échange" : "Non disponible à l'échange"}
-            >
-                🤝
-            </button>
-        )}
-      </div>
-
-      {/* --- BOUTONS D'ACTION (Delete/Move) --- */}
+      {/* --- BOUTONS D'ACTION (Delete/Move) - Restent sur l'image --- */}
       {!readOnly && (
         <div className="absolute top-2 left-2 right-2 flex justify-between z-20 pointer-events-none">
             {isWishlist && onMove && (
@@ -171,7 +128,7 @@ export default function MagicCard(props: MagicCardProps) {
       )}
 
       {/* --- IMAGE --- */}
-      <div className="relative w-full aspect-[2.5/3.5] bg-gray-200 rounded-lg overflow-hidden">
+      <div className="relative w-full aspect-[2.5/3.5] bg-gray-200 rounded-lg overflow-hidden shrink-0">
         <img
           src={currentImage || CARD_BACK_URL}
           alt={name}
@@ -189,29 +146,82 @@ export default function MagicCard(props: MagicCardProps) {
       
       {/* --- INFO CARTE --- */}
       <div className="flex-1 flex flex-col min-w-0">
-        <div className="flex justify-between items-start">
-            <h3 className="font-bold text-sm md:text-base truncate mb-1 flex-grow" title={name}>{name}</h3>
+        <div className="flex justify-between items-start mb-1">
+            <h3 className="font-bold text-sm md:text-base truncate flex-grow" title={name}>{name}</h3>
         </div>
         
-        <div className="flex items-center gap-2 mb-2">
-            <p className="text-xs text-blue-600 dark:text-blue-400 truncate font-medium max-w-[70%]">{setName}</p>
-            {readOnly && isFoil && <span className="text-[10px] bg-purple-100 text-purple-700 px-1 rounded border border-purple-200">Foil</span>}
-            {readOnly && isSpecificVersion && <span className="text-[10px] bg-gray-100 text-gray-700 px-1 rounded border border-gray-200">Exact</span>}
-            {/* BADGE TRADE */}
-            {isForTrade && <span className="text-[10px] bg-green-100 text-green-700 px-1 rounded border border-green-200 font-bold flex items-center gap-1">🤝 Échange</span>}
+        <p className="text-xs text-blue-600 dark:text-blue-400 truncate font-medium mb-2">{setName}</p>
+
+        {/* --- NOUVELLE ZONE D'OPTIONS (SOUS L'IMAGE) --- */}
+        <div className="flex flex-wrap gap-1.5 mb-2">
+            
+            {/* TOGGLE FOIL */}
+            {onToggleAttribute ? (
+                <button 
+                    onClick={() => onToggleAttribute('isFoil', !!isFoil)}
+                    className={`text-[10px] px-2 py-0.5 rounded border transition-colors font-medium flex-1 text-center ${
+                        isFoil 
+                        ? 'bg-purple-100 text-purple-700 border-purple-200 hover:bg-purple-200 dark:bg-purple-900/30 dark:text-purple-300' 
+                        : 'bg-gray-50 text-gray-400 border-gray-200 hover:bg-gray-100 dark:bg-gray-800 dark:border-gray-600'
+                    }`}
+                >
+                    {isFoil ? '✨ Foil' : 'Normal'}
+                </button>
+            ) : isFoil && (
+                <span className="text-[10px] bg-purple-100 text-purple-700 px-2 py-0.5 rounded border border-purple-200 font-medium">✨ Foil</span>
+            )}
+
+            {/* TOGGLE VERSION (Wishlist only) */}
+            {(isWishlist) && (
+                onToggleAttribute ? (
+                    <button 
+                        onClick={() => onToggleAttribute('isSpecificVersion', !!isSpecificVersion)}
+                        className={`text-[10px] px-2 py-0.5 rounded border transition-colors font-medium flex-1 text-center ${
+                            isSpecificVersion 
+                            ? 'bg-blue-100 text-blue-700 border-blue-200 hover:bg-blue-200 dark:bg-blue-900/30 dark:text-blue-300' 
+                            : 'bg-gray-50 text-gray-400 border-gray-200 hover:bg-gray-100 dark:bg-gray-800 dark:border-gray-600'
+                        }`}
+                        title="Exiger cette version exacte"
+                    >
+                        {isSpecificVersion ? '🔒 Exact' : 'Auto'}
+                    </button>
+                ) : isSpecificVersion && (
+                    <span className="text-[10px] bg-blue-100 text-blue-700 px-2 py-0.5 rounded border border-blue-200 font-medium">🔒 Exact</span>
+                )
+            )}
+
+            {/* TOGGLE TRADE (Collection only) */}
+            {(!isWishlist) && (
+                onToggleAttribute ? (
+                    <button 
+                        onClick={() => onToggleAttribute('isForTrade', !!isForTrade)}
+                        className={`text-[10px] px-2 py-0.5 rounded border transition-colors font-medium flex-1 text-center ${
+                            isForTrade 
+                            ? 'bg-green-100 text-green-700 border-green-200 hover:bg-green-200 dark:bg-green-900/30 dark:text-green-300' 
+                            : 'bg-gray-50 text-gray-400 border-gray-200 hover:bg-gray-100 dark:bg-gray-800 dark:border-gray-600'
+                        }`}
+                        title="Disponible dans les échanges ?"
+                    >
+                        {isForTrade ? '🤝 Échange' : 'Privé'}
+                    </button>
+                ) : isForTrade && (
+                    <span className="text-[10px] bg-green-100 text-green-700 px-2 py-0.5 rounded border border-green-200 font-medium">🤝 Échange</span>
+                )
+            )}
         </div>
         
+        {/* --- FOOTER (Quantité & Prix) --- */}
         <div className="mt-auto flex justify-between items-end border-t border-gray-100 dark:border-gray-700 pt-2">
           
-          <div className="flex items-center gap-2">
-            {!readOnly && <button onClick={onDecrement} className="bg-gray-200 dark:bg-gray-700 w-7 h-7 rounded hover:bg-gray-300 font-bold flex items-center justify-center">-</button>}
-            <span className={`font-mono text-lg ${readOnly ? 'font-bold text-gray-800 dark:text-white' : 'w-5 text-center'}`}>{readOnly && "x"}{quantity}</span>
-            {!readOnly && <button onClick={onIncrement} className="bg-blue-100 dark:bg-blue-900 text-blue-600 font-bold w-7 h-7 rounded hover:bg-blue-200 flex items-center justify-center">+</button>}
+          <div className="flex items-center gap-1.5">
+            {!readOnly && <button onClick={onDecrement} className="bg-gray-200 dark:bg-gray-700 w-6 h-6 rounded hover:bg-gray-300 font-bold flex items-center justify-center text-sm">-</button>}
+            <span className={`font-mono text-base ${readOnly ? 'font-bold text-gray-800 dark:text-white' : 'w-4 text-center'}`}>{readOnly && "x"}{quantity}</span>
+            {!readOnly && <button onClick={onIncrement} className="bg-blue-100 dark:bg-blue-900 text-blue-600 font-bold w-6 h-6 rounded hover:bg-blue-200 flex items-center justify-center text-sm">+</button>}
           </div>
           
           <div className="text-right cursor-help" title="Prix unitaire Scryfall ou Perso">
              <p className="text-[10px] text-gray-400">Unit: {effectivePrice.toFixed(2)}€</p>
-             <p className={`font-bold ${customPrice ? 'text-orange-600' : 'text-gray-700 dark:text-gray-200'}`}>
+             <p className={`font-bold text-sm ${customPrice ? 'text-orange-600' : 'text-gray-700 dark:text-gray-200'}`}>
                  {(effectivePrice * quantity).toFixed(2)} €
              </p>
           </div>
