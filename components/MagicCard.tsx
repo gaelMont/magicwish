@@ -17,7 +17,7 @@ type MagicCardProps = {
   isSpecificVersion?: boolean;
   isForTrade?: boolean; 
   
-  onDelete?: () => void;
+  // onIncrement/onDecrement suffisent pour la gestion individuelle
   onIncrement?: () => void;
   onDecrement?: () => void;
   onMove?: () => void;
@@ -30,7 +30,7 @@ type MagicCardProps = {
   isTradeView?: boolean;
   allowPriceEdit?: boolean;
 
-  // --- NOUVEAUX PROPS SÉLECTION ---
+  // --- PROPS SÉLECTION ---
   isSelectMode?: boolean;
   isSelected?: boolean;
   onSelect?: () => void;
@@ -46,7 +46,7 @@ export default function MagicCard(props: MagicCardProps) {
       isTradeView, allowPriceEdit, 
       onEditPrice, onToggleAttribute, 
       readOnly, isWishlist,
-      onDelete, onIncrement, onDecrement, onMove,
+      onIncrement, onDecrement, onMove,
       isSelectMode, isSelected, onSelect
   } = props;
   
@@ -72,7 +72,7 @@ export default function MagicCard(props: MagicCardProps) {
 
   const currentImage = isFlipped && imageBackUrl ? imageBackUrl : imageUrl;
 
-  // --- COMPORTEMENT DU CLIC ---
+  // Clic sur la carte : Sélectionne ou Retourne l'image
   const handleCardClick = () => {
       if (isSelectMode && onSelect) {
           onSelect();
@@ -137,25 +137,17 @@ export default function MagicCard(props: MagicCardProps) {
         `}
     >
       
-      {/* BOUTONS D'ACTION (Masqués en mode sélection) */}
-      {!readOnly && !isSelectMode && (
-        <div className="absolute top-2 left-2 right-2 flex justify-between z-20 pointer-events-none">
-            {isWishlist && onMove && (
+      {/* BOUTON DÉPLACEMENT (Wishlist seulement) - Pas de suppression ici */}
+      {!readOnly && !isSelectMode && isWishlist && onMove && (
+        <div className="absolute top-2 left-2 right-2 flex justify-end z-20 pointer-events-none">
             <button onClick={(e) => { e.stopPropagation(); onMove(); }} className="pointer-events-auto p-1.5 bg-green-100 text-green-700 hover:bg-green-600 hover:text-white rounded-full transition opacity-100 md:opacity-0 md:group-hover:opacity-100 shadow-sm" title="Déplacer vers Collection">📦</button>
-            )}
-            
-            {!isWishlist && <div></div>} 
-
-            {onDelete && (
-            <button onClick={(e) => { e.stopPropagation(); onDelete(); }} className="pointer-events-auto p-1.5 bg-red-50 text-gray-400 hover:text-white hover:bg-red-600 rounded-full transition opacity-100 md:opacity-0 md:group-hover:opacity-100" title="Supprimer">🗑️</button>
-            )}
         </div>
       )}
 
-      {/* INDICATEUR DE SÉLECTION (CHECKBOX VISUELLE) */}
+      {/* CASE À COCHER (Visible uniquement en mode sélection) */}
       {isSelectMode && (
           <div className="absolute top-2 right-2 z-30 pointer-events-none">
-              <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center transition-colors ${isSelected ? 'bg-blue-600 border-blue-600' : 'bg-white/80 border-gray-400'}`}>
+              <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center transition-colors shadow-sm ${isSelected ? 'bg-blue-600 border-blue-600' : 'bg-white/90 border-gray-400'}`}>
                   {isSelected && <span className="text-white text-sm font-bold">✓</span>}
               </div>
           </div>
@@ -171,7 +163,7 @@ export default function MagicCard(props: MagicCardProps) {
         />
         {isFoil && <div className="absolute inset-0 bg-gradient-to-tr from-purple-500/20 to-transparent pointer-events-none mix-blend-overlay"></div>}
 
-        {/* Bouton Flip (Masqué en mode sélection pour éviter conflit de clic) */}
+        {/* Bouton Flip (Masqué en mode sélection) */}
         {imageBackUrl && !isSelectMode && (
           <button onClick={(e) => { e.stopPropagation(); setIsFlipped(!isFlipped); }} className="absolute top-1/2 right-2 -translate-y-1/2 bg-black/50 hover:bg-black/80 text-white p-2 rounded-full backdrop-blur-sm transition-all shadow-lg border border-white/20 z-10 pointer-events-auto">
             🔄
@@ -207,7 +199,7 @@ export default function MagicCard(props: MagicCardProps) {
             {/* VERSION / TRADE */}
             {isWishlist ? (
                 // WISHLIST BUTTONS
-                onToggleAttribute ? (
+                onToggleAttribute && (
                     <button 
                         onClick={(e) => { e.stopPropagation(); onToggleAttribute('isSpecificVersion', !!isSpecificVersion); }}
                         className={`text-[10px] px-2 py-0.5 rounded border transition-colors font-medium flex-1 text-center ${
@@ -216,10 +208,10 @@ export default function MagicCard(props: MagicCardProps) {
                     >
                         {isSpecificVersion ? '🔒 Exact' : 'Auto'}
                     </button>
-                ) : null
+                )
             ) : (
                 // COLLECTION BUTTONS
-                onToggleAttribute ? (
+                onToggleAttribute && (
                     <button 
                         onClick={(e) => { e.stopPropagation(); onToggleAttribute('isForTrade', !!isForTrade); }}
                         className={`text-[10px] px-2 py-0.5 rounded border transition-colors font-medium flex-1 text-center ${
@@ -230,10 +222,10 @@ export default function MagicCard(props: MagicCardProps) {
                     >
                         {isForTrade ? '🤝 Échange' : 'Privé'}
                     </button>
-                ) : null
+                )
             )}
             
-            {/* BOUTON J'AI ACHETÉ (Wishlist only) */}
+            {/* BOUTON J'AI ACHETÉ (Texte) */}
             {isWishlist && !readOnly && !isSelectMode && onMove && (
                 <button 
                     onClick={(e) => { e.stopPropagation(); onMove(); }}
@@ -245,7 +237,7 @@ export default function MagicCard(props: MagicCardProps) {
             )}
         </div>
         
-        {/* FOOTER QUANTITÉ (Désactivé en mode sélection) */}
+        {/* FOOTER QUANTITÉ */}
         <div className={`mt-auto flex justify-between items-end border-t border-gray-100 dark:border-gray-700 pt-2 ${isSelectMode ? 'pointer-events-none opacity-50' : ''}`}>
           <div className="flex items-center gap-1.5">
             {!readOnly && <button onClick={(e) => {e.stopPropagation(); onDecrement?.()}} className="bg-gray-200 dark:bg-gray-700 w-6 h-6 rounded hover:bg-gray-300 font-bold flex items-center justify-center text-sm">-</button>}
