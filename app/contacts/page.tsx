@@ -1,24 +1,31 @@
+// app/contacts/page.tsx
 'use client';
 
 import { useState } from 'react';
+import Link from 'next/link'; // <--- Import nécessaire pour la navigation
 import { useAuth } from '@/lib/AuthContext';
 import { useFriends, FriendProfile } from '@/hooks/useFriends';
 import toast from 'react-hot-toast';
 
 export default function ContactsPage() {
   const { user } = useAuth();
+  
+  // On récupère toutes les fonctions et données depuis notre hook
   const { 
     friends, requestsReceived, loading,
     searchUsers, 
     sendFriendRequest, acceptRequest, declineRequest, removeFriend
   } = useFriends();
 
+  // États locaux pour la recherche
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<FriendProfile[]>([]);
   const [isSearching, setIsSearching] = useState(false);
 
-  if (!user) return <div className="p-10 text-center">Connectez-vous pour voir vos contacts.</div>;
+  // Protection simple si pas connecté
+  if (!user) return <div className="p-10 text-center">Veuillez vous connecter pour gérer vos contacts.</div>;
 
+  // Gestion de la soumission du formulaire de recherche
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!searchQuery.trim()) return;
@@ -29,16 +36,17 @@ export default function ContactsPage() {
     try {
       const results = await searchUsers(searchQuery);
       setSearchResults(results);
+      
       if (results.length === 0) {
         toast("Aucun utilisateur trouvé", { icon: '🤷‍♂️' });
       }
     } catch (err: any) {
         console.error(err);
-        // Gestion de l'erreur d'Index Firestore (première requête)
+        // Gestion spécifique de l'erreur d'Index Firestore (la première fois)
         if (err.message && err.message.includes("indexes")) {
             toast.error("Configuration serveur requise (voir console F12)");
         } else {
-            toast.error("Erreur recherche");
+            toast.error("Erreur lors de la recherche");
         }
     } finally {
       setIsSearching(false);
@@ -53,19 +61,20 @@ export default function ContactsPage() {
 
       <div className="grid md:grid-cols-2 gap-8">
         
-        {/* COLONNE GAUCHE : RECHERCHE + DEMANDES */}
+        {/* --- COLONNE GAUCHE : RECHERCHE & DEMANDES --- */}
         <div className="space-y-8">
             
-            {/* 1. RECHERCHE */}
+            {/* 1. MODULE DE RECHERCHE */}
             <div className="bg-white dark:bg-gray-800 p-6 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700">
-                <h2 className="font-bold text-lg mb-4">Chercher un ami</h2>
+                <h2 className="font-bold text-lg mb-4 text-gray-800 dark:text-white">Chercher un ami</h2>
+                
                 <form onSubmit={handleSearch} className="flex gap-2 mb-4">
                     <div className="relative flex-grow">
                         <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">@</span>
                         <input 
                             type="text" 
                             placeholder="ex: bla (pour blaydd...)" 
-                            className="w-full pl-7 p-2 border rounded-lg bg-gray-50 dark:bg-gray-900 dark:border-gray-600 outline-none focus:ring-2 focus:ring-blue-500 lowercase"
+                            className="w-full pl-7 p-2 border rounded-lg bg-gray-50 dark:bg-gray-900 dark:border-gray-600 outline-none focus:ring-2 focus:ring-blue-500 lowercase text-gray-900 dark:text-white"
                             value={searchQuery}
                             onChange={e => setSearchQuery(e.target.value.toLowerCase())}
                         />
@@ -79,19 +88,22 @@ export default function ContactsPage() {
                     </button>
                 </form>
 
-                {/* LISTE RESULTATS */}
-                <div className="space-y-2">
+                {/* LISTE DES RÉSULTATS DE RECHERCHE */}
+                <div className="space-y-2 max-h-60 overflow-y-auto">
                     {searchResults.map(result => (
                         <div key={result.uid} className="flex items-center justify-between bg-blue-50 dark:bg-blue-900/20 p-3 rounded-lg border border-blue-100 dark:border-blue-800 animate-in fade-in">
                             <div className="flex items-center gap-3">
+                                {/* Avatar */}
                                 <div className="w-8 h-8 rounded-full bg-blue-200 flex items-center justify-center text-blue-700 font-bold text-xs overflow-hidden">
                                     {result.photoURL ? <img src={result.photoURL} alt="" className="w-full h-full object-cover"/> : result.username[0].toUpperCase()}
                                 </div>
+                                {/* Infos */}
                                 <div>
-                                    <p className="font-bold text-sm">{result.displayName}</p>
-                                    <p className="text-xs text-blue-600">@{result.username}</p>
+                                    <p className="font-bold text-sm text-gray-900 dark:text-white">{result.displayName}</p>
+                                    <p className="text-xs text-blue-600 dark:text-blue-400">@{result.username}</p>
                                 </div>
                             </div>
+                            {/* Bouton Ajouter */}
                             <button 
                                 onClick={() => sendFriendRequest(result)}
                                 className="text-xs bg-blue-600 text-white px-3 py-1.5 rounded-full hover:bg-blue-700 transition shadow-sm"
@@ -103,9 +115,9 @@ export default function ContactsPage() {
                 </div>
             </div>
 
-            {/* 2. DEMANDES REÇUES */}
+            {/* 2. DEMANDES D'AMIS REÇUES */}
             {requestsReceived.length > 0 && (
-                <div className="bg-white dark:bg-gray-800 p-6 rounded-xl shadow-sm border border-orange-200 dark:border-orange-900/50">
+                <div className="bg-white dark:bg-gray-800 p-6 rounded-xl shadow-sm border border-orange-200 dark:border-orange-900/50 animate-in slide-in-from-left-4">
                     <h2 className="font-bold text-lg mb-4 text-orange-600 dark:text-orange-400 flex items-center gap-2">
                         🔔 Demandes reçues <span className="bg-orange-100 text-orange-800 text-xs px-2 py-0.5 rounded-full">{requestsReceived.length}</span>
                     </h2>
@@ -114,16 +126,16 @@ export default function ContactsPage() {
                             <div key={req.uid} className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
                                 <div className="flex items-center gap-3">
                                     <div className="w-10 h-10 rounded-full bg-gray-300 overflow-hidden">
-                                        {req.photoURL && <img src={req.photoURL} alt="" className="w-full h-full object-cover"/>}
+                                        {req.photoURL ? <img src={req.photoURL} alt="" className="w-full h-full object-cover"/> : <span className="flex items-center justify-center h-full font-bold text-gray-500">{req.username[0].toUpperCase()}</span>}
                                     </div>
                                     <div>
-                                        <p className="font-bold text-sm">{req.displayName}</p>
+                                        <p className="font-bold text-sm text-gray-900 dark:text-white">{req.displayName}</p>
                                         <p className="text-xs text-gray-500">@{req.username}</p>
                                     </div>
                                 </div>
                                 <div className="flex gap-2">
-                                    <button onClick={() => acceptRequest(req)} className="p-2 bg-green-100 text-green-700 hover:bg-green-200 rounded-full" title="Accepter">✓</button>
-                                    <button onClick={() => declineRequest(req.uid)} className="p-2 bg-red-100 text-red-700 hover:bg-red-200 rounded-full" title="Refuser">✕</button>
+                                    <button onClick={() => acceptRequest(req)} className="p-2 bg-green-100 text-green-700 hover:bg-green-200 rounded-full transition" title="Accepter">✓</button>
+                                    <button onClick={() => declineRequest(req.uid)} className="p-2 bg-red-100 text-red-700 hover:bg-red-200 rounded-full transition" title="Refuser">✕</button>
                                 </div>
                             </div>
                         ))}
@@ -132,9 +144,9 @@ export default function ContactsPage() {
             )}
         </div>
 
-        {/* COLONNE DROITE : LISTE AMIS */}
+        {/* --- COLONNE DROITE : LISTE MES AMIS --- */}
         <div className="bg-white dark:bg-gray-800 p-6 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 h-fit">
-            <h2 className="font-bold text-lg mb-4 flex items-center gap-2">
+            <h2 className="font-bold text-lg mb-4 flex items-center gap-2 text-gray-800 dark:text-white">
                 Mes Amis <span className="text-gray-400 font-normal">({friends.length})</span>
             </h2>
             
@@ -148,6 +160,8 @@ export default function ContactsPage() {
                 <div className="space-y-2">
                     {friends.map(friend => (
                         <div key={friend.uid} className="group flex items-center justify-between p-3 hover:bg-gray-50 dark:hover:bg-gray-700/50 rounded-lg transition border border-transparent hover:border-gray-100 dark:hover:border-gray-600">
+                            
+                            {/* Identité Ami */}
                             <div className="flex items-center gap-3">
                                 <div className="w-10 h-10 rounded-full bg-gradient-to-br from-purple-500 to-blue-500 flex items-center justify-center text-white font-bold shadow-sm overflow-hidden">
                                     {friend.photoURL ? <img src={friend.photoURL} alt="" className="w-full h-full object-cover" /> : friend.username[0].toUpperCase()}
@@ -158,8 +172,23 @@ export default function ContactsPage() {
                                 </div>
                             </div>
                             
-                            <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                                <button onClick={() => removeFriend(friend.uid)} className="text-red-400 hover:text-red-600 text-xs px-2 py-1">Retirer</button>
+                            {/* Actions (Visibles au survol sur desktop) */}
+                            <div className="flex items-center gap-2 opacity-100 md:opacity-0 group-hover:opacity-100 transition-opacity">
+                                {/* BOUTON VOIR PROFIL */}
+                                <Link 
+                                    href={`/user/${friend.uid}`}
+                                    className="text-xs bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300 px-3 py-1.5 rounded hover:bg-blue-200 dark:hover:bg-blue-800 transition font-medium"
+                                >
+                                    Voir
+                                </Link>
+                                
+                                <button 
+                                    onClick={() => removeFriend(friend.uid)} 
+                                    className="text-red-400 hover:text-red-600 text-xs px-2 py-1"
+                                    title="Retirer cet ami"
+                                >
+                                    ✕
+                                </button>
                             </div>
                         </div>
                     ))}

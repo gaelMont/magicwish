@@ -14,37 +14,40 @@ export type CardType = {
   price?: number;
   setName?: string;
   setCode?: string;
-  wishlistId?: string; // Utile pour la vue globale
+  wishlistId?: string; 
 };
 
-// MODIFICATION: On accepte maintenant un path explicite ou un listId
-export function useCardCollection(target: 'collection' | 'wishlist', listId: string = 'default') {
+// MODIFICATION: Ajout du paramètre `targetUid` à la fin
+export function useCardCollection(
+    target: 'collection' | 'wishlist', 
+    listId: string = 'default',
+    targetUid?: string // <--- NOUVEAU PARAMÈTRE
+) {
   const { user, loading: authLoading } = useAuth();
   const [cards, setCards] = useState<CardType[]>([]);
   const [loading, setLoading] = useState(true);
 
+  // On détermine sur quel UID on travaille : celui passé en paramètre OU celui connecté
+  const effectiveUid = targetUid || user?.uid;
+
   useEffect(() => {
-    if (!user || authLoading) {
-        if (!authLoading) setLoading(false);
+    // Si pas d'UID effectif (ex: pas connecté et pas de cible), on attend
+    if (!effectiveUid || authLoading) {
+        if (!authLoading && !effectiveUid) setLoading(false);
         return;
     }
 
     setLoading(true);
 
-    // LOGIQUE DE CHEMIN DYNAMIQUE
     let collectionPath = '';
     
     if (target === 'collection') {
-        // La collection reste unique (pour l'instant)
-        collectionPath = `users/${user.uid}/collection`;
+        collectionPath = `users/${effectiveUid}/collection`;
     } else {
-        // Gestion des Wishlists
         if (listId === 'default') {
-            // Rétro-compatibilité : l'ancienne wishlist
-            collectionPath = `users/${user.uid}/wishlist`;
+            collectionPath = `users/${effectiveUid}/wishlist`;
         } else {
-            // Nouvelles wishlists
-            collectionPath = `users/${user.uid}/wishlists_data/${listId}/cards`;
+            collectionPath = `users/${effectiveUid}/wishlists_data/${listId}/cards`;
         }
     }
 
@@ -53,7 +56,7 @@ export function useCardCollection(target: 'collection' | 'wishlist', listId: str
     const unsubscribe = onSnapshot(colRef, (snapshot) => {
       const items = snapshot.docs.map((doc) => ({
         id: doc.id,
-        wishlistId: listId, // On marque l'origine
+        wishlistId: listId,
         ...doc.data(),
       })) as CardType[];
       
@@ -61,29 +64,32 @@ export function useCardCollection(target: 'collection' | 'wishlist', listId: str
       setLoading(false);
     }, (error) => {
       console.error("Erreur Firestore:", error);
+      // Si erreur de permission (ex: on n'est pas ami), ça tombera ici
       setLoading(false);
     });
 
     return () => unsubscribe();
-  }, [user, target, listId, authLoading]);
+  }, [effectiveUid, target, listId, authLoading]);
 
-  // Tri
   const sortedCards = useMemo(() => {
     return [...cards].sort((a, b) => a.name.localeCompare(b.name));
   }, [cards]);
 
-  // Helpers pour retrouver le bon chemin pour les updates
+  // --- ACTIONS (Uniquement si c'est MON compte) ---
+  // Si on visite un ami, on bloque les modifications
+  const isOwner = user?.uid === effectiveUid;
+
   const getDocRef = (cardId: string) => {
-      if (!user) return null;
+      if (!isOwner || !effectiveUid) return null; // Sécurité côté client
       let path = '';
-      if (target === 'collection') path = `users/${user.uid}/collection`;
-      else if (listId === 'default') path = `users/${user.uid}/wishlist`;
-      else path = `users/${user.uid}/wishlists_data/${listId}/cards`;
+      if (target === 'collection') path = `users/${effectiveUid}/collection`;
+      else if (listId === 'default') path = `users/${effectiveUid}/wishlist`;
+      else path = `users/${effectiveUid}/wishlists_data/${listId}/cards`;
       return doc(db, path, cardId);
   };
 
   const updateQuantity = async (cardId: string, amount: number, currentQuantity: number) => {
-    if (!user) return;
+    if (!isOwner) return; // Bloqué
     const ref = getDocRef(cardId);
     if (!ref) return;
 
@@ -99,7 +105,7 @@ export function useCardCollection(target: 'collection' | 'wishlist', listId: str
   };
 
   const removeCard = async (cardId: string) => {
-    if (!user) return;
+    if (!isOwner) return; // Bloqué
     const ref = getDocRef(cardId);
     if(ref) {
         await deleteDoc(ref);
@@ -111,5 +117,5 @@ export function useCardCollection(target: 'collection' | 'wishlist', listId: str
     return cards.reduce((acc, card) => acc + (card.price || 0) * card.quantity, 0);
   }, [cards]);
 
-  return { cards: sortedCards, loading, updateQuantity, removeCard, totalPrice };
+  return { cards: sortedCards, loading, updateQuantity, removeCard, totalPrice, isOwner };
 }
