@@ -7,13 +7,13 @@ import { db } from '@/lib/firebase';
 import { doc, setDoc, increment, serverTimestamp } from 'firebase/firestore';
 import { ScryfallRawData } from '@/lib/cardUtils';
 import { CardType } from '@/hooks/useCardCollection';
-import { useWishlists } from '@/hooks/useWishlists'; // IMPORT AJOUTÉ
+import { useWishlists } from '@/hooks/useWishlists';
 import CardVersionPickerModal from '@/components/CardVersionPickerModal';
 import toast from 'react-hot-toast';
 
 export default function SearchPage() {
   const { user } = useAuth();
-  const { lists } = useWishlists(); // RÉCUPÉRATION DES LISTES
+  const { lists } = useWishlists();
   
   // États de recherche
   const [query, setQuery] = useState('');
@@ -59,7 +59,7 @@ export default function SearchPage() {
       setModalOpen(true);
   };
 
-  // --- 3. SAUVEGARDE EN BASE (LOGIQUE CORRIGÉE) ---
+  // --- 3. SAUVEGARDE EN BASE ---
   const handleConfirmAdd = async (card: CardType, targetListId: string = 'default') => {
       if (!user) return;
 
@@ -67,9 +67,8 @@ export default function SearchPage() {
       const toastId = toast.loading(`Ajout à : ${destLabel}...`);
       
       try {
-          // --- LOGIQUE DE CHEMIN FIRESTORE DYNAMIQUE ---
+          // Détermination du chemin Firestore
           let collectionPath = 'collection';
-          
           if (targetDestination === 'wishlist') {
               if (targetListId === 'default') {
                   collectionPath = 'wishlist';
@@ -80,16 +79,23 @@ export default function SearchPage() {
 
           const cardRef = doc(db, 'users', user.uid, collectionPath, card.id);
 
-          // Construction de l'objet à sauvegarder
+          // Construction de l'objet (NETTOYAGE ET SÉCURISATION)
+          // On évite les doublons de clés ici
           const dataToSave = {
-              ...card,
+              ...card, // On copie toutes les propriétés de base
+              
+              // SÉCURITÉ FIRESTORE : On écrase imageBackUrl pour garantir qu'il n'est pas undefined
+              imageBackUrl: card.imageBackUrl || null,
+              
+              // Métadonnées système
               addedAt: serverTimestamp(),
-              // On force le bon ID de liste ou null
+              
+              // Logique métier
               wishlistId: targetDestination === 'wishlist' ? targetListId : null, 
               isForTrade: false 
           };
 
-          // On utilise setDoc avec merge pour gérer l'incrément ou la création
+          // Sauvegarde (set avec merge pour gérer l'incrément si existant)
           await setDoc(cardRef, {
               ...dataToSave,
               quantity: increment(card.quantity)
@@ -207,14 +213,13 @@ export default function SearchPage() {
           </div>
       )}
 
-      {/* MODALE DE SÉLECTION */}
       <CardVersionPickerModal 
           isOpen={modalOpen}
           onClose={() => setModalOpen(false)}
           baseCard={selectedBaseCard}
           onConfirm={handleConfirmAdd}
-          destination={targetDestination} // On passe la destination
-          availableLists={lists} // On passe la liste des wishlists
+          destination={targetDestination}
+          availableLists={lists}
       />
 
     </main>

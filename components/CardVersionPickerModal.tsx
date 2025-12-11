@@ -80,7 +80,7 @@ export default function CardVersionPickerModal({
         id: currentCardRaw.id,
         name: name,
         imageUrl: imageUrl,
-        imageBackUrl: imageBackUrl || undefined,
+        imageBackUrl: imageBackUrl || null,
         quantity: quantity,
         price: currentPrice,
         setName: setName,

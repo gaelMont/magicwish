@@ -16,7 +16,7 @@ export type CardType = {
   id: string;
   name: string;
   imageUrl: string;
-  imageBackUrl?: string;
+  imageBackUrl?: string | null;
   quantity: number;
   price?: number; 
   customPrice?: number;
