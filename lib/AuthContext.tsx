@@ -8,14 +8,15 @@ import {
   signOut, 
   User 
 } from 'firebase/auth';
-import { doc, onSnapshot } from 'firebase/firestore'; // <--- NOUVEAU
-import { auth, db } from './firebase'; // <--- NOUVEAU (db)
+import { doc, onSnapshot, collection } from 'firebase/firestore'; 
+import { auth, db } from './firebase'; 
 import toast from 'react-hot-toast';
 
 type AuthContextType = {
   user: User | null;
-  username: string | null; // <--- NOUVEAU : Le pseudo unique
+  username: string | null;
   loading: boolean;
+  friendRequestCount: number; // Compteur pour les notifications
   signInWithGoogle: () => Promise<void>;
   logOut: () => Promise<void>;
 };
@@ -24,6 +25,7 @@ const AuthContext = createContext<AuthContextType>({
   user: null,
   username: null,
   loading: true,
+  friendRequestCount: 0,
   signInWithGoogle: async () => {},
   logOut: async () => {},
 });
@@ -32,7 +34,8 @@ export const useAuth = () => useContext(AuthContext);
 
 export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const [user, setUser] = useState<User | null>(null);
-  const [username, setUsername] = useState<string | null>(null); // <--- ETAT DU PSEUDO
+  const [username, setUsername] = useState<string | null>(null);
+  const [friendRequestCount, setFriendRequestCount] = useState(0);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -40,23 +43,32 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       setUser(currentUser);
 
       if (currentUser) {
-        // SI CONNECTÉ : On écoute le profil public pour récupérer le pseudo
+        // 1. Écoute du Pseudo (Profil Public)
         const profileRef = doc(db, 'users', currentUser.uid, 'public_profile', 'info');
-        
-        const unsubscribeProfile = onSnapshot(profileRef, (docSnap) => {
+        const unsubProfile = onSnapshot(profileRef, (docSnap) => {
           if (docSnap.exists()) {
             setUsername(docSnap.data().username);
           } else {
-            setUsername(null); // Pas encore de profil
+            setUsername(null);
           }
+          // On ne met loading à false qu'ici pour être sûr d'avoir le username
           setLoading(false);
         });
 
-        // Nettoyage de l'écouteur profil quand on change d'user
-        return () => unsubscribeProfile();
+        // 2. Écoute des Demandes d'amis (Notifications)
+        const requestsRef = collection(db, 'users', currentUser.uid, 'friend_requests_received');
+        const unsubRequests = onSnapshot(requestsRef, (snap) => {
+          setFriendRequestCount(snap.docs.length);
+        });
+
+        // Nettoyage quand l'utilisateur change ou se déconnecte
+        return () => {
+          unsubProfile();
+          unsubRequests();
+        };
       } else {
-        // SI DÉCONNECTÉ
         setUsername(null);
+        setFriendRequestCount(0);
         setLoading(false);
       }
     });
@@ -87,11 +99,12 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
   const value = useMemo(() => ({
     user,
-    username, // On expose le username
+    username,
+    friendRequestCount,
     loading,
     signInWithGoogle,
     logOut
-  }), [user, username, loading]);
+  }), [user, username, loading, friendRequestCount]);
 
   return (
     <AuthContext.Provider value={value}>

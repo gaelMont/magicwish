@@ -1,4 +1,3 @@
-// app/contacts/page.tsx
 'use client';
 
 import { useState } from 'react';
@@ -10,12 +9,12 @@ export default function ContactsPage() {
   const { user } = useAuth();
   const { 
     friends, requestsReceived, loading,
-    searchUserByUsername, sendFriendRequest, 
-    acceptRequest, declineRequest, removeFriend
+    searchUsers, 
+    sendFriendRequest, acceptRequest, declineRequest, removeFriend
   } = useFriends();
 
   const [searchQuery, setSearchQuery] = useState('');
-  const [searchResult, setSearchResult] = useState<FriendProfile | null>(null);
+  const [searchResults, setSearchResults] = useState<FriendProfile[]>([]);
   const [isSearching, setIsSearching] = useState(false);
 
   if (!user) return <div className="p-10 text-center">Connectez-vous pour voir vos contacts.</div>;
@@ -25,16 +24,22 @@ export default function ContactsPage() {
     if (!searchQuery.trim()) return;
     
     setIsSearching(true);
-    setSearchResult(null);
+    setSearchResults([]);
+    
     try {
-      const result = await searchUserByUsername(searchQuery);
-      if (result) {
-        setSearchResult(result);
-      } else {
-        toast.error("Utilisateur introuvable.");
+      const results = await searchUsers(searchQuery);
+      setSearchResults(results);
+      if (results.length === 0) {
+        toast("Aucun utilisateur trouvé", { icon: '🤷‍♂️' });
       }
     } catch (err: any) {
-        toast.error(err.message);
+        console.error(err);
+        // Gestion de l'erreur d'Index Firestore (première requête)
+        if (err.message && err.message.includes("indexes")) {
+            toast.error("Configuration serveur requise (voir console F12)");
+        } else {
+            toast.error("Erreur recherche");
+        }
     } finally {
       setIsSearching(false);
     }
@@ -53,13 +58,13 @@ export default function ContactsPage() {
             
             {/* 1. RECHERCHE */}
             <div className="bg-white dark:bg-gray-800 p-6 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700">
-                <h2 className="font-bold text-lg mb-4">Ajouter un ami</h2>
+                <h2 className="font-bold text-lg mb-4">Chercher un ami</h2>
                 <form onSubmit={handleSearch} className="flex gap-2 mb-4">
                     <div className="relative flex-grow">
                         <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">@</span>
                         <input 
                             type="text" 
-                            placeholder="pseudo_exact" 
+                            placeholder="ex: bla (pour blaydd...)" 
                             className="w-full pl-7 p-2 border rounded-lg bg-gray-50 dark:bg-gray-900 dark:border-gray-600 outline-none focus:ring-2 focus:ring-blue-500 lowercase"
                             value={searchQuery}
                             onChange={e => setSearchQuery(e.target.value.toLowerCase())}
@@ -74,26 +79,28 @@ export default function ContactsPage() {
                     </button>
                 </form>
 
-                {/* RESULTAT RECHERCHE */}
-                {searchResult && (
-                    <div className="flex items-center justify-between bg-blue-50 dark:bg-blue-900/20 p-3 rounded-lg border border-blue-100 dark:border-blue-800 animate-in fade-in slide-in-from-top-2">
-                        <div className="flex items-center gap-3">
-                            <div className="w-10 h-10 rounded-full bg-blue-200 flex items-center justify-center text-blue-700 font-bold text-lg overflow-hidden">
-                                {searchResult.photoURL ? <img src={searchResult.photoURL} alt="" /> : searchResult.username[0].toUpperCase()}
+                {/* LISTE RESULTATS */}
+                <div className="space-y-2">
+                    {searchResults.map(result => (
+                        <div key={result.uid} className="flex items-center justify-between bg-blue-50 dark:bg-blue-900/20 p-3 rounded-lg border border-blue-100 dark:border-blue-800 animate-in fade-in">
+                            <div className="flex items-center gap-3">
+                                <div className="w-8 h-8 rounded-full bg-blue-200 flex items-center justify-center text-blue-700 font-bold text-xs overflow-hidden">
+                                    {result.photoURL ? <img src={result.photoURL} alt="" className="w-full h-full object-cover"/> : result.username[0].toUpperCase()}
+                                </div>
+                                <div>
+                                    <p className="font-bold text-sm">{result.displayName}</p>
+                                    <p className="text-xs text-blue-600">@{result.username}</p>
+                                </div>
                             </div>
-                            <div>
-                                <p className="font-bold text-sm">{searchResult.displayName}</p>
-                                <p className="text-xs text-blue-600">@{searchResult.username}</p>
-                            </div>
+                            <button 
+                                onClick={() => sendFriendRequest(result)}
+                                className="text-xs bg-blue-600 text-white px-3 py-1.5 rounded-full hover:bg-blue-700 transition shadow-sm"
+                            >
+                                Ajouter +
+                            </button>
                         </div>
-                        <button 
-                            onClick={() => sendFriendRequest(searchResult)}
-                            className="text-xs bg-blue-600 text-white px-3 py-1.5 rounded-full hover:bg-blue-700 transition shadow-sm"
-                        >
-                            Ajouter +
-                        </button>
-                    </div>
-                )}
+                    ))}
+                </div>
             </div>
 
             {/* 2. DEMANDES REÇUES */}
@@ -136,7 +143,6 @@ export default function ContactsPage() {
             ) : friends.length === 0 ? (
                 <div className="text-center py-10 text-gray-400 italic">
                     <p>Aucun ami pour l'instant.</p>
-                    <p className="text-xs mt-1">Utilisez la recherche pour en ajouter !</p>
                 </div>
             ) : (
                 <div className="space-y-2">
@@ -152,10 +158,8 @@ export default function ContactsPage() {
                                 </div>
                             </div>
                             
-                            {/* Actions Ami (Plus tard : Voir Collection) */}
                             <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
                                 <button onClick={() => removeFriend(friend.uid)} className="text-red-400 hover:text-red-600 text-xs px-2 py-1">Retirer</button>
-                                {/* C'est ici qu'on ajoutera le bouton "Voir" à l'étape 3 */}
                             </div>
                         </div>
                     ))}
