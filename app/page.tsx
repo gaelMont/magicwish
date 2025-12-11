@@ -19,6 +19,8 @@ type ScryfallCard = {
   image_uris?: { small: string; normal: string; };
   card_faces?: { image_uris?: { small: string; normal: string; }; }[];
   prices?: { eur?: string; };
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  [key: string]: any; // Permet de stocker tout le reste
 };
 
 const CARD_BACK_URL = "https://cards.scryfall.io/large/front/a/6/a6984342-f723-4e80-8e69-902d287a915f.jpg";
@@ -36,7 +38,6 @@ const CardGroup = ({ name, versions, targetListId }: { name: string, versions: S
   const { user } = useAuth();
   const [selectedCard, setSelectedCard] = useState<ScryfallCard>(versions[0]);
   
-  // NOUVEAUX ÉTATS LOCAUX POUR LES OPTIONS
   const [isFoil, setIsFoil] = useState(false);
   const [isSpecificVersion, setIsSpecificVersion] = useState(false);
 
@@ -70,9 +71,10 @@ const CardGroup = ({ name, versions, targetListId }: { name: string, versions: S
         await updateDoc(wishlistRef, { 
           quantity: increment(1),
           price: priceNumber,
-          // On met à jour les préférences si elles changent
           isFoil: isFoil,
-          isSpecificVersion: isSpecificVersion
+          isSpecificVersion: isSpecificVersion,
+          // Mise à jour de la data fraîche
+          scryfallData: card 
         });
         toast.success(`+1 exemplaire (${card.set_name})`);
       } else {
@@ -84,9 +86,10 @@ const CardGroup = ({ name, versions, targetListId }: { name: string, versions: S
           setName: card.set_name,
           setCode: card.set,
           addedAt: new Date(),
-          // Sauvegarde des préférences
           isFoil: isFoil,
-          isSpecificVersion: isSpecificVersion
+          isSpecificVersion: isSpecificVersion,
+          // SAUVEGARDE DE TOUTES LES DONNÉES
+          scryfallData: card 
         });
         toast.success(`Ajoutée : ${card.set_name}`);
       }
@@ -117,7 +120,6 @@ const CardGroup = ({ name, versions, targetListId }: { name: string, versions: S
           ))}
         </select>
 
-        {/* --- OPTIONS DE WISHLIST --- */}
         {user && (
             <div className="flex justify-between items-center text-xs text-gray-600 dark:text-gray-300 px-1">
                 <label className="flex items-center gap-1 cursor-pointer select-none">

@@ -1,10 +1,10 @@
+// components/CardVersionPickerModal.tsx
 'use client';
 
 import { useState, useEffect, useMemo } from 'react';
 import { CardType } from '@/hooks/useCardCollection';
 import toast from 'react-hot-toast';
 
-// 1. Définition précise du type Scryfall pour éviter les erreurs "Unexpected any"
 export type ScryfallCardRaw = {
   id: string;
   oracle_id: string;
@@ -16,13 +16,15 @@ export type ScryfallCardRaw = {
   image_uris?: { normal: string; small?: string };
   card_faces?: Array<{ image_uris?: { normal: string } }>;
   prices?: { eur?: string; eur_foil?: string };
-  finishes?: string[]; // Important pour savoir si la carte existe en foil
+  finishes?: string[]; 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  [key: string]: any; // <--- Autoriser les autres champs
 };
 
 type Props = {
   isOpen: boolean;
   onClose: () => void;
-  baseCard: ScryfallCardRaw | null; // On utilise le bon type ici
+  baseCard: ScryfallCardRaw | null; 
   onConfirm: (card: CardType) => void;
 };
 
@@ -30,14 +32,11 @@ export default function CardVersionPickerModal({ isOpen, onClose, baseCard, onCo
   const [versions, setVersions] = useState<ScryfallCardRaw[]>([]);
   const [loading, setLoading] = useState(false);
   
-  // États de sélection
   const [selectedVersionId, setSelectedVersionId] = useState<string>('');
   const [isFoil, setIsFoil] = useState(false);
   const [quantity, setQuantity] = useState(1);
 
-  // 2. useEffect corrigé : fetchVersions est défini DEDANS
   useEffect(() => {
-    // Fonction définie localement pour éviter les soucis de dépendances
     const fetchVersions = async (oracleId: string) => {
         setLoading(true);
         try {
@@ -45,9 +44,8 @@ export default function CardVersionPickerModal({ isOpen, onClose, baseCard, onCo
           const data = await res.json();
           
           if (data.data && data.data.length > 0) {
-            setVersions(data.data as ScryfallCardRaw[]); // Casting explicite
+            setVersions(data.data as ScryfallCardRaw[]); 
             
-            // Par défaut, on sélectionne la version sur laquelle on a cliqué ou la plus récente
             const defaultVer = data.data.find((c: ScryfallCardRaw) => c.id === baseCard?.id) || data.data[0];
             setSelectedVersionId(defaultVer.id);
           }
@@ -63,29 +61,23 @@ export default function CardVersionPickerModal({ isOpen, onClose, baseCard, onCo
       fetchVersions(baseCard.oracle_id);
     }
 
-    // Reset des états à l'ouverture
     setQuantity(1);
     setIsFoil(false);
-  }, [isOpen, baseCard]); // fetchVersions n'est plus requis ici
+  }, [isOpen, baseCard]); 
 
-  // La version actuellement affichée
   const currentCard = useMemo(() => {
     return versions.find(v => v.id === selectedVersionId) || baseCard;
   }, [versions, selectedVersionId, baseCard]);
 
-  // Si on n'a pas de carte (ex: modale fermée ou chargement initial), on ne rend rien
   if (!isOpen || !currentCard) return null;
 
-  // Gestion des images (Recto/Verso)
   const imageUrl = currentCard.image_uris?.normal || currentCard.card_faces?.[0]?.image_uris?.normal || "https://cards.scryfall.io/large/front/a/6/a6984342-f723-4e80-8e69-902d287a915f.jpg";
   
-  // Gestion des prix (Normal vs Foil)
   const priceNormal = parseFloat(currentCard.prices?.eur || "0");
   const priceFoil = parseFloat(currentCard.prices?.eur_foil || "0");
   
   const currentPrice = isFoil ? (priceFoil || priceNormal) : (priceNormal || priceFoil);
   
-  // Vérification des finitions disponibles
   const hasFoilVersion = currentCard.finishes?.includes('foil') || !!currentCard.prices?.eur_foil;
   const hasNonFoilVersion = currentCard.finishes?.includes('nonfoil') || !!currentCard.prices?.eur;
 
@@ -99,7 +91,9 @@ export default function CardVersionPickerModal({ isOpen, onClose, baseCard, onCo
         setName: currentCard.set_name,
         setCode: currentCard.set,
         isFoil: isFoil,
-        isSpecificVersion: true // Puisqu'on a choisi manuellement le set
+        isSpecificVersion: true,
+        // --- SAUVEGARDE COMPLÈTE ICI ---
+        scryfallData: currentCard
     };
     onConfirm(finalCard);
     onClose();
@@ -137,7 +131,6 @@ export default function CardVersionPickerModal({ isOpen, onClose, baseCard, onCo
                         value={selectedVersionId}
                         onChange={(e) => {
                             setSelectedVersionId(e.target.value);
-                            // On remet non-foil par défaut quand on change d'édition pour éviter les conflits
                             setIsFoil(false); 
                         }}
                     >
@@ -151,10 +144,8 @@ export default function CardVersionPickerModal({ isOpen, onClose, baseCard, onCo
                 </div>
             </div>
 
-            {/* 3. CONTROLES (Foil & Quantité) */}
+            {/* 3. CONTROLES */}
             <div className="grid grid-cols-2 gap-4 w-full">
-                
-                {/* Toggle Foil */}
                 <div className="bg-gray-800 rounded-xl p-3 flex flex-col items-center justify-center gap-2 border border-gray-700">
                     <span className="text-xs text-gray-400 font-bold">FINITION</span>
                     <div className="flex bg-gray-900 rounded-lg p-1 w-full">
@@ -175,7 +166,6 @@ export default function CardVersionPickerModal({ isOpen, onClose, baseCard, onCo
                     </div>
                 </div>
 
-                {/* Compteur Quantité */}
                 <div className="bg-gray-800 rounded-xl p-3 flex flex-col items-center justify-center gap-2 border border-gray-700">
                      <span className="text-xs text-gray-400 font-bold">QUANTITÉ</span>
                      <div className="flex items-center gap-3">
@@ -187,7 +177,7 @@ export default function CardVersionPickerModal({ isOpen, onClose, baseCard, onCo
             </div>
         </div>
 
-        {/* FOOTER - PRIX & VALIDATION */}
+        {/* FOOTER */}
         <div className="p-4 bg-gray-800 border-t border-gray-700">
             <div className="flex justify-between items-center mb-4">
                  <div className="text-gray-400 text-sm">Prix unitaire</div>

@@ -322,13 +322,13 @@ export default function UserProfilePage({ params }: { params: Promise<{ uid: str
 </file>
 
 <file path="components/CardVersionPickerModal.tsx">
+// components/CardVersionPickerModal.tsx
 'use client';
 
 import { useState, useEffect, useMemo } from 'react';
 import { CardType } from '@/hooks/useCardCollection';
 import toast from 'react-hot-toast';
 
-// 1. Définition précise du type Scryfall pour éviter les erreurs "Unexpected any"
 export type ScryfallCardRaw = {
   id: string;
   oracle_id: string;
@@ -340,13 +340,15 @@ export type ScryfallCardRaw = {
   image_uris?: { normal: string; small?: string };
   card_faces?: Array<{ image_uris?: { normal: string } }>;
   prices?: { eur?: string; eur_foil?: string };
-  finishes?: string[]; // Important pour savoir si la carte existe en foil
+  finishes?: string[]; 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  [key: string]: any; // <--- Autoriser les autres champs
 };
 
 type Props = {
   isOpen: boolean;
   onClose: () => void;
-  baseCard: ScryfallCardRaw | null; // On utilise le bon type ici
+  baseCard: ScryfallCardRaw | null; 
   onConfirm: (card: CardType) => void;
 };
 
@@ -354,14 +356,11 @@ export default function CardVersionPickerModal({ isOpen, onClose, baseCard, onCo
   const [versions, setVersions] = useState<ScryfallCardRaw[]>([]);
   const [loading, setLoading] = useState(false);
   
-  // États de sélection
   const [selectedVersionId, setSelectedVersionId] = useState<string>('');
   const [isFoil, setIsFoil] = useState(false);
   const [quantity, setQuantity] = useState(1);
 
-  // 2. useEffect corrigé : fetchVersions est défini DEDANS
   useEffect(() => {
-    // Fonction définie localement pour éviter les soucis de dépendances
     const fetchVersions = async (oracleId: string) => {
         setLoading(true);
         try {
@@ -369,9 +368,8 @@ export default function CardVersionPickerModal({ isOpen, onClose, baseCard, onCo
           const data = await res.json();
           
           if (data.data && data.data.length > 0) {
-            setVersions(data.data as ScryfallCardRaw[]); // Casting explicite
+            setVersions(data.data as ScryfallCardRaw[]); 
             
-            // Par défaut, on sélectionne la version sur laquelle on a cliqué ou la plus récente
             const defaultVer = data.data.find((c: ScryfallCardRaw) => c.id === baseCard?.id) || data.data[0];
             setSelectedVersionId(defaultVer.id);
           }
@@ -387,29 +385,23 @@ export default function CardVersionPickerModal({ isOpen, onClose, baseCard, onCo
       fetchVersions(baseCard.oracle_id);
     }
 
-    // Reset des états à l'ouverture
     setQuantity(1);
     setIsFoil(false);
-  }, [isOpen, baseCard]); // fetchVersions n'est plus requis ici
+  }, [isOpen, baseCard]); 
 
-  // La version actuellement affichée
   const currentCard = useMemo(() => {
     return versions.find(v => v.id === selectedVersionId) || baseCard;
   }, [versions, selectedVersionId, baseCard]);
 
-  // Si on n'a pas de carte (ex: modale fermée ou chargement initial), on ne rend rien
   if (!isOpen || !currentCard) return null;
 
-  // Gestion des images (Recto/Verso)
   const imageUrl = currentCard.image_uris?.normal || currentCard.card_faces?.[0]?.image_uris?.normal || "https://cards.scryfall.io/large/front/a/6/a6984342-f723-4e80-8e69-902d287a915f.jpg";
   
-  // Gestion des prix (Normal vs Foil)
   const priceNormal = parseFloat(currentCard.prices?.eur || "0");
   const priceFoil = parseFloat(currentCard.prices?.eur_foil || "0");
   
   const currentPrice = isFoil ? (priceFoil || priceNormal) : (priceNormal || priceFoil);
   
-  // Vérification des finitions disponibles
   const hasFoilVersion = currentCard.finishes?.includes('foil') || !!currentCard.prices?.eur_foil;
   const hasNonFoilVersion = currentCard.finishes?.includes('nonfoil') || !!currentCard.prices?.eur;
 
@@ -423,7 +415,9 @@ export default function CardVersionPickerModal({ isOpen, onClose, baseCard, onCo
         setName: currentCard.set_name,
         setCode: currentCard.set,
         isFoil: isFoil,
-        isSpecificVersion: true // Puisqu'on a choisi manuellement le set
+        isSpecificVersion: true,
+        // --- SAUVEGARDE COMPLÈTE ICI ---
+        scryfallData: currentCard
     };
     onConfirm(finalCard);
     onClose();
@@ -461,7 +455,6 @@ export default function CardVersionPickerModal({ isOpen, onClose, baseCard, onCo
                         value={selectedVersionId}
                         onChange={(e) => {
                             setSelectedVersionId(e.target.value);
-                            // On remet non-foil par défaut quand on change d'édition pour éviter les conflits
                             setIsFoil(false); 
                         }}
                     >
@@ -475,10 +468,8 @@ export default function CardVersionPickerModal({ isOpen, onClose, baseCard, onCo
                 </div>
             </div>
 
-            {/* 3. CONTROLES (Foil & Quantité) */}
+            {/* 3. CONTROLES */}
             <div className="grid grid-cols-2 gap-4 w-full">
-                
-                {/* Toggle Foil */}
                 <div className="bg-gray-800 rounded-xl p-3 flex flex-col items-center justify-center gap-2 border border-gray-700">
                     <span className="text-xs text-gray-400 font-bold">FINITION</span>
                     <div className="flex bg-gray-900 rounded-lg p-1 w-full">
@@ -499,7 +490,6 @@ export default function CardVersionPickerModal({ isOpen, onClose, baseCard, onCo
                     </div>
                 </div>
 
-                {/* Compteur Quantité */}
                 <div className="bg-gray-800 rounded-xl p-3 flex flex-col items-center justify-center gap-2 border border-gray-700">
                      <span className="text-xs text-gray-400 font-bold">QUANTITÉ</span>
                      <div className="flex items-center gap-3">
@@ -511,7 +501,7 @@ export default function CardVersionPickerModal({ isOpen, onClose, baseCard, onCo
             </div>
         </div>
 
-        {/* FOOTER - PRIX & VALIDATION */}
+        {/* FOOTER */}
         <div className="p-4 bg-gray-800 border-t border-gray-700">
             <div className="flex justify-between items-center mb-4">
                  <div className="text-gray-400 text-sm">Prix unitaire</div>
@@ -1036,40 +1026,23 @@ export function useWishlists() {
 <file path="lib/cardUtils.ts">
 // lib/cardUtils.ts
 
-// Type générique pour une carte Scryfall (simplifié)
-export type ScryfallRawData = {
-  id: string;
-  name: string;
-  set: string;
-  set_name: string;
-  prices?: { eur?: string; usd?: string };
-  image_uris?: { normal?: string };
-  card_faces?: Array<{
-    name: string;
-    image_uris?: { normal?: string };
-  }>;
-};
+// Type générique "fourre-tout" pour Scryfall
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type ScryfallRawData = any;
 
-// Fonction pour transformer la donnée brute en donnée propre pour notre app
 export const normalizeCardData = (data: ScryfallRawData) => {
-  // Gestion des cartes recto-verso
   const isDoubleFaced = data.card_faces && data.card_faces.length > 1;
-
-  // 1. Nom : On prend le nom de la face avant si double face, sinon nom normal
-  // On nettoie le " // " si Scryfall le laisse traîner
-  const rawName = isDoubleFaced ? data.card_faces![0].name : data.name;
+  const rawName = isDoubleFaced ? data.card_faces[0].name : data.name;
   const name = rawName.split(' // ')[0];
 
-  // 2. Images
   let imageUrl = data.image_uris?.normal;
-  let imageBackUrl = undefined; // ou null selon ta préférence
+  let imageBackUrl = undefined;
 
   if (isDoubleFaced) {
-    imageUrl = data.card_faces![0].image_uris?.normal;
-    imageBackUrl = data.card_faces![1].image_uris?.normal;
+    imageUrl = data.card_faces[0].image_uris?.normal;
+    imageBackUrl = data.card_faces[1].image_uris?.normal;
   }
 
-  // Fallback si pas d'image (dos de carte)
   if (!imageUrl) {
     imageUrl = "https://cards.scryfall.io/large/front/a/6/a6984342-f723-4e80-8e69-902d287a915f.jpg";
   }
@@ -1083,6 +1056,7 @@ export const normalizeCardData = (data: ScryfallRawData) => {
     setName: data.set_name,
     setCode: data.set,
     price: parseFloat(data.prices?.eur || "0"),
+    // On peut aussi retourner la data brute ici si besoin, mais c'est fait ailleurs
   };
 };
 </file>
@@ -1228,226 +1202,6 @@ export default function RootLayout({
         </AuthProvider>
       </body>
     </html>
-  );
-}
-</file>
-
-<file path="app/trades/new/[uid]/page.tsx">
-// app/trades/new/[uid]/page.tsx
-'use client';
-
-import { useState, use, useEffect } from 'react';
-import { useAuth } from '@/lib/AuthContext';
-import { useCardCollection, CardType } from '@/hooks/useCardCollection';
-import { useTradeSystem } from '@/hooks/useTradeSystem';
-import { db } from '@/lib/firebase';
-import { doc, getDoc } from 'firebase/firestore';
-import { useRouter } from 'next/navigation';
-import toast from 'react-hot-toast';
-
-export default function DirectTradePage({ params }: { params: Promise<{ uid: string }> }) {
-  const unwrappedParams = use(params);
-  const targetUid = unwrappedParams.uid;
-
-  const { user } = useAuth();
-  const router = useRouter();
-  const { proposeTrade } = useTradeSystem();
-
-  // --- CHARGEMENT DES COLLECTIONS ---
-  const { cards: myCollection, loading: loadingMe } = useCardCollection('collection');
-  const { cards: friendCollection, loading: loadingHim } = useCardCollection('collection', 'default', targetUid);
-
-  // --- ÉTATS ---
-  const [targetName, setTargetName] = useState('L\'ami');
-  
-  const [toGive, setToGive] = useState<CardType[]>([]);
-  const [toReceive, setToReceive] = useState<CardType[]>([]);
-
-  const [searchMe, setSearchMe] = useState('');
-  const [searchHim, setSearchHim] = useState('');
-
-  useEffect(() => {
-    const fetchName = async () => {
-        try {
-            const snap = await getDoc(doc(db, 'users', targetUid, 'public_profile', 'info'));
-            if(snap.exists()) setTargetName(snap.data().displayName || snap.data().username);
-        } catch(e) { console.error(e); }
-    };
-    if (targetUid) fetchName();
-  }, [targetUid]);
-
-  // --- LOGIQUE DE SÉLECTION ---
-
-  const handleSelectCard = (card: CardType, listType: 'give' | 'receive') => {
-    const targetList = listType === 'give' ? toGive : toReceive;
-    const setTarget = listType === 'give' ? setToGive : setToReceive;
-
-    const existing = targetList.find(c => c.id === card.id);
-    const maxStock = card.quantity;
-    const currentSelected = existing ? existing.quantity : 0;
-
-    if (currentSelected < maxStock) {
-        if (existing) {
-            setTarget(prev => prev.map(c => c.id === card.id ? { ...c, quantity: c.quantity + 1 } : c));
-        } else {
-            setTarget(prev => [...prev, { ...card, quantity: 1 }]);
-        }
-    } else {
-        toast.error("Stock maximum atteint pour cette carte");
-    }
-  };
-
-  const handleRemoveCard = (cardId: string, listType: 'give' | 'receive') => {
-    const setTarget = listType === 'give' ? setToGive : setToReceive;
-    setTarget(prev => prev.filter(c => c.id !== cardId));
-  };
-
-  // --- VALIDATION ---
-  const handlePropose = async () => {
-    if (toGive.length === 0 && toReceive.length === 0) return;
-    
-    const success = await proposeTrade(targetUid, targetName, toGive, toReceive);
-    if (success) {
-        router.push('/trades'); 
-    }
-  };
-
-  const valGive = toGive.reduce((acc, c) => acc + (c.customPrice ?? c.price ?? 0) * c.quantity, 0);
-  const valReceive = toReceive.reduce((acc, c) => acc + (c.customPrice ?? c.price ?? 0) * c.quantity, 0);
-
-  if (!user) return <div className="p-10 text-center">Connexion requise.</div>;
-
-  return (
-    <div className="container mx-auto p-4 min-h-screen pb-24">
-        
-        {/* HEADER */}
-        <div className="flex items-center gap-4 mb-6">
-            <button onClick={() => router.back()} className="text-gray-500 hover:text-gray-700 bg-gray-100 px-3 py-1 rounded-lg text-sm">
-                ← Retour
-            </button>
-            <h1 className="text-2xl font-bold">
-                Échange avec <span className="text-blue-600">{targetName}</span>
-            </h1>
-        </div>
-
-        <div className="grid lg:grid-cols-2 gap-8 h-[calc(100vh-200px)]">
-            
-            {/* --- COLONNE GAUCHE : CE QUE JE DONNE --- */}
-            <div className="flex flex-col bg-red-50/50 dark:bg-red-900/10 rounded-xl border border-red-100 dark:border-red-900 p-4">
-                <h2 className="font-bold text-red-600 mb-2">📤 Je donne (Ma Collection)</h2>
-                
-                {/* 1. Liste des cartes SÉLECTIONNÉES */}
-                <div className="flex-none mb-4 space-y-2 min-h-[100px] bg-white dark:bg-gray-800 p-2 rounded border border-gray-200 dark:border-gray-700 overflow-y-auto max-h-[25vh]">
-                    {toGive.length === 0 && <p className="text-xs text-gray-400 italic text-center py-4">Rien sélectionné</p>}
-                    {toGive.map(card => (
-                        <div key={card.id} className="flex justify-between items-center text-sm p-1 border-b dark:border-gray-700">
-                            <span>{card.quantity}x {card.name} <span className="text-gray-400 text-xs">({card.setName})</span></span>
-                            <button onClick={() => handleRemoveCard(card.id, 'give')} className="text-red-500 font-bold px-2">✕</button>
-                        </div>
-                    ))}
-                </div>
-
-                {/* 2. Filtre Recherche */}
-                <input 
-                    type="text" 
-                    placeholder="Filtrer ma collection..." 
-                    className="w-full p-2 mb-2 rounded border dark:bg-gray-800 dark:text-white"
-                    value={searchMe}
-                    onChange={e => setSearchMe(e.target.value)}
-                />
-
-                {/* 3. Liste DISPONIBLE */}
-                <div className="grow overflow-y-auto custom-scrollbar space-y-2 pr-1">
-                    {loadingMe ? <p>Chargement...</p> : 
-                        myCollection
-                            .filter(c => c.name.toLowerCase().includes(searchMe.toLowerCase()))
-                            .slice(0, 50) 
-                            .map(card => (
-                                <div key={card.id} onClick={() => handleSelectCard(card, 'give')} className="cursor-pointer hover:bg-red-100 dark:hover:bg-red-900/30 p-2 rounded flex items-center gap-2 border border-transparent hover:border-red-200 transition">
-                                    <div className="w-8 h-11 bg-gray-200 rounded shrink-0 overflow-hidden relative">
-                                         <img src={card.imageUrl} className="w-full h-full object-cover" alt="" />
-                                         {/* Indicateur si la carte est marquée à l'échange chez MOI (Info visuelle) */}
-                                         {card.isForTrade && <div className="absolute bottom-0 right-0 bg-green-500 text-white text-[8px] px-1">🤝</div>}
-                                    </div>
-                                    <div className="grow min-w-0">
-                                        <p className="font-bold text-xs truncate dark:text-gray-200">{card.name}</p>
-                                        <p className="text-[10px] text-gray-500">{card.setName} - Dispo: {card.quantity}</p>
-                                    </div>
-                                    <span className="text-xs font-bold text-gray-400">+</span>
-                                </div>
-                            ))
-                    }
-                </div>
-            </div>
-
-            {/* --- COLONNE DROITE : CE QUE JE VEUX (SA COLLECTION) --- */}
-            <div className="flex flex-col bg-blue-50/50 dark:bg-blue-900/10 rounded-xl border border-blue-100 dark:border-blue-900 p-4">
-                <h2 className="font-bold text-blue-600 mb-2">📥 Je reçois (Sa Collection)</h2>
-
-                {/* 1. Liste SÉLECTIONNÉE */}
-                <div className="flex-none mb-4 space-y-2 min-h-[100px] bg-white dark:bg-gray-800 p-2 rounded border border-gray-200 dark:border-gray-700 overflow-y-auto max-h-[25vh]">
-                    {toReceive.length === 0 && <p className="text-xs text-gray-400 italic text-center py-4">Rien sélectionné</p>}
-                    {toReceive.map(card => (
-                        <div key={card.id} className="flex justify-between items-center text-sm p-1 border-b dark:border-gray-700">
-                            <span>{card.quantity}x {card.name} <span className="text-gray-400 text-xs">({card.setName})</span></span>
-                            <button onClick={() => handleRemoveCard(card.id, 'receive')} className="text-red-500 font-bold px-2">✕</button>
-                        </div>
-                    ))}
-                </div>
-
-                {/* 2. Filtre Recherche */}
-                <input 
-                    type="text" 
-                    placeholder={`Filtrer la collection de ${targetName}...`}
-                    className="w-full p-2 mb-2 rounded border dark:bg-gray-800 dark:text-white"
-                    value={searchHim}
-                    onChange={e => setSearchHim(e.target.value)}
-                />
-
-                {/* 3. Liste DISPONIBLE (Source Ami) - FILTRÉE PAR isForTrade */}
-                <div className="grow overflow-y-auto custom-scrollbar space-y-2 pr-1">
-                    {loadingHim ? <p>Chargement...</p> : 
-                        friendCollection
-                            // 🔒 FILTRE CRUCIAL : On ne montre que ce qui est "En Échange"
-                            .filter(c => c.isForTrade) 
-                            // -----------------------------------------------------------
-                            .filter(c => c.name.toLowerCase().includes(searchHim.toLowerCase()))
-                            .slice(0, 50)
-                            .map(card => (
-                                <div key={card.id} onClick={() => handleSelectCard(card, 'receive')} className="cursor-pointer hover:bg-blue-100 dark:hover:bg-blue-900/30 p-2 rounded flex items-center gap-2 border border-transparent hover:border-blue-200 transition">
-                                    <div className="w-8 h-11 bg-gray-200 rounded shrink-0 overflow-hidden relative">
-                                        <img src={card.imageUrl} className="w-full h-full object-cover" alt="" />
-                                        <div className="absolute bottom-0 right-0 bg-green-500 text-white text-[8px] px-1">🤝</div>
-                                    </div>
-                                    <div className="grow min-w-0">
-                                        <p className="font-bold text-xs truncate dark:text-gray-200">{card.name}</p>
-                                        <p className="text-[10px] text-gray-500">{card.setName} - Dispo: {card.quantity}</p>
-                                    </div>
-                                    <span className="text-xs font-bold text-gray-400">+</span>
-                                </div>
-                            ))
-                    }
-                </div>
-            </div>
-
-        </div>
-
-        {/* --- FOOTER DE VALIDATION --- */}
-        <div className="fixed bottom-0 left-0 right-0 p-4 bg-white dark:bg-gray-900 border-t dark:border-gray-800 flex justify-between items-center z-40 shadow-2xl">
-            <div className="flex gap-4 text-sm">
-                <div>Donne: <span className="font-bold">{valGive.toFixed(2)}€</span></div>
-                <div>Reçoit: <span className="font-bold">{valReceive.toFixed(2)}€</span></div>
-            </div>
-            <button 
-                onClick={handlePropose}
-                disabled={toGive.length === 0 && toReceive.length === 0}
-                className="bg-purple-600 hover:bg-purple-700 text-white px-8 py-3 rounded-xl font-bold disabled:opacity-50 transition shadow-lg flex items-center gap-2"
-            >
-                <span>🚀</span> Proposer l&apos;échange
-            </button>
-        </div>
-
-    </div>
   );
 }
 </file>
@@ -1975,244 +1729,252 @@ export default nextConfig;
 }
 </file>
 
-<file path="app/trades/manual/page.tsx">
+<file path="app/trades/new/[uid]/page.tsx">
+// app/trades/new/[uid]/page.tsx
 'use client';
 
-import { useState, useMemo } from 'react'; // <--- Ajout de useMemo
+import { useState, use, useEffect } from 'react';
 import { useAuth } from '@/lib/AuthContext';
 import { useCardCollection, CardType } from '@/hooks/useCardCollection';
-import { useTradeTransaction } from '@/hooks/useTradeTransaction';
+import { useTradeSystem } from '@/hooks/useTradeSystem';
+import { db } from '@/lib/firebase';
+import { doc, getDoc } from 'firebase/firestore';
+import { useRouter } from 'next/navigation';
 import toast from 'react-hot-toast';
-import CardVersionPickerModal, { ScryfallCardRaw } from '@/components/CardVersionPickerModal';
 
-export default function ManualTradePage() {
+export default function DirectTradePage({ params }: { params: Promise<{ uid: string }> }) {
+  const unwrappedParams = use(params);
+  const targetUid = unwrappedParams.uid;
+
   const { user } = useAuth();
-  const { cards: myCollection, loading } = useCardCollection('collection'); 
-  const { executeTrade, isProcessing } = useTradeTransaction();
+  const router = useRouter();
+  const { proposeTrade } = useTradeSystem();
+
+  // --- CHARGEMENT ---
+  const { cards: myCollection, loading: loadingMe } = useCardCollection('collection');
+  const { cards: friendCollection, loading: loadingHim } = useCardCollection('collection', 'default', targetUid);
 
   // --- ÉTATS ---
+  const [targetName, setTargetName] = useState('L\'ami');
   const [toGive, setToGive] = useState<CardType[]>([]);
   const [toReceive, setToReceive] = useState<CardType[]>([]);
-  
-  const [localSearch, setLocalSearch] = useState('');
-  
-  const [remoteSearch, setRemoteSearch] = useState('');
-  const [searchResults, setSearchResults] = useState<ScryfallCardRaw[]>([]);
-  const [isSearching, setIsSearching] = useState(false);
+  const [searchMe, setSearchMe] = useState('');
+  const [searchHim, setSearchHim] = useState('');
 
-  // État pour la modale de sélection
-  const [cardToPick, setCardToPick] = useState<ScryfallCardRaw | null>(null);
+  useEffect(() => {
+    const fetchName = async () => {
+        try {
+            const snap = await getDoc(doc(db, 'users', targetUid, 'public_profile', 'info'));
+            if(snap.exists()) setTargetName(snap.data().displayName || snap.data().username);
+        } catch(e) { console.error(e); }
+    };
+    if (targetUid) fetchName();
+  }, [targetUid]);
 
-  // --- LOGIQUE AJOUT / RETRAIT ---
-  
-  const handleAddToGive = (card: CardType) => {
-      const existing = toGive.find(c => c.id === card.id);
-      if (existing) {
-          if (existing.quantity < card.quantity) { 
-              setToGive(prev => prev.map(c => c.id === card.id ? { ...c, quantity: c.quantity + 1 } : c));
-          } else {
-              toast.error("Max quantité atteinte");
-          }
-      } else {
-          setToGive(prev => [...prev, { ...card, quantity: 1 }]);
-      }
+  // --- ACTIONS ---
+  const handleSelectCard = (card: CardType, listType: 'give' | 'receive') => {
+    const targetList = listType === 'give' ? toGive : toReceive;
+    const setTarget = listType === 'give' ? setToGive : setToReceive;
+    const existing = targetList.find(c => c.id === card.id);
+    const maxStock = card.quantity;
+    const currentSelected = existing ? existing.quantity : 0;
+
+    if (currentSelected < maxStock) {
+        if (existing) {
+            setTarget(prev => prev.map(c => c.id === card.id ? { ...c, quantity: c.quantity + 1 } : c));
+        } else {
+            setTarget(prev => [...prev, { ...card, quantity: 1 }]);
+        }
+    } else {
+        toast.error("Stock maximum atteint");
+    }
   };
 
-  const handleSearchScryfall = async (e: React.FormEvent) => {
-      e.preventDefault();
-      if (!remoteSearch.trim()) return;
-      setIsSearching(true);
-      try {
-          const res = await fetch(`/api/search?q=${remoteSearch}`); 
-          const data = await res.json();
-          setSearchResults(data.data || []);
-      } catch (e) { toast.error("Erreur recherche"); }
-      finally { setIsSearching(false); }
+  const handleRemoveCard = (cardId: string, listType: 'give' | 'receive') => {
+    const setTarget = listType === 'give' ? setToGive : setToReceive;
+    setTarget(prev => prev.filter(c => c.id !== cardId));
   };
 
-  // Click sur résultat recherche -> Ouvre la modale
-  const handleSearchResultClick = (scryfallCard: ScryfallCardRaw) => {
-    setCardToPick(scryfallCard);
+  const handlePropose = async () => {
+    if (toGive.length === 0 && toReceive.length === 0) return;
+    const success = await proposeTrade(targetUid, targetName, toGive, toReceive);
+    if (success) router.push('/trades'); 
   };
 
-  // Retour de la modale -> Ajoute à la liste "Je reçois"
-  const handleConfirmReceive = (card: CardType) => {
-      const existing = toReceive.find(c => c.id === card.id && c.isFoil === card.isFoil); 
-      
-      if (existing) {
-          setToReceive(prev => prev.map(c => 
-              (c.id === card.id && c.isFoil === card.isFoil) 
-              ? { ...c, quantity: c.quantity + card.quantity } 
-              : c
-          ));
-      } else {
-          setToReceive(prev => [...prev, card]);
-      }
-      
-      // On vide la recherche pour nettoyer l'interface
-      setSearchResults([]); 
-      setRemoteSearch("");
-      toast.success(`Ajouté : ${card.name}`);
-  };
-
-  // --- VALIDATION ---
-  const handleValidate = async () => {
-      if (toGive.length === 0 && toReceive.length === 0) return;
-      if (!confirm("Confirmer cet échange ? Vos cartes données seront retirées de votre collection.")) return;
-
-      const success = await executeTrade(toGive, toReceive, null);
-      if (success) {
-          setToGive([]);
-          setToReceive([]);
-          setLocalSearch("");
-      }
-  };
-
-  // --- CALCULS & FILTRES ---
+  // CALCULS
   const valGive = toGive.reduce((acc, c) => acc + (c.customPrice ?? c.price ?? 0) * c.quantity, 0);
-  const valReceive = toReceive.reduce((acc, c) => acc + (c.price || 0) * c.quantity, 0);
+  const valReceive = toReceive.reduce((acc, c) => acc + (c.customPrice ?? c.price ?? 0) * c.quantity, 0);
+  const balance = valGive - valReceive;
 
-  // ⚡ NOUVEAU : On filtre les doublons de nom pour l'affichage
-  const uniqueSearchResults = useMemo(() => {
-    const seen = new Set();
-    return searchResults.filter(card => {
-      // On nettoie le nom (gestion des cartes doubles faces "Name // Name")
-      const name = card.name.split(' // ')[0];
-      if (seen.has(name)) return false;
-      seen.add(name);
-      return true;
-    });
-  }, [searchResults]);
-
-  if (!user) return <div className="p-10 text-center">Connectez-vous.</div>;
+  if (!user) return <div className="p-10 text-center">Connexion requise.</div>;
 
   return (
-    <div className="container mx-auto p-4 min-h-screen pb-20">
-        <h1 className="text-2xl font-bold mb-6 flex items-center gap-2">
-            🖐️ Échange Manuel / Externe
-        </h1>
+    <div className="container mx-auto p-4 h-[calc(100vh-64px)] flex flex-col">
+        
+        {/* HEADER */}
+        <div className="flex-none flex items-center gap-4 mb-4">
+            <button onClick={() => router.back()} className="text-gray-500 hover:text-gray-700 bg-gray-100 px-3 py-1 rounded-lg text-sm">
+                ← Retour
+            </button>
+            <h1 className="text-2xl font-bold truncate">
+                Échange avec <span className="text-blue-600">{targetName}</span>
+            </h1>
+        </div>
 
-        <div className="grid lg:grid-cols-2 gap-8 h-[calc(100vh-200px)]">
+        {/* GRILLE PRINCIPALE */}
+        <div className="grid lg:grid-cols-2 gap-6 grow overflow-hidden pb-24">
             
-            {/* --- COLONNE GAUCHE : JE DONNE --- */}
-            <div className="flex flex-col bg-red-50/50 dark:bg-red-900/10 rounded-xl border border-red-100 dark:border-red-900 p-4">
-                <h2 className="font-bold text-red-600 mb-2">📤 Je donne (De ma collection)</h2>
-                
-                 <div className="flex-none mb-4 space-y-2 min-h-[100px] bg-white dark:bg-gray-800 p-2 rounded border border-gray-200 dark:border-gray-700 overflow-y-auto max-h-[30vh]">
-                    {toGive.length === 0 && <p className="text-xs text-gray-400 italic text-center py-4">Aucune carte sélectionnée</p>}
-                    {toGive.map(card => (
-                        <div key={card.id} className="flex justify-between items-center text-sm p-1 border-b dark:border-gray-700">
-                            <span>{card.quantity}x {card.name}</span>
-                            <button onClick={() => setToGive(p => p.filter(c => c.id !== card.id))} className="text-red-500">✕</button>
-                        </div>
-                    ))}
+            {/* --- COLONNE GAUCHE (MOI) --- */}
+            <div className="flex flex-col h-full bg-red-50/50 dark:bg-red-900/10 rounded-xl border border-red-100 dark:border-red-900 overflow-hidden relative shadow-sm">
+                <div className="p-4 pb-0 flex-none">
+                     <h2 className="font-bold text-red-600 mb-2">📤 Je donne (Ma Collection)</h2>
+                     <input 
+                        type="text" 
+                        placeholder="Filtrer ma collection..." 
+                        className="w-full p-2 mb-2 rounded border dark:bg-gray-800 dark:text-white dark:border-gray-600 text-sm"
+                        value={searchMe}
+                        onChange={e => setSearchMe(e.target.value)}
+                    />
                 </div>
                 
-                <input 
-                    type="text" 
-                    placeholder="Chercher dans ma collection..." 
-                    className="w-full p-2 mb-2 rounded border dark:bg-gray-800 dark:text-white"
-                    value={localSearch}
-                    onChange={e => setLocalSearch(e.target.value)}
-                />
-                
-                <div className="grow overflow-y-auto custom-scrollbar space-y-2 pr-1">
-                    {loading ? <p>Chargement...</p> : 
-                        myCollection
-                            .filter(c => c.name.toLowerCase().includes(localSearch.toLowerCase()))
-                            .slice(0, 20)
-                            .map(card => (
-                                <div key={card.id} onClick={() => handleAddToGive(card)} className="cursor-pointer hover:bg-red-100 dark:hover:bg-red-900/30 p-2 rounded flex items-center gap-2 border border-transparent hover:border-red-200 transition">
-                                    <img src={card.imageUrl} className="w-8 h-11 rounded object-cover bg-gray-200" alt="" />
-                                    <div className="grow min-w-0">
-                                        <p className="font-bold text-xs truncate dark:text-gray-200">{card.name}</p>
-                                        <p className="text-[10px] text-gray-500">{card.setName} - En stock: {card.quantity}</p>
-                                    </div>
-                                    <span className="text-xs font-bold text-gray-400">+</span>
+                {/* LISTE DÉFILANTE UNIQUE (Sélectionnés en haut, Dispos en bas) */}
+                <div className="grow overflow-y-auto custom-scrollbar p-4 pt-0 space-y-4">
+                    
+                    {/* SÉLECTIONNÉS */}
+                    {toGive.length > 0 && (
+                        <div className="bg-white dark:bg-gray-800 rounded-lg border border-red-200 dark:border-red-800 overflow-hidden">
+                            <div className="bg-red-100 dark:bg-red-900/30 px-3 py-1 text-xs font-bold text-red-700 dark:text-red-300">
+                                SÉLECTION ({toGive.reduce((a,c)=>a+c.quantity,0)})
+                            </div>
+                            {toGive.map(card => (
+                                <div key={card.id} className="flex justify-between items-center text-sm p-2 border-b dark:border-gray-700 last:border-0 hover:bg-gray-50 dark:hover:bg-gray-700/50">
+                                    <span className="truncate">{card.quantity}x {card.name}</span>
+                                    <button onClick={() => handleRemoveCard(card.id, 'give')} className="text-red-500 hover:bg-red-50 rounded px-2">✕</button>
                                 </div>
-                            ))
-                    }
+                            ))}
+                        </div>
+                    )}
+
+                    {/* DISPONIBLES */}
+                    <div className="space-y-1">
+                        <p className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Mon Classeur d&apos;échange</p>
+                        {loadingMe ? <p className="text-sm">Chargement...</p> : 
+                            myCollection
+                                .filter(c => c.isForTrade) // <--- FILTRE AJOUTÉ ICI
+                                .filter(c => c.name.toLowerCase().includes(searchMe.toLowerCase()))
+                                .slice(0, 50) 
+                                .map(card => (
+                                    <div key={card.id} onClick={() => handleSelectCard(card, 'give')} className="cursor-pointer bg-white dark:bg-gray-800/50 hover:bg-red-100 dark:hover:bg-red-900/30 p-2 rounded flex items-center gap-2 border border-transparent hover:border-red-200 transition shadow-sm group">
+                                        <div className="w-8 h-11 bg-gray-200 rounded shrink-0 overflow-hidden relative">
+                                            <img src={card.imageUrl} className="w-full h-full object-cover" alt="" />
+                                            {card.isForTrade && <div className="absolute bottom-0 right-0 bg-green-500 text-white text-[8px] px-1">🤝</div>}
+                                        </div>
+                                        <div className="grow min-w-0">
+                                            <p className="font-bold text-xs truncate dark:text-gray-200">{card.name}</p>
+                                            <p className="text-[10px] text-gray-500">{card.setName} - Dispo: {card.quantity}</p>
+                                        </div>
+                                        <span className="text-xs font-bold text-gray-400 group-hover:text-red-500 transition-colors shrink-0">+</span>
+                                    </div>
+                                ))
+                        }
+                    </div>
+                </div>
+
+                {/* TOTAL COLONNE GAUCHE (Fixe en bas de colonne) */}
+                <div className="flex-none bg-red-50 dark:bg-red-900/20 p-3 border-t border-red-100 dark:border-red-900 text-center">
+                    <span className="text-xs text-red-600 dark:text-red-400 font-bold uppercase">Total Donné</span>
+                    <div className="text-xl font-bold text-red-700 dark:text-red-300">{valGive.toFixed(2)} €</div>
                 </div>
             </div>
 
-            {/* --- COLONNE DROITE : JE REÇOIS --- */}
-            <div className="flex flex-col bg-green-50/50 dark:bg-green-900/10 rounded-xl border border-green-100 dark:border-green-900 p-4">
-                <h2 className="font-bold text-green-600 mb-2">📥 Je reçois (Ajout libre)</h2>
-
-                {/* 1. Liste des cartes reçues */}
-                 <div className="flex-none mb-4 space-y-2 min-h-[100px] bg-white dark:bg-gray-800 p-2 rounded border border-gray-200 dark:border-gray-700 overflow-y-auto max-h-[30vh]">
-                    {toReceive.length === 0 && <p className="text-xs text-gray-400 italic text-center py-4">Aucune carte ajoutée</p>}
-                    {toReceive.map((card, idx) => (
-                        <div key={`${card.id}-${idx}`} className="flex justify-between items-center text-sm p-1 border-b dark:border-gray-700">
-                            <div className="flex items-center gap-2">
-                                <span className="font-bold">{card.quantity}x</span>
-                                <div className="flex flex-col">
-                                    <span className="dark:text-gray-200">{card.name}</span>
-                                    <span className="text-[10px] text-gray-500">
-                                        {card.setName} {card.isFoil && '✨ Foil'} - {(card.price || 0).toFixed(2)}€
-                                    </span>
-                                </div>
-                            </div>
-                            <button onClick={() => setToReceive(p => p.filter((_, i) => i !== idx))} className="text-red-500">✕</button>
-                        </div>
-                    ))}
-                </div>
-
-                {/* 2. Moteur Scryfall */}
-                <form onSubmit={handleSearchScryfall} className="flex gap-2 mb-2">
+            {/* --- COLONNE DROITE (AMI) --- */}
+            <div className="flex flex-col h-full bg-blue-50/50 dark:bg-blue-900/10 rounded-xl border border-blue-100 dark:border-blue-900 overflow-hidden relative shadow-sm">
+                <div className="p-4 pb-0 flex-none">
+                    <h2 className="font-bold text-blue-600 mb-2">📥 Je reçois (Sa Collection)</h2>
                     <input 
                         type="text" 
-                        placeholder="Rechercher carte à recevoir..." 
-                        className="grow p-2 rounded border dark:bg-gray-800 dark:text-white"
-                        value={remoteSearch}
-                        onChange={e => setRemoteSearch(e.target.value)}
+                        placeholder={`Filtrer chez ${targetName}...`}
+                        className="w-full p-2 mb-2 rounded border dark:bg-gray-800 dark:text-white dark:border-gray-600 text-sm"
+                        value={searchHim}
+                        onChange={e => setSearchHim(e.target.value)}
                     />
-                    <button type="submit" className="bg-green-600 text-white px-3 rounded">🔍</button>
-                </form>
+                </div>
 
-                {/* 3. Résultats Scryfall (FILTRÉS) */}
-                 <div className="grow overflow-y-auto custom-scrollbar space-y-2 pr-1">
-                    {isSearching && <p className="text-xs">Recherche...</p>}
-                    
-                    {/* On utilise uniqueSearchResults ici ! */}
-                    {uniqueSearchResults.map(card => (
-                        <div key={card.id} onClick={() => handleSearchResultClick(card)} className="cursor-pointer hover:bg-green-100 dark:hover:bg-green-900/30 p-2 rounded flex items-center gap-2 border border-transparent hover:border-green-200 transition">
-                             <div className="w-8 h-11 bg-gray-200 rounded overflow-hidden">
-                                {card.image_uris?.small && <img src={card.image_uris.small} className="w-full h-full object-cover" alt="" />}
-                             </div>
-                             <div className="grow min-w-0">
-                                <p className="font-bold text-xs truncate dark:text-gray-200">{card.name}</p>
-                                <p className="text-[10px] text-gray-500 italic">Sélectionner version...</p>
-                             </div>
-                             <span className="text-xs font-bold text-gray-400">Choisir ›</span>
+                {/* LISTE DÉFILANTE UNIQUE */}
+                <div className="grow overflow-y-auto custom-scrollbar p-4 pt-0 space-y-4">
+                     {/* SÉLECTIONNÉS */}
+                     {toReceive.length > 0 && (
+                        <div className="bg-white dark:bg-gray-800 rounded-lg border border-blue-200 dark:border-blue-800 overflow-hidden">
+                            <div className="bg-blue-100 dark:bg-blue-900/30 px-3 py-1 text-xs font-bold text-blue-700 dark:text-blue-300">
+                                SÉLECTION ({toReceive.reduce((a,c)=>a+c.quantity,0)})
+                            </div>
+                            {toReceive.map(card => (
+                                <div key={card.id} className="flex justify-between items-center text-sm p-2 border-b dark:border-gray-700 last:border-0 hover:bg-gray-50 dark:hover:bg-gray-700/50">
+                                    <span className="truncate">{card.quantity}x {card.name}</span>
+                                    <button onClick={() => handleRemoveCard(card.id, 'receive')} className="text-red-500 hover:bg-red-50 rounded px-2">✕</button>
+                                </div>
+                            ))}
                         </div>
-                    ))}
+                    )}
+
+                    {/* DISPONIBLES */}
+                    <div className="space-y-1">
+                        <p className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Son Classeur d&apos;échange</p>
+                        {loadingHim ? <p className="text-sm">Chargement...</p> : 
+                            friendCollection
+                                .filter(c => c.isForTrade) // FILTRE DÉJÀ PRÉSENT
+                                .filter(c => c.name.toLowerCase().includes(searchHim.toLowerCase()))
+                                .slice(0, 50)
+                                .map(card => (
+                                    <div key={card.id} onClick={() => handleSelectCard(card, 'receive')} className="cursor-pointer bg-white dark:bg-gray-800/50 hover:bg-blue-100 dark:hover:bg-blue-900/30 p-2 rounded flex items-center gap-2 border border-transparent hover:border-blue-200 transition shadow-sm group">
+                                        <div className="w-8 h-11 bg-gray-200 rounded shrink-0 overflow-hidden relative">
+                                            <img src={card.imageUrl} className="w-full h-full object-cover" alt="" />
+                                            <div className="absolute bottom-0 right-0 bg-green-500 text-white text-[8px] px-1">🤝</div>
+                                        </div>
+                                        <div className="grow min-w-0">
+                                            <p className="font-bold text-xs truncate dark:text-gray-200">{card.name}</p>
+                                            <p className="text-[10px] text-gray-500">{card.setName} - Dispo: {card.quantity}</p>
+                                        </div>
+                                        <span className="text-xs font-bold text-gray-400 group-hover:text-blue-500 transition-colors shrink-0">+</span>
+                                    </div>
+                                ))
+                        }
+                    </div>
+                </div>
+
+                {/* TOTAL COLONNE DROITE (Fixe en bas de colonne) */}
+                <div className="flex-none bg-blue-50 dark:bg-blue-900/20 p-3 border-t border-blue-100 dark:border-blue-900 text-center">
+                    <span className="text-xs text-blue-600 dark:text-blue-400 font-bold uppercase">Total Reçu</span>
+                    <div className="text-xl font-bold text-blue-700 dark:text-blue-300">{valReceive.toFixed(2)} €</div>
                 </div>
             </div>
         </div>
 
-        {/* --- FOOTER DE VALIDATION --- */}
-        <div className="fixed bottom-0 left-0 right-0 p-4 bg-white dark:bg-gray-900 border-t dark:border-gray-800 flex justify-between items-center z-40 shadow-2xl">
-            <div className="flex gap-4 text-sm">
-                <div>Donne: <span className="font-bold">{valGive.toFixed(2)}€</span></div>
-                <div>Reçoit: <span className="font-bold">{valReceive.toFixed(2)}€</span></div>
-            </div>
-            <button 
-                onClick={handleValidate}
-                disabled={isProcessing || (toGive.length === 0 && toReceive.length === 0)}
-                className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-3 rounded-xl font-bold disabled:opacity-50 transition"
-            >
-                {isProcessing ? 'Validation...' : '✅ Valider l\'échange'}
-            </button>
-        </div>
+        {/* FOOTER PRINCIPAL AVEC BALANCE CENTRÉE */}
+        <div className="fixed bottom-0 left-0 right-0 h-20 bg-white dark:bg-gray-900 border-t dark:border-gray-800 flex items-center px-6 z-40 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)]">
+            
+            {/* Espace vide à gauche pour l'équilibre */}
+            <div className="flex-1"></div>
 
-        {/* MODALE DE SÉLECTION DE VERSION */}
-        <CardVersionPickerModal 
-            isOpen={!!cardToPick}
-            baseCard={cardToPick}
-            onClose={() => setCardToPick(null)}
-            onConfirm={handleConfirmReceive}
-        />
+            {/* BALANCE CENTRALE */}
+            <div className="flex-1 flex flex-col items-center justify-center">
+                <span className="text-xs text-gray-400 font-bold uppercase tracking-widest">Valeur Résiduelle</span>
+                <div className={`text-2xl font-black ${balance >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                    {balance > 0 ? '+' : ''}{balance.toFixed(2)} €
+                </div>
+            </div>
+
+            {/* BOUTON D'ACTION À DROITE */}
+            <div className="flex-1 flex justify-end">
+                <button 
+                    onClick={handlePropose}
+                    disabled={toGive.length === 0 && toReceive.length === 0}
+                    className="bg-purple-600 hover:bg-purple-700 text-white px-8 py-3 rounded-xl font-bold disabled:opacity-50 transition shadow-lg transform active:scale-95 flex items-center gap-2"
+                >
+                    <span>🚀</span> Proposer
+                </button>
+            </div>
+        </div>
 
     </div>
   );
@@ -2247,11 +2009,7 @@ export function useTradeTransaction() {
 
     try {
         await runTransaction(db, async (transaction) => {
-            // ============================================================
-            // 1. PHASE DE LECTURE (READS) - ON NE MODIFIE RIEN ICI
-            // ============================================================
-            
-            // --- A. MOI : Je donne (Je dois vérifier que j'ai toujours les cartes) ---
+            // 1. LECTURES
             const myGiveOps = [];
             for (const card of myCardsToGive) {
                 const ref = getRef(user.uid, 'collection', card.id);
@@ -2260,31 +2018,23 @@ export function useTradeTransaction() {
                 myGiveOps.push({ ref, snap, card });
             }
 
-            // --- B. MOI : Je reçois ---
             const myReceiveOps = [];
             for (const card of cardsToReceive) {
                 const colRef = getRef(user.uid, 'collection', card.id);
                 const wishRef = getRef(user.uid, 'wishlist', card.id);
-                
                 const colSnap = await transaction.get(colRef);
                 const wishSnap = await transaction.get(wishRef);
-                
                 myReceiveOps.push({ colRef, wishRef, colSnap, wishSnap, card });
             }
 
-            // --- C. PARTENAIRE (Si existe) ---
             const partnerGiveOps = [];
             const partnerReceiveOps = [];
-
             if (partnerUid) {
-                // Il perd ce qu'il me donne
                 for (const card of cardsToReceive) {
                     const ref = getRef(partnerUid, 'collection', card.id);
                     const snap = await transaction.get(ref); 
                     partnerGiveOps.push({ ref, snap, card });
                 }
-
-                // Il gagne ce que je donne
                 for (const card of myCardsToGive) {
                     const colRef = getRef(partnerUid, 'collection', card.id);
                     const wishRef = getRef(partnerUid, 'wishlist', card.id);
@@ -2294,11 +2044,9 @@ export function useTradeTransaction() {
                 }
             }
 
-            // ============================================================
-            // 2. PHASE D'ÉCRITURE (WRITES) - ON APPLIQUE TOUT MAINTENANT
-            // ============================================================
+            // 2. ÉCRITURES
 
-            // --- A. MOI : Je perds ---
+            // A. MOI : Je perds
             for (const { ref, snap, card } of myGiveOps) {
                 const currentQty = snap.data()?.quantity || 0;
                 if (currentQty <= card.quantity) {
@@ -2308,7 +2056,7 @@ export function useTradeTransaction() {
                 }
             }
 
-            // --- B. MOI : Je gagne ---
+            // B. MOI : Je gagne
             for (const { colRef, wishRef, colSnap, wishSnap, card } of myReceiveOps) {
                 if (colSnap.exists()) {
                     transaction.update(colRef, { quantity: increment(card.quantity) });
@@ -2322,7 +2070,9 @@ export function useTradeTransaction() {
                         quantity: card.quantity,
                         isFoil: card.isFoil || false,
                         isSpecificVersion: card.isSpecificVersion || false,
-                        addedAt: serverTimestamp()
+                        addedAt: serverTimestamp(),
+                        // TRANSFERT DE LA DATA SCRYFALL
+                        scryfallData: card.scryfallData || null 
                     });
                 }
                 if (wishSnap.exists()) {
@@ -2330,13 +2080,11 @@ export function useTradeTransaction() {
                 }
             }
 
-            // --- C. PARTENAIRE ---
+            // C. PARTENAIRE
             if (partnerUid) {
-                // Il perd
                 for (const { ref, card } of partnerGiveOps) {
                     transaction.update(ref, { quantity: increment(-card.quantity) });
                 }
-                // Il gagne
                 for (const { colRef, wishRef, colSnap, wishSnap, card } of partnerReceiveOps) {
                      if (colSnap.exists()) {
                          transaction.update(colRef, { quantity: increment(card.quantity) });
@@ -2345,7 +2093,9 @@ export function useTradeTransaction() {
                              ...card, 
                              quantity: card.quantity,
                              addedAt: serverTimestamp(),
-                             wishlistId: null
+                             wishlistId: null,
+                             // TRANSFERT DE LA DATA SCRYFALL
+                             scryfallData: card.scryfallData || null
                          });
                      }
                      if (wishSnap.exists()) {
@@ -2734,266 +2484,198 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 };
 </file>
 
-<file path="app/trades/page.tsx">
-// app/trades/page.tsx
+<file path="app/trades/manual/page.tsx">
 'use client';
 
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { useAuth } from '@/lib/AuthContext';
-import { useTradeMatcher, TradeProposal } from '@/hooks/useTradeMatcher';
-import { useTradeSystem, TradeRequest } from '@/hooks/useTradeSystem';
-import Link from 'next/link';
-import { useCardCollection, CardType } from '@/hooks/useCardCollection'; 
-import MagicCard from '@/components/MagicCard'; 
+import { useCardCollection, CardType } from '@/hooks/useCardCollection';
+import { useTradeTransaction } from '@/hooks/useTradeTransaction';
+import toast from 'react-hot-toast';
+import CardVersionPickerModal, { ScryfallCardRaw } from '@/components/CardVersionPickerModal';
 
-// --- COMPOSANT : CARTE DE DEMANDE REÇUE (INBOX) ---
-const IncomingRequestCard = ({ trade }: { trade: TradeRequest }) => {
-    const { acceptTrade, rejectTrade, isProcessing } = useTradeSystem();
-    const [isOpen, setIsOpen] = useState(false);
-
-    // FIX 1 : Typage explicite ajouté pour éviter l'erreur 'any'
-    const valReceive = trade.itemsGiven.reduce((acc: number, c: CardType) => acc + (c.price || 0), 0); 
-    const valGive = trade.itemsReceived.reduce((acc: number, c: CardType) => acc + (c.price || 0), 0);
-
-    return (
-        <div className="bg-white dark:bg-gray-800 rounded-xl border-l-4 border-blue-500 shadow-sm p-4 mb-4">
-            <div className="flex justify-between items-center">
-                <div>
-                    <h3 className="font-bold text-gray-900 dark:text-white">Proposition de {trade.senderName}</h3>
-                    <p className="text-sm text-gray-500">
-                        Tu reçois <span className="text-green-600 font-bold">{trade.itemsGiven.length} cartes</span> (~{valReceive.toFixed(0)}€) 
-                        contre <span className="text-red-600 font-bold">{trade.itemsReceived.length} cartes</span> (~{valGive.toFixed(0)}€)
-                    </p>
-                </div>
-                <div className="flex gap-2">
-                    <button onClick={() => setIsOpen(!isOpen)} className="text-sm text-gray-500 underline mr-2">
-                        {isOpen ? 'Masquer' : 'Détails'}
-                    </button>
-                    <button 
-                        onClick={() => rejectTrade(trade.id)}
-                        disabled={isProcessing}
-                        className="px-3 py-1.5 bg-gray-200 hover:bg-red-100 text-red-700 rounded-lg text-sm font-medium transition"
-                    >
-                        Refuser
-                    </button>
-                    <button 
-                        onClick={() => acceptTrade(trade)}
-                        disabled={isProcessing}
-                        className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition shadow-sm"
-                    >
-                        {isProcessing ? '...' : 'Accepter & Échanger'}
-                    </button>
-                </div>
-            </div>
-
-            {/* DÉTAILS DÉPLIABLES */}
-            {isOpen && (
-                <div className="mt-4 pt-4 border-t border-gray-100 dark:border-gray-700 grid md:grid-cols-2 gap-4">
-                    <div className="bg-green-50/50 p-3 rounded">
-                        <p className="text-xs font-bold text-green-700 mb-2">⬇️ Tu vas recevoir :</p>
-                        <div className="flex flex-wrap gap-2">
-                            {/* FIX 2 : Typage explicite dans le map */}
-                            {trade.itemsGiven.map((c: CardType) => (
-                                <div key={c.id} className="relative group w-12 h-16 bg-gray-200 rounded overflow-hidden">
-                                     <img src={c.imageUrl} className="w-full h-full object-cover" alt="" title={c.name} />
-                                     <div className="absolute bottom-0 right-0 bg-black/50 text-white text-[8px] px-1">{c.quantity}x</div>
-                                </div>
-                            ))}
-                        </div>
-                    </div>
-                    <div className="bg-red-50/50 p-3 rounded">
-                        <p className="text-xs font-bold text-red-700 mb-2">⬆️ Tu vas donner :</p>
-                         <div className="flex flex-wrap gap-2">
-                            {/* FIX 3 : Typage explicite dans le map */}
-                            {trade.itemsReceived.map((c: CardType) => (
-                                <div key={c.id} className="relative group w-12 h-16 bg-gray-200 rounded overflow-hidden">
-                                     <img src={c.imageUrl} className="w-full h-full object-cover" alt="" title={c.name} />
-                                     <div className="absolute bottom-0 right-0 bg-black/50 text-white text-[8px] px-1">{c.quantity}x</div>
-                                </div>
-                            ))}
-                        </div>
-                    </div>
-                </div>
-            )}
-        </div>
-    );
-};
-
-// --- COMPOSANT : LIGNE DE SCANNER (PROPOSITION) ---
-const TradeRowProposal = ({ proposal, onProposalSent }: { proposal: TradeProposal, onProposalSent: () => void }) => {
-    const { setCustomPrice } = useCardCollection('collection');
-    const { proposeTrade } = useTradeSystem(); 
-
-    const totalGive = proposal.toGive.reduce((acc, c) => acc + (c.customPrice ?? c.price ?? 0), 0);
-    const totalReceive = proposal.toReceive.reduce((acc, c) => acc + (c.customPrice ?? c.price ?? 0), 0);
-    const delta = totalGive - totalReceive;
-
-    const handlePropose = async () => {
-        const success = await proposeTrade(
-            proposal.friend.uid,
-            proposal.friend.displayName,
-            proposal.toGive,
-            proposal.toReceive 
-        );
-        if (success) {
-            onProposalSent();
-        }
-    };
-
-    return (
-        <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden mb-8">
-            <div className="bg-gray-50 dark:bg-gray-900/50 p-4 border-b border-gray-100 dark:border-gray-700 flex flex-col sm:flex-row justify-between items-center gap-4">
-                <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-white font-bold overflow-hidden">
-                        {proposal.friend.photoURL ? <img src={proposal.friend.photoURL} alt="" className="w-full h-full object-cover"/> : proposal.friend.username[0].toUpperCase()}
-                    </div>
-                    <div>
-                        <h2 className="text-xl font-bold text-gray-900 dark:text-white">Potentiel avec {proposal.friend.displayName}</h2>
-                        <Link href={`/user/${proposal.friend.uid}`} className="text-sm text-blue-600 hover:underline">Voir profil</Link>
-                    </div>
-                </div>
-
-                <button
-                    onClick={handlePropose}
-                    className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg font-bold shadow-sm transition text-sm flex items-center gap-2"
-                >
-                    {/* FIX 4 : Apostrophe échappée */}
-                    📤 Proposer l&apos;échange
-                </button>
-            </div>
-
-            <div className="grid md:grid-cols-2 divide-y md:divide-y-0 md:divide-x border-gray-100 dark:border-gray-700">
-                <div className="p-4 bg-red-50/30 dark:bg-red-900/10">
-                    <h3 className="font-bold text-red-600 dark:text-red-400 mb-4 flex justify-between">
-                        Tu donnerais ({proposal.toGive.length})
-                        <span className="text-sm bg-white dark:bg-gray-800 px-2 py-1 rounded shadow-sm">{totalGive.toFixed(2)} €</span>
-                    </h3>
-                    <div className="space-y-3">
-                        {proposal.toGive.map(card => (
-                            <MagicCard 
-                                key={card.id} {...card} isTradeView={true} allowPriceEdit={true}
-                                onEditPrice={(newPrice) => setCustomPrice(card.id, newPrice)}
-                            />
-                        ))}
-                    </div>
-                </div>
-
-                <div className="p-4 bg-green-50/30 dark:bg-green-900/10">
-                    <h3 className="font-bold text-green-600 dark:text-green-400 mb-4 flex justify-between">
-                        Tu recevrais ({proposal.toReceive.length})
-                        <span className="text-sm bg-white dark:bg-gray-800 px-2 py-1 rounded shadow-sm">{totalReceive.toFixed(2)} €</span>
-                    </h3>
-                    <div className="space-y-3">
-                         {proposal.toReceive.map(card => (
-                            <MagicCard key={card.id} {...card} isTradeView={true} allowPriceEdit={false} />
-                        ))}
-                    </div>
-                </div>
-            </div>
-            
-            <div className="p-2 text-center text-xs text-gray-400 border-t border-gray-100 dark:border-gray-700">
-                Balance : {delta.toFixed(2)} €
-            </div>
-        </div>
-    );
-};
-
-export default function TradesPage() {
+export default function ManualTradePage() {
   const { user } = useAuth();
-  const { proposals, loading, status, runScan } = useTradeMatcher();
-  const { incomingTrades, outgoingTrades, cancelTrade } = useTradeSystem(); 
-  const [activeTab, setActiveTab] = useState<'scan' | 'requests'>('scan');
+  const { cards: myCollection, loading } = useCardCollection('collection'); 
+  const { executeTrade, isProcessing } = useTradeTransaction();
+
+  const [toGive, setToGive] = useState<CardType[]>([]);
+  const [toReceive, setToReceive] = useState<CardType[]>([]);
+  
+  const [localSearch, setLocalSearch] = useState('');
+  const [remoteSearch, setRemoteSearch] = useState('');
+  const [searchResults, setSearchResults] = useState<ScryfallCardRaw[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [cardToPick, setCardToPick] = useState<ScryfallCardRaw | null>(null);
+
+  // --- LOGIQUE ---
+  const handleAddToGive = (card: CardType) => {
+      const existing = toGive.find(c => c.id === card.id);
+      if (existing) {
+          if (existing.quantity < card.quantity) { 
+              setToGive(prev => prev.map(c => c.id === card.id ? { ...c, quantity: c.quantity + 1 } : c));
+          } else { toast.error("Max quantité atteinte"); }
+      } else { setToGive(prev => [...prev, { ...card, quantity: 1 }]); }
+  };
+
+  const handleSearchScryfall = async (e: React.FormEvent) => {
+      e.preventDefault();
+      if (!remoteSearch.trim()) return;
+      setIsSearching(true);
+      try {
+          const res = await fetch(`/api/search?q=${remoteSearch}`); 
+          const data = await res.json();
+          setSearchResults(data.data || []);
+      } catch (e) { toast.error("Erreur recherche"); }
+      finally { setIsSearching(false); }
+  };
+
+  const handleSearchResultClick = (scryfallCard: ScryfallCardRaw) => { setCardToPick(scryfallCard); };
+
+  const handleConfirmReceive = (card: CardType) => {
+      const existing = toReceive.find(c => c.id === card.id && c.isFoil === card.isFoil); 
+      if (existing) {
+          setToReceive(prev => prev.map(c => (c.id === card.id && c.isFoil === card.isFoil) ? { ...c, quantity: c.quantity + card.quantity } : c));
+      } else { setToReceive(prev => [...prev, card]); }
+      setSearchResults([]); setRemoteSearch(""); toast.success(`Ajouté : ${card.name}`);
+  };
+
+  const handleValidate = async () => {
+      if (toGive.length === 0 && toReceive.length === 0) return;
+      if (!confirm("Confirmer cet échange ?")) return;
+      const success = await executeTrade(toGive, toReceive, null);
+      if (success) { setToGive([]); setToReceive([]); setLocalSearch(""); }
+  };
+
+  // CALCULS
+  const valGive = toGive.reduce((acc, c) => acc + (c.customPrice ?? c.price ?? 0) * c.quantity, 0);
+  const valReceive = toReceive.reduce((acc, c) => acc + (c.price || 0) * c.quantity, 0);
+  const balance = valGive - valReceive;
+
+  const uniqueSearchResults = useMemo(() => {
+    const seen = new Set();
+    return searchResults.filter(card => {
+      const name = card.name.split(' // ')[0];
+      if (seen.has(name)) return false;
+      seen.add(name);
+      return true;
+    });
+  }, [searchResults]);
 
   if (!user) return <div className="p-10 text-center">Connectez-vous.</div>;
 
   return (
-    <main className="container mx-auto p-4 max-w-5xl min-h-[80vh]">
-        
-        {/* HEADER & TABS */}
-        <div className="flex flex-col md:flex-row justify-between items-end mb-6 gap-4 border-b border-gray-200 dark:border-gray-700 pb-4">
-            <div>
-                {/* FIX 5 : Apostrophe échappée */}
-                <h1 className="text-3xl font-bold text-purple-600 dark:text-purple-400">🤝 Centre d&apos;Échanges</h1>
+    <div className="container mx-auto p-4 h-[calc(100vh-64px)] flex flex-col">
+        <h1 className="text-2xl font-bold mb-4 flex-none flex items-center gap-2">🖐️ Échange Manuel</h1>
+
+        <div className="grid lg:grid-cols-2 gap-6 grow overflow-hidden pb-24">
+            
+            {/* --- COLONNE GAUCHE --- */}
+            <div className="flex flex-col h-full bg-red-50/50 dark:bg-red-900/10 rounded-xl border border-red-100 dark:border-red-900 overflow-hidden relative shadow-sm">
+                 <div className="p-4 pb-0 flex-none">
+                     <h2 className="font-bold text-red-600 mb-2">📤 Je donne</h2>
+                     <input type="text" placeholder="Chercher dans ma collection..." className="w-full p-2 mb-2 rounded border dark:bg-gray-800 dark:text-white dark:border-gray-600 text-sm" value={localSearch} onChange={e => setLocalSearch(e.target.value)} />
+                 </div>
+                 
+                 <div className="grow overflow-y-auto custom-scrollbar p-4 pt-0 space-y-4">
+                     {toGive.length > 0 && (
+                        <div className="bg-white dark:bg-gray-800 rounded-lg border border-red-200 dark:border-red-800 overflow-hidden">
+                             <div className="bg-red-100 dark:bg-red-900/30 px-3 py-1 text-xs font-bold text-red-700 dark:text-red-300">SÉLECTION</div>
+                             {toGive.map(card => (
+                                <div key={card.id} className="flex justify-between items-center text-sm p-2 border-b dark:border-gray-700 last:border-0 hover:bg-gray-50">
+                                    <span>{card.quantity}x {card.name}</span>
+                                    <button onClick={() => setToGive(p => p.filter(c => c.id !== card.id))} className="text-red-500 rounded px-1">✕</button>
+                                </div>
+                            ))}
+                        </div>
+                     )}
+                     
+                     <div className="space-y-1">
+                        <p className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Ma Collection</p>
+                        {loading ? <p className="text-sm">Chargement...</p> : 
+                            myCollection.filter(c => c.name.toLowerCase().includes(localSearch.toLowerCase())).slice(0, 50).map(card => (
+                                <div key={card.id} onClick={() => handleAddToGive(card)} className="cursor-pointer bg-white dark:bg-gray-800/50 hover:bg-red-100 p-2 rounded flex items-center gap-2 border border-transparent hover:border-red-200 transition shadow-sm group">
+                                    <img src={card.imageUrl} className="w-8 h-11 rounded object-cover bg-gray-200 shrink-0" alt="" />
+                                    <div className="grow min-w-0">
+                                        <p className="font-bold text-xs truncate dark:text-gray-200">{card.name}</p>
+                                        <p className="text-[10px] text-gray-500">{card.setName} - Stock: {card.quantity}</p>
+                                    </div>
+                                    <span className="text-xs font-bold text-gray-400 group-hover:text-red-500 shrink-0">+</span>
+                                </div>
+                            ))
+                        }
+                     </div>
+                 </div>
+                 
+                 <div className="flex-none bg-red-50 dark:bg-red-900/20 p-3 border-t border-red-100 dark:border-red-900 text-center">
+                    <span className="text-xs text-red-600 font-bold uppercase">Total Donné</span>
+                    <div className="text-xl font-bold text-red-700 dark:text-red-300">{valGive.toFixed(2)} €</div>
+                </div>
             </div>
-            <div className="flex gap-4">
-                <button 
-                    onClick={() => setActiveTab('scan')}
-                    className={`pb-2 px-2 font-bold transition ${activeTab === 'scan' ? 'text-purple-600 border-b-2 border-purple-600' : 'text-gray-500 hover:text-gray-700'}`}
-                >
-                    🔍 Scanner ({proposals.length})
-                </button>
-                <button 
-                    onClick={() => setActiveTab('requests')}
-                    className={`pb-2 px-2 font-bold transition relative ${activeTab === 'requests' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-500 hover:text-gray-700'}`}
-                >
-                    📬 Demandes 
-                    {incomingTrades.length > 0 && <span className="ml-2 bg-red-500 text-white text-[10px] px-1.5 rounded-full align-top">{incomingTrades.length}</span>}
+
+            {/* --- COLONNE DROITE --- */}
+            <div className="flex flex-col h-full bg-green-50/50 dark:bg-green-900/10 rounded-xl border border-green-100 dark:border-green-900 overflow-hidden relative shadow-sm">
+                <div className="p-4 pb-0 flex-none">
+                    <h2 className="font-bold text-green-600 mb-2">📥 Je reçois</h2>
+                    <form onSubmit={handleSearchScryfall} className="flex gap-2 mb-2">
+                         <input type="text" placeholder="Rechercher carte..." className="grow p-2 rounded border dark:bg-gray-800 dark:text-white dark:border-gray-600 text-sm" value={remoteSearch} onChange={e => setRemoteSearch(e.target.value)} />
+                         <button type="submit" className="bg-green-600 hover:bg-green-700 text-white px-3 rounded shadow-sm">🔍</button>
+                    </form>
+                </div>
+
+                <div className="grow overflow-y-auto custom-scrollbar p-4 pt-0 space-y-4">
+                     {toReceive.length > 0 && (
+                        <div className="bg-white dark:bg-gray-800 rounded-lg border border-green-200 dark:border-green-800 overflow-hidden">
+                             <div className="bg-green-100 dark:bg-green-900/30 px-3 py-1 text-xs font-bold text-green-700 dark:text-green-300">SÉLECTION</div>
+                             {toReceive.map((card, idx) => (
+                                <div key={`${card.id}-${idx}`} className="flex justify-between items-center text-sm p-2 border-b dark:border-gray-700 last:border-0 hover:bg-gray-50">
+                                    <div className="flex items-center gap-2 overflow-hidden">
+                                        <span className="font-bold shrink-0">{card.quantity}x</span>
+                                        <div className="flex flex-col truncate"><span className="truncate">{card.name}</span><span className="text-[10px] text-gray-500 truncate">{card.setName} {card.isFoil && '✨'}</span></div>
+                                    </div>
+                                    <button onClick={() => setToReceive(p => p.filter((_, i) => i !== idx))} className="text-red-500 rounded px-1 ml-2">✕</button>
+                                </div>
+                            ))}
+                        </div>
+                     )}
+
+                     <div className="space-y-1">
+                        <p className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Résultats Scryfall</p>
+                        {uniqueSearchResults.map(card => (
+                            <div key={card.id} onClick={() => handleSearchResultClick(card)} className="cursor-pointer bg-white dark:bg-gray-800/50 hover:bg-green-100 p-2 rounded flex items-center gap-2 border border-transparent hover:border-green-200 transition shadow-sm group">
+                                <div className="w-8 h-11 bg-gray-200 rounded overflow-hidden shrink-0"><img src={card.image_uris?.small} className="w-full h-full object-cover" alt="" /></div>
+                                <div className="grow min-w-0"><p className="font-bold text-xs truncate dark:text-gray-200">{card.name}</p><p className="text-[10px] text-gray-500 italic">Sélectionner...</p></div>
+                                <span className="text-xs font-bold text-gray-400 group-hover:text-green-500 shrink-0">Choisir ›</span>
+                            </div>
+                        ))}
+                     </div>
+                </div>
+
+                <div className="flex-none bg-green-50 dark:bg-green-900/20 p-3 border-t border-green-100 dark:border-green-900 text-center">
+                    <span className="text-xs text-green-600 font-bold uppercase">Total Reçu</span>
+                    <div className="text-xl font-bold text-green-700 dark:text-green-300">{valReceive.toFixed(2)} €</div>
+                </div>
+            </div>
+        </div>
+
+        {/* FOOTER */}
+        <div className="fixed bottom-0 left-0 right-0 h-20 bg-white dark:bg-gray-900 border-t dark:border-gray-800 flex items-center px-6 z-40 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)]">
+            <div className="flex-1"></div>
+            <div className="flex-1 flex flex-col items-center justify-center">
+                <span className="text-xs text-gray-400 font-bold uppercase tracking-widest">Balance</span>
+                <div className={`text-2xl font-black ${balance >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                    {balance > 0 ? '+' : ''}{balance.toFixed(2)} €
+                </div>
+            </div>
+            <div className="flex-1 flex justify-end">
+                <button onClick={handleValidate} disabled={isProcessing || (toGive.length === 0 && toReceive.length === 0)} className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-3 rounded-xl font-bold disabled:opacity-50 transition shadow-lg transform active:scale-95">
+                    {isProcessing ? 'Validation...' : '✅ Valider'}
                 </button>
             </div>
         </div>
 
-        {/* --- CONTENU TAB 1 : SCANNER --- */}
-        {activeTab === 'scan' && (
-            <div className="animate-in fade-in">
-                <div className="flex justify-end mb-4 gap-2">
-                     <Link href="/trades/manual" className="bg-gray-100 hover:bg-gray-200 text-gray-800 px-4 py-2 rounded-lg font-bold transition text-sm flex items-center">
-                        🖐️ Mode Manuel
-                    </Link>
-                    <button onClick={runScan} disabled={loading} className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg font-bold shadow transition text-sm disabled:opacity-50">
-                        {loading ? status : "🚀 Lancer le Scanner"}
-                    </button>
-                </div>
-
-                {proposals.length === 0 && !loading && (
-                    <div className="text-center py-20 text-gray-400 border-2 border-dashed border-gray-200 dark:border-gray-700 rounded-xl">
-                        {/* FIX 6 : Guillemets échappés */}
-                        Lancez le scanner pour trouver des &quot;matchs&quot; avec vos amis.
-                    </div>
-                )}
-
-                <div className="space-y-8">
-                    {proposals.map(proposal => (
-                        <TradeRowProposal key={proposal.friend.uid} proposal={proposal} onProposalSent={runScan} />
-                    ))}
-                </div>
-            </div>
-        )}
-
-        {/* --- CONTENU TAB 2 : DEMANDES (INBOX) --- */}
-        {activeTab === 'requests' && (
-            <div className="animate-in fade-in space-y-8">
-                
-                {/* 1. REÇUES */}
-                <div>
-                    <h2 className="font-bold text-gray-500 uppercase text-xs mb-4">À traiter ({incomingTrades.length})</h2>
-                    {incomingTrades.length === 0 && <p className="text-gray-400 italic text-sm">Aucune demande en attente.</p>}
-                    
-                    {/* FIX 7 : Typage explicite du trade */}
-                    {incomingTrades.map((trade: TradeRequest) => (
-                        <IncomingRequestCard key={trade.id} trade={trade} />
-                    ))}
-                </div>
-
-                {/* 2. ENVOYÉES */}
-                <div>
-                    <h2 className="font-bold text-gray-500 uppercase text-xs mb-4 pt-4 border-t dark:border-gray-700">En attente de réponse ({outgoingTrades.length})</h2>
-                    {outgoingTrades.length === 0 && <p className="text-gray-400 italic text-sm">Aucune proposition en cours.</p>}
-                    
-                    {/* FIX 8 : Typage explicite du trade */}
-                    {outgoingTrades.map((trade: TradeRequest) => (
-                         <div key={trade.id} className="flex justify-between items-center p-3 bg-gray-50 dark:bg-gray-800/50 rounded-lg border border-gray-100 dark:border-gray-700 mb-2">
-                            <span className="text-sm text-gray-600 dark:text-gray-300">
-                                Envoyée à <span className="font-bold">{trade.receiverName}</span> (le {new Date(trade.createdAt?.seconds * 1000).toLocaleDateString()})
-                            </span>
-                            <button onClick={() => cancelTrade(trade.id)} className="text-xs text-red-500 hover:underline">Annuler</button>
-                        </div>
-                    ))}
-                </div>
-
-            </div>
-        )}
-
-    </main>
+        <CardVersionPickerModal isOpen={!!cardToPick} baseCard={cardToPick} onClose={() => setCardToPick(null)} onConfirm={handleConfirmReceive} />
+    </div>
   );
 }
 </file>
@@ -3149,231 +2831,6 @@ export default function Header() {
 }
 </file>
 
-<file path="components/MagicCard.tsx">
-// components/MagicCard.tsx
-'use client';
-
-import { useState, useEffect } from 'react';
-
-type MagicCardProps = {
-  id?: string;
-  name: string;
-  imageUrl: string;
-  imageBackUrl?: string | null;
-  quantity?: number;
-  price?: number;
-  customPrice?: number; 
-  setName?: string;
-  
-  isFoil?: boolean;
-  isSpecificVersion?: boolean;
-  isForTrade?: boolean; // <--- Nouveau
-  
-  onDelete?: () => void;
-  onIncrement?: () => void;
-  onDecrement?: () => void;
-  onMove?: () => void;
-  
-  onEditPrice?: (newPrice: number) => void;
-  // Signature mise à jour pour accepter isForTrade
-  onToggleAttribute?: (field: 'isFoil' | 'isSpecificVersion' | 'isForTrade', currentValue: boolean) => void;
-  
-  isWishlist?: boolean;
-  readOnly?: boolean;
-  isTradeView?: boolean;
-  allowPriceEdit?: boolean;
-};
-
-const CARD_BACK_URL = "https://cards.scryfall.io/large/front/a/6/a6984342-f723-4e80-8e69-902d287a915f.jpg";
-
-export default function MagicCard(props: MagicCardProps) {
-  const { 
-      id, name, imageUrl, imageBackUrl, quantity = 1, 
-      price, customPrice, setName, 
-      isFoil, isSpecificVersion, isForTrade,
-      isTradeView, allowPriceEdit, 
-      onEditPrice, onToggleAttribute, 
-      readOnly, isWishlist,
-      onDelete, onIncrement, onDecrement, onMove
-  } = props;
-  
-  const [isFlipped, setIsFlipped] = useState(false);
-  const [isEditingPrice, setIsEditingPrice] = useState(false);
-  
-  const [tempPrice, setTempPrice] = useState(customPrice?.toString() || price?.toString() || "0");
-
-  // Synchronisation du prix
-  useEffect(() => {
-    if (!isEditingPrice) {
-        const newVal = customPrice?.toString() || price?.toString() || "0";
-        setTempPrice(newVal);
-    }
-  }, [customPrice, price, isEditingPrice]);
-
-  const effectivePrice = customPrice !== undefined ? customPrice : (price || 0);
-
-  const handleSavePrice = () => {
-      if (onEditPrice) {
-          onEditPrice(parseFloat(tempPrice));
-          setIsEditingPrice(false);
-      }
-  };
-
-  const currentImage = isFlipped && imageBackUrl ? imageBackUrl : imageUrl;
-
-  // --- VUE LISTE COMPACTE (TRADE) ---
-  if (isTradeView) {
-      return (
-        <div className="flex items-center gap-3 bg-white dark:bg-gray-800 p-2 rounded-lg border border-gray-100 dark:border-gray-700">
-            <div className="w-10 h-14 bg-gray-200 rounded overflow-hidden flex-shrink-0 relative group cursor-pointer" onClick={() => setIsFlipped(!isFlipped)}>
-                 <img src={currentImage} className="w-full h-full object-cover" alt={name} />
-                 {isFoil && <div className="absolute top-0 right-0 bg-purple-600/80 text-white text-[8px] px-1 font-bold">✨</div>}
-            </div>
-            
-            <div className="flex-grow min-w-0">
-                <div className="flex items-center gap-2">
-                    <p className="font-bold text-sm truncate" title={name}>{name}</p>
-                    {isFoil && <span className="text-xs" title="Foil">✨</span>}
-                </div>
-                <div className="flex items-center gap-2 text-xs text-gray-500">
-                    <p className="truncate">{setName}</p>
-                    {isSpecificVersion && <span className="bg-gray-200 dark:bg-gray-700 px-1 rounded text-[9px] border border-gray-400" title="Édition exacte requise">🔒 EXACT</span>}
-                </div>
-            </div>
-
-            <div className="text-right flex flex-col items-end">
-                {isEditingPrice ? (
-                    <div className="flex items-center gap-1">
-                        <input type="number" value={tempPrice} onChange={(e) => setTempPrice(e.target.value)} className="w-16 p-1 text-xs border rounded text-black" autoFocus />
-                        <button onClick={handleSavePrice} className="text-green-600 text-xs font-bold">OK</button>
-                    </div>
-                ) : (
-                    <div 
-                        className={`font-bold text-sm ${customPrice ? 'text-orange-600' : 'text-gray-700 dark:text-gray-300'} ${allowPriceEdit ? 'cursor-pointer hover:underline' : ''}`}
-                        onClick={() => { if (allowPriceEdit) { setTempPrice(effectivePrice.toString()); setIsEditingPrice(true); }}}
-                        title={customPrice ? "Prix personnalisé" : "Prix Scryfall"}
-                    >
-                        {effectivePrice.toFixed(2)} €
-                        {customPrice && <span className="text-[8px] align-top ml-0.5">*</span>}
-                    </div>
-                )}
-            </div>
-        </div>
-      );
-  }
-
-  // --- VUE NORMALE (GRILLE) ---
-  return (
-    <div className={`relative group flex flex-col bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden p-3 gap-3 border transition-colors h-full ${isFoil ? 'border-purple-300 dark:border-purple-800 shadow-purple-100 dark:shadow-none' : 'border-gray-100 dark:border-gray-700 hover:border-blue-300 dark:hover:border-blue-500'}`}>
-      
-      {/* --- BADGES ET TOGGLES --- */}
-      <div className="absolute top-14 left-4 z-10 flex flex-col gap-1">
-        
-        {/* BOUTON FOIL */}
-        {isWishlist && !readOnly && onToggleAttribute && (
-            <button 
-                onClick={() => onToggleAttribute('isFoil', !!isFoil)}
-                className={`w-6 h-6 rounded-full flex items-center justify-center text-xs shadow-md border ${isFoil ? 'bg-purple-600 text-white border-purple-400' : 'bg-white/80 text-gray-400 border-gray-300 hover:text-purple-600'}`}
-                title="Basculer Foil"
-            >
-                ✨
-            </button>
-        )}
-
-        {/* BOUTON VERSION EXACTE */}
-        {isWishlist && !readOnly && onToggleAttribute && (
-            <button 
-                onClick={() => onToggleAttribute('isSpecificVersion', !!isSpecificVersion)}
-                className={`w-6 h-6 rounded-full flex items-center justify-center text-xs shadow-md border ${isSpecificVersion ? 'bg-blue-600 text-white border-blue-400' : 'bg-white/80 text-gray-400 border-gray-300 hover:text-blue-600'}`}
-                title={isSpecificVersion ? "Version exacte requise" : "N'importe quelle version"}
-            >
-                {isSpecificVersion ? '🔒' : '🌍'}
-            </button>
-        )}
-
-        {/* --- NOUVEAU : BOUTON TRADE (COLLECTION SEULEMENT) --- */}
-        {!isWishlist && !readOnly && onToggleAttribute && (
-            <button 
-                onClick={() => onToggleAttribute('isForTrade', !!isForTrade)}
-                className={`w-8 h-8 rounded-full flex items-center justify-center text-sm shadow-md border transition-all ${
-                    isForTrade 
-                    ? 'bg-green-500 text-white border-green-600 scale-110' 
-                    : 'bg-white/90 text-gray-300 border-gray-300 hover:text-green-500 grayscale'
-                }`}
-                title={isForTrade ? "Disponible à l'échange" : "Non disponible à l'échange"}
-            >
-                🤝
-            </button>
-        )}
-      </div>
-
-      {/* --- BOUTONS D'ACTION (Delete/Move) --- */}
-      {!readOnly && (
-        <div className="absolute top-2 left-2 right-2 flex justify-between z-20 pointer-events-none">
-            {isWishlist && onMove && (
-            <button onClick={onMove} className="pointer-events-auto p-1.5 bg-green-100 text-green-700 hover:bg-green-600 hover:text-white rounded-full transition opacity-100 md:opacity-0 md:group-hover:opacity-100 shadow-sm" title="Déplacer vers Collection">📦</button>
-            )}
-            
-            {!isWishlist && <div></div>} 
-
-            {onDelete && (
-            <button onClick={onDelete} className="pointer-events-auto p-1.5 bg-red-50 text-gray-400 hover:text-white hover:bg-red-600 rounded-full transition opacity-100 md:opacity-0 md:group-hover:opacity-100" title="Supprimer">🗑️</button>
-            )}
-        </div>
-      )}
-
-      {/* --- IMAGE --- */}
-      <div className="relative w-full aspect-[2.5/3.5] bg-gray-200 rounded-lg overflow-hidden">
-        <img
-          src={currentImage || CARD_BACK_URL}
-          alt={name}
-          className="w-full h-full object-cover transition-transform duration-300"
-          onError={(e) => { e.currentTarget.src = CARD_BACK_URL; }}
-        />
-        {isFoil && <div className="absolute inset-0 bg-gradient-to-tr from-purple-500/20 to-transparent pointer-events-none mix-blend-overlay"></div>}
-
-        {imageBackUrl && (
-          <button onClick={() => setIsFlipped(!isFlipped)} className="absolute top-1/2 right-2 -translate-y-1/2 bg-black/50 hover:bg-black/80 text-white p-2 rounded-full backdrop-blur-sm transition-all shadow-lg border border-white/20 z-10 pointer-events-auto">
-            🔄
-          </button>
-        )}
-      </div>
-      
-      {/* --- INFO CARTE --- */}
-      <div className="flex-1 flex flex-col min-w-0">
-        <div className="flex justify-between items-start">
-            <h3 className="font-bold text-sm md:text-base truncate mb-1 flex-grow" title={name}>{name}</h3>
-        </div>
-        
-        <div className="flex items-center gap-2 mb-2">
-            <p className="text-xs text-blue-600 dark:text-blue-400 truncate font-medium max-w-[70%]">{setName}</p>
-            {readOnly && isFoil && <span className="text-[10px] bg-purple-100 text-purple-700 px-1 rounded border border-purple-200">Foil</span>}
-            {readOnly && isSpecificVersion && <span className="text-[10px] bg-gray-100 text-gray-700 px-1 rounded border border-gray-200">Exact</span>}
-            {/* BADGE TRADE */}
-            {isForTrade && <span className="text-[10px] bg-green-100 text-green-700 px-1 rounded border border-green-200 font-bold flex items-center gap-1">🤝 Échange</span>}
-        </div>
-        
-        <div className="mt-auto flex justify-between items-end border-t border-gray-100 dark:border-gray-700 pt-2">
-          
-          <div className="flex items-center gap-2">
-            {!readOnly && <button onClick={onDecrement} className="bg-gray-200 dark:bg-gray-700 w-7 h-7 rounded hover:bg-gray-300 font-bold flex items-center justify-center">-</button>}
-            <span className={`font-mono text-lg ${readOnly ? 'font-bold text-gray-800 dark:text-white' : 'w-5 text-center'}`}>{readOnly && "x"}{quantity}</span>
-            {!readOnly && <button onClick={onIncrement} className="bg-blue-100 dark:bg-blue-900 text-blue-600 font-bold w-7 h-7 rounded hover:bg-blue-200 flex items-center justify-center">+</button>}
-          </div>
-          
-          <div className="text-right cursor-help" title="Prix unitaire Scryfall ou Perso">
-             <p className="text-[10px] text-gray-400">Unit: {effectivePrice.toFixed(2)}€</p>
-             <p className={`font-bold ${customPrice ? 'text-orange-600' : 'text-gray-700 dark:text-gray-200'}`}>
-                 {(effectivePrice * quantity).toFixed(2)} €
-             </p>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-</file>
-
 <file path="hooks/useCardCollection.ts">
 // hooks/useCardCollection.ts
 import { useState, useEffect, useMemo } from 'react';
@@ -3397,9 +2854,11 @@ export type CardType = {
   // --- OPTIONS ---
   isFoil?: boolean;             
   isSpecificVersion?: boolean;
-  
-  // --- NOUVEAU : CLASSEUR D'ÉCHANGE ---
   isForTrade?: boolean; 
+  
+  // --- NOUVEAU : DONNÉES BRUTES SCRYFALL ---
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  scryfallData?: any;
 };
 
 export function useCardCollection(
@@ -3462,7 +2921,6 @@ export function useCardCollection(
       }
   };
 
-  // NOUVEAU : On ajoute 'isForTrade' aux champs modifiables
   const toggleAttribute = async (
       cardId: string, 
       field: 'isFoil' | 'isSpecificVersion' | 'isForTrade', 
@@ -3472,7 +2930,6 @@ export function useCardCollection(
       const ref = getDocRef(cardId);
       if (ref) {
           await updateDoc(ref, { [field]: !currentValue });
-          // Pas de toast pour fluidifier l'UI lors des clics répétés
       }
   };
 
@@ -3504,106 +2961,6 @@ export function useCardCollection(
       cards, loading, isOwner, totalPrice,
       updateQuantity, removeCard, setCustomPrice, toggleAttribute 
   };
-}
-</file>
-
-<file path="app/collection/page.tsx">
-// app/collection/page.tsx
-'use client';
-
-import { useState } from 'react';
-import { useAuth } from '@/lib/AuthContext';
-import { useCardCollection } from '@/hooks/useCardCollection'; 
-import MagicCard from '@/components/MagicCard';
-import ImportModal from '@/components/ImportModal';
-import ConfirmModal from '@/components/ConfirmModal';
-import DeleteAllButton from '@/components/DeleteAllButton';
-
-export default function CollectionPage() {
-  const { user } = useAuth();
-  
-  // 1. On récupère setCustomPrice et toggleAttribute ici
-  const { 
-    cards, loading, updateQuantity, removeCard, 
-    setCustomPrice, toggleAttribute, // <--- Important
-    totalPrice 
-  } = useCardCollection('collection');
-
-  const [isImportOpen, setIsImportOpen] = useState(false);
-  const [cardToDelete, setCardToDelete] = useState<string | null>(null);
-
-  const handleDecrement = async (cardId: string, currentQty: number) => {
-    const result = await updateQuantity(cardId, -1, currentQty);
-    if (result === 'shouldDelete') {
-      setCardToDelete(cardId);
-    }
-  };
-
-  if (loading) return <p className="text-center p-10 text-gray-500">Chargement de votre collection...</p>;
-  if (!user) return <p className="text-center p-10">Veuillez vous connecter.</p>;
-
-  return (
-    <main className="container mx-auto p-4 pb-20">
-      {/* HEADER */}
-      <div className="flex flex-col md:flex-row justify-between items-center mb-8 gap-4">
-        <div className="flex items-center gap-4">
-          <h1 className="text-3xl font-bold text-blue-700 dark:text-blue-400">
-            Ma Collection <span className="ml-3 text-lg font-normal text-gray-500">({cards.reduce((acc, c) => acc + c.quantity, 0)})</span>
-          </h1>
-          <button 
-            onClick={() => setIsImportOpen(true)} 
-            className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition flex items-center gap-2 shadow-sm"
-          >
-            📂 Importer CSV
-          </button>
-        </div>
-        
-        <div className="flex items-center gap-4">
-           <DeleteAllButton targetCollection="collection" />
-           <div className="bg-blue-50 dark:bg-blue-900/30 text-blue-800 dark:text-blue-100 px-6 py-3 rounded-xl shadow-sm border border-blue-200 dark:border-blue-700">
-             <span className="text-sm uppercase tracking-wide opacity-80">Valeur</span>
-             <div className="text-2xl font-bold">{totalPrice.toFixed(2)} €</div>
-           </div>
-        </div>
-      </div>
-
-      {/* LISTE DES CARTES */}
-      {cards.length === 0 ? (
-        <div className="text-center py-20 bg-gray-50 dark:bg-gray-800/50 rounded-xl border-2 border-dashed border-gray-200 dark:border-gray-700">
-          <p className="text-xl text-gray-500 mb-4">Votre collection est vide.</p>
-        </div>
-      ) : (
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-          {cards.map((card) => (
-            <MagicCard 
-              key={card.id}
-              {...card}
-              // Actions de base
-              onIncrement={() => updateQuantity(card.id, 1, card.quantity)}
-              onDecrement={() => handleDecrement(card.id, card.quantity)}
-              onDelete={() => setCardToDelete(card.id)}
-              
-              // C'EST ICI QUE LA MAGIE OPÈRE (Optimisation) :
-              // On connecte les fonctions du hook parent aux props de l'enfant
-              onEditPrice={(newPrice) => setCustomPrice(card.id, newPrice)}
-              onToggleAttribute={(field, val) => toggleAttribute(card.id, field, val)}
-            />
-          ))}
-        </div>
-      )}
-
-      {/* MODALES */}
-      <ImportModal isOpen={isImportOpen} onClose={() => setIsImportOpen(false)} targetCollection="collection" />
-      
-      <ConfirmModal 
-        isOpen={!!cardToDelete} 
-        onClose={() => setCardToDelete(null)} 
-        onConfirm={() => { if(cardToDelete) removeCard(cardToDelete); }} 
-        title="Retirer ?" 
-        message="Cette carte sera retirée de votre collection."
-      />
-    </main>
-  );
 }
 </file>
 
@@ -3834,6 +3191,593 @@ export default function ContactsPage() {
 }
 </file>
 
+<file path="app/trades/page.tsx">
+// app/trades/page.tsx
+'use client';
+
+import { useState } from 'react';
+import { useAuth } from '@/lib/AuthContext';
+import { useTradeMatcher, TradeProposal } from '@/hooks/useTradeMatcher';
+import { useTradeSystem, TradeRequest } from '@/hooks/useTradeSystem';
+import Link from 'next/link';
+import { useCardCollection, CardType } from '@/hooks/useCardCollection'; 
+import MagicCard from '@/components/MagicCard'; 
+
+// --- COMPOSANT : CARTE DE DEMANDE (INBOX) ---
+const IncomingRequestCard = ({ trade }: { trade: TradeRequest }) => {
+    const { acceptTrade, rejectTrade, isProcessing } = useTradeSystem();
+    const [isOpen, setIsOpen] = useState(false);
+
+    const valReceive = trade.itemsGiven.reduce((acc: number, c: CardType) => acc + (c.price || 0), 0); 
+    const valGive = trade.itemsReceived.reduce((acc: number, c: CardType) => acc + (c.price || 0), 0);
+
+    return (
+        <div className="bg-white dark:bg-gray-800 rounded-xl border-l-4 border-blue-500 shadow-sm p-4 mb-4">
+            <div className="flex justify-between items-center">
+                <div>
+                    <h3 className="font-bold text-gray-900 dark:text-white">Proposition de {trade.senderName}</h3>
+                    <p className="text-sm text-gray-500">
+                        Tu reçois <span className="text-green-600 font-bold">{trade.itemsGiven.length} cartes</span> (~{valReceive.toFixed(0)}€) 
+                        contre <span className="text-red-600 font-bold">{trade.itemsReceived.length} cartes</span> (~{valGive.toFixed(0)}€)
+                    </p>
+                </div>
+                <div className="flex gap-2">
+                    <button onClick={() => setIsOpen(!isOpen)} className="text-sm text-gray-500 underline mr-2">
+                        {isOpen ? 'Masquer' : 'Détails'}
+                    </button>
+                    <button 
+                        onClick={() => rejectTrade(trade.id)}
+                        disabled={isProcessing}
+                        className="px-3 py-1.5 bg-gray-200 hover:bg-red-100 text-red-700 rounded-lg text-sm font-medium transition"
+                    >
+                        Refuser
+                    </button>
+                    <button 
+                        onClick={() => acceptTrade(trade)}
+                        disabled={isProcessing}
+                        className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition shadow-sm"
+                    >
+                        {isProcessing ? '...' : 'Accepter & Échanger'}
+                    </button>
+                </div>
+            </div>
+
+            {isOpen && (
+                <div className="mt-4 pt-4 border-t border-gray-100 dark:border-gray-700 grid md:grid-cols-2 gap-4">
+                    <div className="bg-green-50/50 p-3 rounded">
+                        <p className="text-xs font-bold text-green-700 mb-2">⬇️ Tu vas recevoir :</p>
+                        <div className="flex flex-wrap gap-2">
+                            {trade.itemsGiven.map((c: CardType) => (
+                                <div key={c.id} className="relative group w-12 h-16 bg-gray-200 rounded overflow-hidden">
+                                     <img src={c.imageUrl} className="w-full h-full object-cover" alt="" title={c.name} />
+                                     <div className="absolute bottom-0 right-0 bg-black/50 text-white text-[8px] px-1">{c.quantity}x</div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                    <div className="bg-red-50/50 p-3 rounded">
+                        <p className="text-xs font-bold text-red-700 mb-2">⬆️ Tu vas donner :</p>
+                         <div className="flex flex-wrap gap-2">
+                            {trade.itemsReceived.map((c: CardType) => (
+                                <div key={c.id} className="relative group w-12 h-16 bg-gray-200 rounded overflow-hidden">
+                                     <img src={c.imageUrl} className="w-full h-full object-cover" alt="" title={c.name} />
+                                     <div className="absolute bottom-0 right-0 bg-black/50 text-white text-[8px] px-1">{c.quantity}x</div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+};
+
+// --- COMPOSANT : LIGNE DE SCANNER ---
+const TradeRowProposal = ({ proposal, onProposalSent }: { proposal: TradeProposal, onProposalSent: () => void }) => {
+    const { setCustomPrice } = useCardCollection('collection');
+    const { proposeTrade } = useTradeSystem(); 
+
+    const totalGive = proposal.toGive.reduce((acc, c) => acc + (c.customPrice ?? c.price ?? 0), 0);
+    const totalReceive = proposal.toReceive.reduce((acc, c) => acc + (c.customPrice ?? c.price ?? 0), 0);
+    const delta = totalGive - totalReceive;
+
+    const handlePropose = async () => {
+        const success = await proposeTrade(
+            proposal.friend.uid,
+            proposal.friend.displayName,
+            proposal.toGive,
+            proposal.toReceive 
+        );
+        if (success) onProposalSent();
+    };
+
+    return (
+        <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden mb-8 shrink-0">
+            <div className="bg-gray-50 dark:bg-gray-900/50 p-4 border-b border-gray-100 dark:border-gray-700 flex flex-col sm:flex-row justify-between items-center gap-4">
+                <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-white font-bold overflow-hidden">
+                        {proposal.friend.photoURL ? <img src={proposal.friend.photoURL} alt="" className="w-full h-full object-cover"/> : proposal.friend.username[0].toUpperCase()}
+                    </div>
+                    <div>
+                        <h2 className="text-xl font-bold text-gray-900 dark:text-white">Potentiel avec {proposal.friend.displayName}</h2>
+                        <Link href={`/user/${proposal.friend.uid}`} className="text-sm text-blue-600 hover:underline">Voir profil</Link>
+                    </div>
+                </div>
+                <button
+                    onClick={handlePropose}
+                    className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg font-bold shadow-sm transition text-sm flex items-center gap-2"
+                >
+                    📤 Proposer l&apos;échange
+                </button>
+            </div>
+
+            <div className="grid md:grid-cols-2 divide-y md:divide-y-0 md:divide-x border-gray-100 dark:border-gray-700">
+                <div className="p-4 bg-red-50/30 dark:bg-red-900/10">
+                    <h3 className="font-bold text-red-600 dark:text-red-400 mb-4 flex justify-between">
+                        Tu donnerais ({proposal.toGive.length})
+                        <span className="text-sm bg-white dark:bg-gray-800 px-2 py-1 rounded shadow-sm">{totalGive.toFixed(2)} €</span>
+                    </h3>
+                    <div className="space-y-3">
+                        {proposal.toGive.map(card => (
+                            <MagicCard 
+                                key={card.id} {...card} isTradeView={true} allowPriceEdit={true}
+                                onEditPrice={(newPrice) => setCustomPrice(card.id, newPrice)}
+                            />
+                        ))}
+                    </div>
+                </div>
+
+                <div className="p-4 bg-green-50/30 dark:bg-green-900/10">
+                    <h3 className="font-bold text-green-600 dark:text-green-400 mb-4 flex justify-between">
+                        Tu recevrais ({proposal.toReceive.length})
+                        <span className="text-sm bg-white dark:bg-gray-800 px-2 py-1 rounded shadow-sm">{totalReceive.toFixed(2)} €</span>
+                    </h3>
+                    <div className="space-y-3">
+                         {proposal.toReceive.map(card => (
+                            <MagicCard key={card.id} {...card} isTradeView={true} allowPriceEdit={false} />
+                        ))}
+                    </div>
+                </div>
+            </div>
+            
+            <div className="p-2 text-center text-xs text-gray-400 border-t border-gray-100 dark:border-gray-700">
+                Balance : {delta.toFixed(2)} €
+            </div>
+        </div>
+    );
+};
+
+export default function TradesPage() {
+  const { user } = useAuth();
+  const { proposals, loading, status, runScan } = useTradeMatcher();
+  const { incomingTrades, outgoingTrades, cancelTrade } = useTradeSystem(); 
+  const [activeTab, setActiveTab] = useState<'scan' | 'requests'>('scan');
+
+  if (!user) return <div className="p-10 text-center">Connectez-vous.</div>;
+
+  return (
+    // CONTENEUR FIXE
+    <main className="container mx-auto p-4 max-w-5xl h-[calc(100vh-64px)] flex flex-col">
+        
+        {/* HEADER & TABS (FIXE) */}
+        <div className="flex-none flex flex-col md:flex-row justify-between items-end mb-4 gap-4 border-b border-gray-200 dark:border-gray-700 pb-4">
+            <div>
+                <h1 className="text-3xl font-bold text-purple-600 dark:text-purple-400">🤝 Centre d&apos;Échanges</h1>
+            </div>
+            <div className="flex gap-4">
+                <button 
+                    onClick={() => setActiveTab('scan')}
+                    className={`pb-2 px-2 font-bold transition ${activeTab === 'scan' ? 'text-purple-600 border-b-2 border-purple-600' : 'text-gray-500 hover:text-gray-700'}`}
+                >
+                    🔍 Scanner ({proposals.length})
+                </button>
+                <button 
+                    onClick={() => setActiveTab('requests')}
+                    className={`pb-2 px-2 font-bold transition relative ${activeTab === 'requests' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-500 hover:text-gray-700'}`}
+                >
+                    📬 Demandes 
+                    {incomingTrades.length > 0 && <span className="ml-2 bg-red-500 text-white text-[10px] px-1.5 rounded-full align-top">{incomingTrades.length}</span>}
+                </button>
+            </div>
+        </div>
+
+        {/* CONTENU SCROLLABLE */}
+        <div className="grow overflow-y-auto custom-scrollbar pb-10">
+            
+            {/* --- TAB 1 : SCANNER --- */}
+            {activeTab === 'scan' && (
+                <div className="animate-in fade-in">
+                    <div className="flex justify-end mb-6 gap-2 sticky top-0 bg-white/80 dark:bg-gray-900/80 backdrop-blur-sm z-10 py-2">
+                         <Link href="/trades/manual" className="bg-gray-100 hover:bg-gray-200 text-gray-800 px-4 py-2 rounded-lg font-bold transition text-sm flex items-center">
+                            🖐️ Mode Manuel
+                        </Link>
+                        <button onClick={runScan} disabled={loading} className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg font-bold shadow transition text-sm disabled:opacity-50">
+                            {loading ? status : "🚀 Lancer le Scanner"}
+                        </button>
+                    </div>
+
+                    {proposals.length === 0 && !loading && (
+                        <div className="text-center py-20 text-gray-400 border-2 border-dashed border-gray-200 dark:border-gray-700 rounded-xl">
+                            Lancez le scanner pour trouver des &quot;matchs&quot; avec vos amis.
+                        </div>
+                    )}
+
+                    <div className="space-y-8">
+                        {proposals.map(proposal => (
+                            <TradeRowProposal key={proposal.friend.uid} proposal={proposal} onProposalSent={runScan} />
+                        ))}
+                    </div>
+                </div>
+            )}
+
+            {/* --- TAB 2 : DEMANDES (INBOX) --- */}
+            {activeTab === 'requests' && (
+                <div className="animate-in fade-in space-y-8">
+                    
+                    {/* 1. REÇUES */}
+                    <div>
+                        <h2 className="font-bold text-gray-500 uppercase text-xs mb-4 sticky top-0 bg-white dark:bg-gray-900 py-2 z-10">À traiter ({incomingTrades.length})</h2>
+                        {incomingTrades.length === 0 && <p className="text-gray-400 italic text-sm">Aucune demande en attente.</p>}
+                        
+                        {incomingTrades.map((trade: TradeRequest) => (
+                            <IncomingRequestCard key={trade.id} trade={trade} />
+                        ))}
+                    </div>
+
+                    {/* 2. ENVOYÉES */}
+                    <div>
+                        <h2 className="font-bold text-gray-500 uppercase text-xs mb-4 pt-4 border-t dark:border-gray-700">En attente de réponse ({outgoingTrades.length})</h2>
+                        {outgoingTrades.length === 0 && <p className="text-gray-400 italic text-sm">Aucune proposition en cours.</p>}
+                        
+                        {outgoingTrades.map((trade: TradeRequest) => (
+                             <div key={trade.id} className="flex justify-between items-center p-3 bg-gray-50 dark:bg-gray-800/50 rounded-lg border border-gray-100 dark:border-gray-700 mb-2">
+                                <span className="text-sm text-gray-600 dark:text-gray-300">
+                                    Envoyée à <span className="font-bold">{trade.receiverName}</span> (le {new Date(trade.createdAt?.seconds * 1000).toLocaleDateString()})
+                                </span>
+                                <button onClick={() => cancelTrade(trade.id)} className="text-xs text-red-500 hover:underline">Annuler</button>
+                            </div>
+                        ))}
+                    </div>
+
+                </div>
+            )}
+        </div>
+
+    </main>
+  );
+}
+</file>
+
+<file path="app/collection/page.tsx">
+// app/collection/page.tsx
+'use client';
+
+import { useState } from 'react';
+import { useAuth } from '@/lib/AuthContext';
+import { useCardCollection } from '@/hooks/useCardCollection'; 
+import MagicCard from '@/components/MagicCard';
+import ImportModal from '@/components/ImportModal';
+import ConfirmModal from '@/components/ConfirmModal';
+import DeleteAllButton from '@/components/DeleteAllButton';
+
+export default function CollectionPage() {
+  const { user } = useAuth();
+  
+  const { 
+    cards, loading, updateQuantity, removeCard, 
+    setCustomPrice, toggleAttribute, 
+    totalPrice 
+  } = useCardCollection('collection');
+
+  const [isImportOpen, setIsImportOpen] = useState(false);
+  const [cardToDelete, setCardToDelete] = useState<string | null>(null);
+
+  const handleDecrement = async (cardId: string, currentQty: number) => {
+    const result = await updateQuantity(cardId, -1, currentQty);
+    if (result === 'shouldDelete') {
+      setCardToDelete(cardId);
+    }
+  };
+
+  if (loading) return <p className="text-center p-10 text-gray-500">Chargement de votre collection...</p>;
+  if (!user) return <p className="text-center p-10">Veuillez vous connecter.</p>;
+
+  return (
+    <main className="container mx-auto p-4 pb-20">
+      {/* HEADER */}
+      <div className="flex flex-col md:flex-row justify-between items-center mb-8 gap-4">
+        <div className="flex items-center gap-4">
+          <h1 className="text-3xl font-bold text-blue-700 dark:text-blue-400">
+            Ma Collection <span className="ml-3 text-lg font-normal text-gray-500">({cards.reduce((acc, c) => acc + c.quantity, 0)})</span>
+          </h1>
+          <button 
+            onClick={() => setIsImportOpen(true)} 
+            className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition flex items-center gap-2 shadow-sm"
+          >
+            Importer des cartes
+          </button>
+        </div>
+        
+        <div className="flex items-center gap-4">
+           <DeleteAllButton targetCollection="collection" />
+           <div className="bg-blue-50 dark:bg-blue-900/30 text-blue-800 dark:text-blue-100 px-6 py-3 rounded-xl shadow-sm border border-blue-200 dark:border-blue-700">
+             <span className="text-sm uppercase tracking-wide opacity-80">Valeur</span>
+             <div className="text-2xl font-bold">{totalPrice.toFixed(2)} €</div>
+           </div>
+        </div>
+      </div>
+
+      {/* LISTE DES CARTES */}
+      {cards.length === 0 ? (
+        <div className="text-center py-20 bg-gray-50 dark:bg-gray-800/50 rounded-xl border-2 border-dashed border-gray-200 dark:border-gray-700">
+          <p className="text-xl text-gray-500 mb-4">Votre collection est vide.</p>
+        </div>
+      ) : (
+        // --- MODIFICATION ICI : Ajout de xl:grid-cols-5 ---
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+          {cards.map((card) => (
+            <MagicCard 
+              key={card.id}
+              {...card}
+              // Actions de base
+              onIncrement={() => updateQuantity(card.id, 1, card.quantity)}
+              onDecrement={() => handleDecrement(card.id, card.quantity)}
+              onDelete={() => setCardToDelete(card.id)}
+              
+              // Actions avancées (Prix & Toggle)
+              onEditPrice={(newPrice) => setCustomPrice(card.id, newPrice)}
+              onToggleAttribute={(field, val) => toggleAttribute(card.id, field, val)}
+            />
+          ))}
+        </div>
+      )}
+
+      {/* MODALES */}
+      <ImportModal isOpen={isImportOpen} onClose={() => setIsImportOpen(false)} targetCollection="collection" />
+      
+      <ConfirmModal 
+        isOpen={!!cardToDelete} 
+        onClose={() => setCardToDelete(null)} 
+        onConfirm={() => { if(cardToDelete) removeCard(cardToDelete); }} 
+        title="Retirer ?" 
+        message="Cette carte sera retirée de votre collection."
+      />
+    </main>
+  );
+}
+</file>
+
+<file path="components/MagicCard.tsx">
+// components/MagicCard.tsx
+'use client';
+
+import { useState, useEffect } from 'react';
+
+type MagicCardProps = {
+  id?: string;
+  name: string;
+  imageUrl: string;
+  imageBackUrl?: string | null;
+  quantity?: number;
+  price?: number;
+  customPrice?: number; 
+  setName?: string;
+  
+  isFoil?: boolean;
+  isSpecificVersion?: boolean;
+  isForTrade?: boolean; 
+  
+  onDelete?: () => void;
+  onIncrement?: () => void;
+  onDecrement?: () => void;
+  onMove?: () => void;
+  
+  onEditPrice?: (newPrice: number) => void;
+  onToggleAttribute?: (field: 'isFoil' | 'isSpecificVersion' | 'isForTrade', currentValue: boolean) => void;
+  
+  isWishlist?: boolean;
+  readOnly?: boolean;
+  isTradeView?: boolean;
+  allowPriceEdit?: boolean;
+};
+
+const CARD_BACK_URL = "https://cards.scryfall.io/large/front/a/6/a6984342-f723-4e80-8e69-902d287a915f.jpg";
+
+export default function MagicCard(props: MagicCardProps) {
+  const { 
+      id, name, imageUrl, imageBackUrl, quantity = 1, 
+      price, customPrice, setName, 
+      isFoil, isSpecificVersion, isForTrade,
+      isTradeView, allowPriceEdit, 
+      onEditPrice, onToggleAttribute, 
+      readOnly, isWishlist,
+      onDelete, onIncrement, onDecrement, onMove
+  } = props;
+  
+  const [isFlipped, setIsFlipped] = useState(false);
+  const [isEditingPrice, setIsEditingPrice] = useState(false);
+  
+  const [tempPrice, setTempPrice] = useState(customPrice?.toString() || price?.toString() || "0");
+
+  useEffect(() => {
+    if (!isEditingPrice) {
+        const newVal = customPrice?.toString() || price?.toString() || "0";
+        setTempPrice(newVal);
+    }
+  }, [customPrice, price, isEditingPrice]);
+
+  const effectivePrice = customPrice !== undefined ? customPrice : (price || 0);
+
+  const handleSavePrice = () => {
+      if (onEditPrice) {
+          onEditPrice(parseFloat(tempPrice));
+          setIsEditingPrice(false);
+      }
+  };
+
+  const currentImage = isFlipped && imageBackUrl ? imageBackUrl : imageUrl;
+
+  // --- VUE LISTE COMPACTE (TRADE) ---
+  if (isTradeView) {
+      return (
+        <div className="flex items-center gap-3 bg-white dark:bg-gray-800 p-2 rounded-lg border border-gray-100 dark:border-gray-700">
+            <div className="w-10 h-14 bg-gray-200 rounded overflow-hidden flex-shrink-0 relative group cursor-pointer" onClick={() => setIsFlipped(!isFlipped)}>
+                 <img src={currentImage} className="w-full h-full object-cover" alt={name} />
+                 {isFoil && <div className="absolute top-0 right-0 bg-purple-600/80 text-white text-[8px] px-1 font-bold">✨</div>}
+            </div>
+            
+            <div className="flex-grow min-w-0">
+                <div className="flex items-center gap-2">
+                    <p className="font-bold text-sm truncate" title={name}>{name}</p>
+                    {isFoil && <span className="text-xs" title="Foil">✨</span>}
+                </div>
+                <div className="flex items-center gap-2 text-xs text-gray-500">
+                    <p className="truncate">{setName}</p>
+                    {isSpecificVersion && <span className="bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300 px-1 rounded text-[9px] border border-blue-200" title="Édition exacte requise">🔒 EXACT</span>}
+                </div>
+            </div>
+
+            <div className="text-right flex flex-col items-end">
+                {isEditingPrice ? (
+                    <div className="flex items-center gap-1">
+                        <input type="number" value={tempPrice} onChange={(e) => setTempPrice(e.target.value)} className="w-16 p-1 text-xs border rounded text-black" autoFocus />
+                        <button onClick={handleSavePrice} className="text-green-600 text-xs font-bold">OK</button>
+                    </div>
+                ) : (
+                    <div 
+                        className={`font-bold text-sm ${customPrice ? 'text-orange-600' : 'text-gray-700 dark:text-gray-300'} ${allowPriceEdit ? 'cursor-pointer hover:underline' : ''}`}
+                        onClick={() => { if (allowPriceEdit) { setTempPrice(effectivePrice.toString()); setIsEditingPrice(true); }}}
+                        title={customPrice ? "Prix personnalisé" : "Prix Scryfall"}
+                    >
+                        {effectivePrice.toFixed(2)} €
+                        {customPrice && <span className="text-[8px] align-top ml-0.5">*</span>}
+                    </div>
+                )}
+            </div>
+        </div>
+      );
+  }
+
+  // --- VUE NORMALE (GRILLE) ---
+  return (
+    <div className={`relative group flex flex-col bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden p-3 gap-2 border transition-colors h-full ${isFoil ? 'border-purple-300 dark:border-purple-800 shadow-purple-100 dark:shadow-none' : 'border-gray-100 dark:border-gray-700 hover:border-blue-300 dark:hover:border-blue-500'}`}>
+      
+      {/* IMAGE (Sans boutons flottants) */}
+      <div className="relative w-full aspect-[2.5/3.5] bg-gray-200 rounded-lg overflow-hidden shrink-0">
+        <img
+          src={currentImage || CARD_BACK_URL}
+          alt={name}
+          className="w-full h-full object-cover transition-transform duration-300"
+          onError={(e) => { e.currentTarget.src = CARD_BACK_URL; }}
+        />
+        {isFoil && <div className="absolute inset-0 bg-gradient-to-tr from-purple-500/20 to-transparent pointer-events-none mix-blend-overlay"></div>}
+
+        {imageBackUrl && (
+          <button onClick={() => setIsFlipped(!isFlipped)} className="absolute top-1/2 right-2 -translate-y-1/2 bg-black/50 hover:bg-black/80 text-white p-2 rounded-full backdrop-blur-sm transition-all shadow-lg border border-white/20 z-10 pointer-events-auto">
+            🔄
+          </button>
+        )}
+      </div>
+      
+      {/* --- INFO CARTE --- */}
+      <div className="flex-1 flex flex-col min-w-0">
+        <div className="flex justify-between items-start mb-1">
+            <h3 className="font-bold text-sm md:text-base truncate flex-grow" title={name}>{name}</h3>
+        </div>
+        
+        <p className="text-xs text-blue-600 dark:text-blue-400 truncate font-medium mb-2">{setName}</p>
+
+        {/* --- ZONE D'OPTIONS TEXTUELLES --- */}
+        <div className="flex flex-wrap gap-1.5 mb-2">
+            
+            {/* 1. TOGGLE FOIL */}
+            {onToggleAttribute ? (
+                <button 
+                    onClick={() => onToggleAttribute('isFoil', !!isFoil)}
+                    className={`text-[10px] px-2 py-0.5 rounded border transition-colors font-medium flex-1 text-center ${
+                        isFoil 
+                        ? 'bg-purple-100 text-purple-700 border-purple-200 hover:bg-purple-200 dark:bg-purple-900/30 dark:text-purple-300' 
+                        : 'bg-gray-50 text-gray-400 border-gray-200 hover:bg-gray-100 dark:bg-gray-800 dark:border-gray-600'
+                    }`}
+                >
+                    {isFoil ? '✨ Foil' : 'Normal'}
+                </button>
+            ) : isFoil && (
+                <span className="text-[10px] bg-purple-100 text-purple-700 px-2 py-0.5 rounded border border-purple-200 font-medium">✨ Foil</span>
+            )}
+
+            {/* 2. WISHLIST : VERSION & ACHAT */}
+            {isWishlist && (
+                <>
+                    {/* Version */}
+                    {onToggleAttribute && (
+                        <button 
+                            onClick={() => onToggleAttribute('isSpecificVersion', !!isSpecificVersion)}
+                            className={`text-[10px] px-2 py-0.5 rounded border transition-colors font-medium flex-1 text-center ${
+                                isSpecificVersion 
+                                ? 'bg-blue-100 text-blue-700 border-blue-200 hover:bg-blue-200 dark:bg-blue-900/30 dark:text-blue-300' 
+                                : 'bg-gray-50 text-gray-400 border-gray-200 hover:bg-gray-100 dark:bg-gray-800 dark:border-gray-600'
+                            }`}
+                            title="Exiger cette version exacte"
+                        >
+                            {isSpecificVersion ? '🔒 Exact' : 'Auto'}
+                        </button>
+                    )}
+                    {/* BOUTON J'AI ACHETÉ */}
+                    {!readOnly && onMove && (
+                        <button 
+                            onClick={onMove}
+                            className="text-[10px] px-2 py-0.5 rounded border transition-colors font-bold flex-1 text-center bg-green-50 text-green-700 border-green-200 hover:bg-green-100 dark:bg-green-900/30 dark:text-green-300 dark:border-green-800"
+                            title="Déplacer vers Collection"
+                        >
+                            J&apos;ai acheté
+                        </button>
+                    )}
+                </>
+            )}
+
+            {/* 3. COLLECTION : ÉCHANGE */}
+            {!isWishlist && (
+                onToggleAttribute ? (
+                    <button 
+                        onClick={() => onToggleAttribute('isForTrade', !!isForTrade)}
+                        className={`text-[10px] px-2 py-0.5 rounded border transition-colors font-medium flex-1 text-center ${
+                            isForTrade 
+                            ? 'bg-green-100 text-green-700 border-green-200 hover:bg-green-200 dark:bg-green-900/30 dark:text-green-300' 
+                            : 'bg-gray-50 text-gray-400 border-gray-200 hover:bg-gray-100 dark:bg-gray-800 dark:border-gray-600'
+                        }`}
+                        title="Disponible dans les échanges ?"
+                    >
+                        {isForTrade ? '🤝 Échange' : 'Privé'}
+                    </button>
+                ) : isForTrade && (
+                    <span className="text-[10px] bg-green-100 text-green-700 px-2 py-0.5 rounded border border-green-200 font-medium">🤝 Échange</span>
+                )
+            )}
+        </div>
+        
+        {/* --- FOOTER (Quantité & Prix) --- */}
+        <div className="mt-auto flex justify-between items-end border-t border-gray-100 dark:border-gray-700 pt-2">
+          
+          <div className="flex items-center gap-1.5">
+            {!readOnly && <button onClick={onDecrement} className="bg-gray-200 dark:bg-gray-700 w-6 h-6 rounded hover:bg-gray-300 font-bold flex items-center justify-center text-sm">-</button>}
+            <span className={`font-mono text-base ${readOnly ? 'font-bold text-gray-800 dark:text-white' : 'w-4 text-center'}`}>{readOnly && "x"}{quantity}</span>
+            {!readOnly && <button onClick={onIncrement} className="bg-blue-100 dark:bg-blue-900 text-blue-600 font-bold w-6 h-6 rounded hover:bg-blue-200 flex items-center justify-center text-sm">+</button>}
+          </div>
+          
+          <div className="text-right cursor-help" title="Prix unitaire Scryfall ou Perso">
+             <p className="text-[10px] text-gray-400">Unit: {effectivePrice.toFixed(2)}€</p>
+             <p className={`font-bold text-sm ${customPrice ? 'text-orange-600' : 'text-gray-700 dark:text-gray-200'}`}>
+                 {(effectivePrice * quantity).toFixed(2)} €
+             </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+</file>
+
 <file path="app/page.tsx">
 // app/page.tsx
 'use client'; 
@@ -3856,6 +3800,8 @@ type ScryfallCard = {
   image_uris?: { small: string; normal: string; };
   card_faces?: { image_uris?: { small: string; normal: string; }; }[];
   prices?: { eur?: string; };
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  [key: string]: any; // Permet de stocker tout le reste
 };
 
 const CARD_BACK_URL = "https://cards.scryfall.io/large/front/a/6/a6984342-f723-4e80-8e69-902d287a915f.jpg";
@@ -3873,7 +3819,6 @@ const CardGroup = ({ name, versions, targetListId }: { name: string, versions: S
   const { user } = useAuth();
   const [selectedCard, setSelectedCard] = useState<ScryfallCard>(versions[0]);
   
-  // NOUVEAUX ÉTATS LOCAUX POUR LES OPTIONS
   const [isFoil, setIsFoil] = useState(false);
   const [isSpecificVersion, setIsSpecificVersion] = useState(false);
 
@@ -3907,9 +3852,10 @@ const CardGroup = ({ name, versions, targetListId }: { name: string, versions: S
         await updateDoc(wishlistRef, { 
           quantity: increment(1),
           price: priceNumber,
-          // On met à jour les préférences si elles changent
           isFoil: isFoil,
-          isSpecificVersion: isSpecificVersion
+          isSpecificVersion: isSpecificVersion,
+          // Mise à jour de la data fraîche
+          scryfallData: card 
         });
         toast.success(`+1 exemplaire (${card.set_name})`);
       } else {
@@ -3921,9 +3867,10 @@ const CardGroup = ({ name, versions, targetListId }: { name: string, versions: S
           setName: card.set_name,
           setCode: card.set,
           addedAt: new Date(),
-          // Sauvegarde des préférences
           isFoil: isFoil,
-          isSpecificVersion: isSpecificVersion
+          isSpecificVersion: isSpecificVersion,
+          // SAUVEGARDE DE TOUTES LES DONNÉES
+          scryfallData: card 
         });
         toast.success(`Ajoutée : ${card.set_name}`);
       }
@@ -3954,7 +3901,6 @@ const CardGroup = ({ name, versions, targetListId }: { name: string, versions: S
           ))}
         </select>
 
-        {/* --- OPTIONS DE WISHLIST --- */}
         {user && (
             <div className="flex justify-between items-center text-xs text-gray-600 dark:text-gray-300 px-1">
                 <label className="flex items-center gap-1 cursor-pointer select-none">
@@ -4218,7 +4164,6 @@ import { db } from '@/lib/firebase';
 import { doc, writeBatch, increment } from 'firebase/firestore';
 import toast from 'react-hot-toast';
 
-// --- TYPES ---
 type ManaboxRow = {
   "Binder Name": string;
   "Name": string;
@@ -4247,6 +4192,8 @@ type ScryfallCard = {
     name: string;
     image_uris?: { normal?: string } 
   }>;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  [key: string]: any;
 };
 
 type ExistingCard = {
@@ -4271,15 +4218,12 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
   
   const [data, setData] = useState<ManaboxRow[]>([]);
   const [columns, setColumns] = useState<string[]>([]);
-  
-  // On a retiré 'success' des étapes
   const [step, setStep] = useState<'upload' | 'preview' | 'importing'>('upload');
   
   const [progress, setProgress] = useState(0);
   const [statusMsg, setStatusMsg] = useState('');
   const [importMode, setImportMode] = useState<'add' | 'sync'>('add'); 
 
-  // Map pour accès rapide
   const existingMap = useMemo(() => {
     const map = new Map<string, ExistingCard>();
     currentCollection.forEach(card => {
@@ -4289,7 +4233,6 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
     return map;
   }, [currentCollection]);
 
-  // --- FERMETURE ---
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (isOpen && e.key === 'Escape' && step !== 'importing') handleClose();
@@ -4301,7 +4244,6 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
   const handleClose = () => {
     if (step === 'importing') return; 
     onClose();
-    // Reset différé
     setTimeout(() => {
       setStep('upload');
       setData([]);
@@ -4316,7 +4258,6 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
 
   if (!isOpen) return null;
 
-  // --- PARSERS ---
   const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -4402,7 +4343,6 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
     return { name, imageUrl, imageBackUrl };
   };
 
-  // --- LOGIQUE IMPORTATION ---
   const startImport = async () => {
     if (!user) return;
     setStep('importing');
@@ -4410,7 +4350,7 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
 
     const rowsToFetch: ManaboxRow[] = [];
     const rowsToUpdateDirectly: ManaboxRow[] = [];
-    let skippedCount = 0; // On garde le compte en interne juste pour le log si besoin
+    let skippedCount = 0; 
 
     data.forEach(row => {
         const scryfallId = row["Scryfall ID"];
@@ -4435,9 +4375,8 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
     });
 
     let processedCount = skippedCount; 
-    let successCount = 0; // Nombre d'écritures réelles
+    let successCount = 0; 
 
-    // 1. UPDATES RAPIDES
     if (rowsToUpdateDirectly.length > 0) {
         setStatusMsg("Mise à jour rapide...");
         const updateChunks = chunkArray(rowsToUpdateDirectly, 400);
@@ -4469,7 +4408,6 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
         }
     }
 
-    // 2. SCRYFALL + VERIF SECONDAIRE
     if (rowsToFetch.length > 0) {
         setStatusMsg("Identification des cartes...");
         const fetchChunks = chunkArray(rowsToFetch, 75);
@@ -4502,7 +4440,6 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
                         const csvQty = parseInt(matchingRow["Quantity"]);
                         const csvFoil = matchingRow["Foil"] === "true";
                         
-                        // Verif secondaire
                         const existing = existingMap.get(scryfallData.id);
                         let shouldWrite = true;
 
@@ -4524,7 +4461,9 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
                                 scryfallId: scryfallData.id,
                                 price: parseFloat(scryfallData.prices?.eur || "0"),
                                 foil: csvFoil,
-                                importedAt: new Date()
+                                importedAt: new Date(),
+                                // --- SAUVEGARDE COMPLÈTE ICI ---
+                                scryfallData: scryfallData
                             };
 
                             if (importMode === 'add') {
@@ -4551,8 +4490,6 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
         }
     }
 
-    // --- FIN DE L'OPÉRATION ---
-    // On ferme directement et on notifie
     toast.success(`${successCount} cartes synchronisée(s) !`, { duration: 4000 });
     handleClose();
   };
@@ -4566,7 +4503,6 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
         className="bg-white dark:bg-gray-800 rounded-xl p-6 max-w-5xl w-full shadow-2xl border border-gray-100 dark:border-gray-700 flex flex-col max-h-[90vh]"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* HEADER */}
         <div className="flex-none flex justify-between items-center mb-4 border-b border-gray-100 dark:border-gray-700 pb-3">
           <h2 className="text-xl font-bold text-gray-900 dark:text-white">
             Ajouter des cartes
@@ -4576,7 +4512,6 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
           )}
         </div>
 
-        {/* CONTENT */}
         <div className="flex-grow overflow-hidden flex flex-col min-h-0">
             
             {step === 'upload' && (

@@ -25,11 +25,7 @@ export function useTradeTransaction() {
 
     try {
         await runTransaction(db, async (transaction) => {
-            // ============================================================
-            // 1. PHASE DE LECTURE (READS) - ON NE MODIFIE RIEN ICI
-            // ============================================================
-            
-            // --- A. MOI : Je donne (Je dois vérifier que j'ai toujours les cartes) ---
+            // 1. LECTURES
             const myGiveOps = [];
             for (const card of myCardsToGive) {
                 const ref = getRef(user.uid, 'collection', card.id);
@@ -38,31 +34,23 @@ export function useTradeTransaction() {
                 myGiveOps.push({ ref, snap, card });
             }
 
-            // --- B. MOI : Je reçois ---
             const myReceiveOps = [];
             for (const card of cardsToReceive) {
                 const colRef = getRef(user.uid, 'collection', card.id);
                 const wishRef = getRef(user.uid, 'wishlist', card.id);
-                
                 const colSnap = await transaction.get(colRef);
                 const wishSnap = await transaction.get(wishRef);
-                
                 myReceiveOps.push({ colRef, wishRef, colSnap, wishSnap, card });
             }
 
-            // --- C. PARTENAIRE (Si existe) ---
             const partnerGiveOps = [];
             const partnerReceiveOps = [];
-
             if (partnerUid) {
-                // Il perd ce qu'il me donne
                 for (const card of cardsToReceive) {
                     const ref = getRef(partnerUid, 'collection', card.id);
                     const snap = await transaction.get(ref); 
                     partnerGiveOps.push({ ref, snap, card });
                 }
-
-                // Il gagne ce que je donne
                 for (const card of myCardsToGive) {
                     const colRef = getRef(partnerUid, 'collection', card.id);
                     const wishRef = getRef(partnerUid, 'wishlist', card.id);
@@ -72,11 +60,9 @@ export function useTradeTransaction() {
                 }
             }
 
-            // ============================================================
-            // 2. PHASE D'ÉCRITURE (WRITES) - ON APPLIQUE TOUT MAINTENANT
-            // ============================================================
+            // 2. ÉCRITURES
 
-            // --- A. MOI : Je perds ---
+            // A. MOI : Je perds
             for (const { ref, snap, card } of myGiveOps) {
                 const currentQty = snap.data()?.quantity || 0;
                 if (currentQty <= card.quantity) {
@@ -86,7 +72,7 @@ export function useTradeTransaction() {
                 }
             }
 
-            // --- B. MOI : Je gagne ---
+            // B. MOI : Je gagne
             for (const { colRef, wishRef, colSnap, wishSnap, card } of myReceiveOps) {
                 if (colSnap.exists()) {
                     transaction.update(colRef, { quantity: increment(card.quantity) });
@@ -100,7 +86,9 @@ export function useTradeTransaction() {
                         quantity: card.quantity,
                         isFoil: card.isFoil || false,
                         isSpecificVersion: card.isSpecificVersion || false,
-                        addedAt: serverTimestamp()
+                        addedAt: serverTimestamp(),
+                        // TRANSFERT DE LA DATA SCRYFALL
+                        scryfallData: card.scryfallData || null 
                     });
                 }
                 if (wishSnap.exists()) {
@@ -108,13 +96,11 @@ export function useTradeTransaction() {
                 }
             }
 
-            // --- C. PARTENAIRE ---
+            // C. PARTENAIRE
             if (partnerUid) {
-                // Il perd
                 for (const { ref, card } of partnerGiveOps) {
                     transaction.update(ref, { quantity: increment(-card.quantity) });
                 }
-                // Il gagne
                 for (const { colRef, wishRef, colSnap, wishSnap, card } of partnerReceiveOps) {
                      if (colSnap.exists()) {
                          transaction.update(colRef, { quantity: increment(card.quantity) });
@@ -123,7 +109,9 @@ export function useTradeTransaction() {
                              ...card, 
                              quantity: card.quantity,
                              addedAt: serverTimestamp(),
-                             wishlistId: null
+                             wishlistId: null,
+                             // TRANSFERT DE LA DATA SCRYFALL
+                             scryfallData: card.scryfallData || null
                          });
                      }
                      if (wishSnap.exists()) {

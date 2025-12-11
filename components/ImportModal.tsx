@@ -8,7 +8,6 @@ import { db } from '@/lib/firebase';
 import { doc, writeBatch, increment } from 'firebase/firestore';
 import toast from 'react-hot-toast';
 
-// --- TYPES ---
 type ManaboxRow = {
   "Binder Name": string;
   "Name": string;
@@ -37,6 +36,8 @@ type ScryfallCard = {
     name: string;
     image_uris?: { normal?: string } 
   }>;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  [key: string]: any;
 };
 
 type ExistingCard = {
@@ -61,15 +62,12 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
   
   const [data, setData] = useState<ManaboxRow[]>([]);
   const [columns, setColumns] = useState<string[]>([]);
-  
-  // On a retiré 'success' des étapes
   const [step, setStep] = useState<'upload' | 'preview' | 'importing'>('upload');
   
   const [progress, setProgress] = useState(0);
   const [statusMsg, setStatusMsg] = useState('');
   const [importMode, setImportMode] = useState<'add' | 'sync'>('add'); 
 
-  // Map pour accès rapide
   const existingMap = useMemo(() => {
     const map = new Map<string, ExistingCard>();
     currentCollection.forEach(card => {
@@ -79,7 +77,6 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
     return map;
   }, [currentCollection]);
 
-  // --- FERMETURE ---
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (isOpen && e.key === 'Escape' && step !== 'importing') handleClose();
@@ -91,7 +88,6 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
   const handleClose = () => {
     if (step === 'importing') return; 
     onClose();
-    // Reset différé
     setTimeout(() => {
       setStep('upload');
       setData([]);
@@ -106,7 +102,6 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
 
   if (!isOpen) return null;
 
-  // --- PARSERS ---
   const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -192,7 +187,6 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
     return { name, imageUrl, imageBackUrl };
   };
 
-  // --- LOGIQUE IMPORTATION ---
   const startImport = async () => {
     if (!user) return;
     setStep('importing');
@@ -200,7 +194,7 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
 
     const rowsToFetch: ManaboxRow[] = [];
     const rowsToUpdateDirectly: ManaboxRow[] = [];
-    let skippedCount = 0; // On garde le compte en interne juste pour le log si besoin
+    let skippedCount = 0; 
 
     data.forEach(row => {
         const scryfallId = row["Scryfall ID"];
@@ -225,9 +219,8 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
     });
 
     let processedCount = skippedCount; 
-    let successCount = 0; // Nombre d'écritures réelles
+    let successCount = 0; 
 
-    // 1. UPDATES RAPIDES
     if (rowsToUpdateDirectly.length > 0) {
         setStatusMsg("Mise à jour rapide...");
         const updateChunks = chunkArray(rowsToUpdateDirectly, 400);
@@ -259,7 +252,6 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
         }
     }
 
-    // 2. SCRYFALL + VERIF SECONDAIRE
     if (rowsToFetch.length > 0) {
         setStatusMsg("Identification des cartes...");
         const fetchChunks = chunkArray(rowsToFetch, 75);
@@ -292,7 +284,6 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
                         const csvQty = parseInt(matchingRow["Quantity"]);
                         const csvFoil = matchingRow["Foil"] === "true";
                         
-                        // Verif secondaire
                         const existing = existingMap.get(scryfallData.id);
                         let shouldWrite = true;
 
@@ -314,7 +305,9 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
                                 scryfallId: scryfallData.id,
                                 price: parseFloat(scryfallData.prices?.eur || "0"),
                                 foil: csvFoil,
-                                importedAt: new Date()
+                                importedAt: new Date(),
+                                // --- SAUVEGARDE COMPLÈTE ICI ---
+                                scryfallData: scryfallData
                             };
 
                             if (importMode === 'add') {
@@ -341,8 +334,6 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
         }
     }
 
-    // --- FIN DE L'OPÉRATION ---
-    // On ferme directement et on notifie
     toast.success(`${successCount} cartes synchronisée(s) !`, { duration: 4000 });
     handleClose();
   };
@@ -356,7 +347,6 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
         className="bg-white dark:bg-gray-800 rounded-xl p-6 max-w-5xl w-full shadow-2xl border border-gray-100 dark:border-gray-700 flex flex-col max-h-[90vh]"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* HEADER */}
         <div className="flex-none flex justify-between items-center mb-4 border-b border-gray-100 dark:border-gray-700 pb-3">
           <h2 className="text-xl font-bold text-gray-900 dark:text-white">
             Ajouter des cartes
@@ -366,7 +356,6 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
           )}
         </div>
 
-        {/* CONTENT */}
         <div className="flex-grow overflow-hidden flex flex-col min-h-0">
             
             {step === 'upload' && (

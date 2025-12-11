@@ -20,9 +20,11 @@ export type CardType = {
   // --- OPTIONS ---
   isFoil?: boolean;             
   isSpecificVersion?: boolean;
-  
-  // --- NOUVEAU : CLASSEUR D'ÉCHANGE ---
   isForTrade?: boolean; 
+  
+  // --- NOUVEAU : DONNÉES BRUTES SCRYFALL ---
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  scryfallData?: any;
 };
 
 export function useCardCollection(
@@ -85,7 +87,6 @@ export function useCardCollection(
       }
   };
 
-  // NOUVEAU : On ajoute 'isForTrade' aux champs modifiables
   const toggleAttribute = async (
       cardId: string, 
       field: 'isFoil' | 'isSpecificVersion' | 'isForTrade', 
@@ -95,7 +96,6 @@ export function useCardCollection(
       const ref = getDocRef(cardId);
       if (ref) {
           await updateDoc(ref, { [field]: !currentValue });
-          // Pas de toast pour fluidifier l'UI lors des clics répétés
       }
   };
 
