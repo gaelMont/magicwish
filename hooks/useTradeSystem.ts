@@ -8,7 +8,8 @@ import {
 } from 'firebase/firestore';
 import { useAuth } from '@/lib/AuthContext';
 import { CardType } from './useCardCollection';
-import { useTradeTransaction } from './useTradeTransaction';
+// ON IMPORTE L'ACTION SERVEUR
+import { executeServerTrade } from '@/app/actions/trade'; 
 import toast from 'react-hot-toast';
 
 export type TradeStatus = 'pending' | 'completed' | 'rejected' | 'cancelled';
@@ -25,19 +26,13 @@ export type TradeRequest = {
   createdAt: Timestamp;
 };
 
-// --- UTILITAIRE DE NETTOYAGE ---
-// Firestore déteste les valeurs "undefined". On les convertit en JSON "propre".
+// Utilitaire de nettoyage pour Firestore
 const cleanCardsForFirestore = (cards: CardType[]) => {
     return cards.map(card => {
-        // On crée une copie superficielle
         const clean = { ...card };
-        // On parcourt toutes les clés
         Object.keys(clean).forEach(key => {
             const k = key as keyof CardType;
-            // Si une valeur est undefined, on supprime la clé
-            if (clean[k] === undefined) {
-                delete clean[k];
-            }
+            if (clean[k] === undefined) delete clean[k];
         });
         return clean;
     });
@@ -45,11 +40,11 @@ const cleanCardsForFirestore = (cards: CardType[]) => {
 
 export function useTradeSystem() {
   const { user, username } = useAuth();
-  const { executeTrade, isProcessing: isTransactionProcessing } = useTradeTransaction();
   
   const [incomingTrades, setIncomingTrades] = useState<TradeRequest[]>([]);
   const [outgoingTrades, setOutgoingTrades] = useState<TradeRequest[]>([]);
   const [loading, setLoading] = useState(true);
+  const [isProcessing, setIsProcessing] = useState(false); // État local
 
   // 1. Écouter les échanges
   useEffect(() => {
@@ -81,13 +76,12 @@ export function useTradeSystem() {
     return () => { unsubIn(); unsubOut(); };
   }, [user]);
 
-  // 2. Proposer (CORRIGÉ)
+  // 2. Proposer
   const proposeTrade = async (receiverUid: string, receiverName: string, toGive: CardType[], toReceive: CardType[]) => {
     if (!user) return;
     const toastId = toast.loading("Envoi de la proposition...");
 
     try {
-      // NETTOYAGE DES DONNÉES AVANT ENVOI
       const cleanGiven = cleanCardsForFirestore(toGive);
       const cleanReceived = cleanCardsForFirestore(toReceive);
 
@@ -96,33 +90,51 @@ export function useTradeSystem() {
         senderName: username || user.displayName || 'Inconnu',
         receiverUid,
         receiverName,
-        itemsGiven: cleanGiven,    // <--- Utilisation des versions nettoyées
-        itemsReceived: cleanReceived, // <--- Utilisation des versions nettoyées
+        itemsGiven: cleanGiven,    
+        itemsReceived: cleanReceived, 
         status: 'pending',
         createdAt: serverTimestamp()
       });
       toast.success("Proposition envoyée !", { id: toastId });
       return true;
     } catch (e) {
-      console.error("Erreur Firestore:", e); // Ajout d'un log plus clair
-      toast.error("Erreur envoi (voir console)", { id: toastId });
+      console.error("Erreur Firestore:", e);
+      toast.error("Erreur envoi", { id: toastId });
       return false;
     }
   };
 
-  // 3. Accepter
+  // 3. Accepter (C'EST ICI QUE C'ÉTAIT FAUX DANS TON FICHIER ACTUEL)
   const acceptTrade = async (trade: TradeRequest) => {
     if (!user) return;
     
-    // Inversion Sender/Receiver pour l'exécution
-    const success = await executeTrade(
-        trade.itemsReceived, 
-        trade.itemsGiven,    
-        trade.senderUid      
-    );
+    setIsProcessing(true);
+    const toastId = toast.loading("Validation sécurisée en cours...");
 
-    if (success) {
-      await updateDoc(doc(db, 'trades', trade.id), { status: 'completed' });
+    try {
+        // APPEL DE L'ACTION SERVEUR (Admin Mode)
+        // Note: trade.itemsGiven = Ce que l'expéditeur donne
+        // Note: trade.itemsReceived = Ce que l'expéditeur reçoit
+        const result = await executeServerTrade(
+            trade.senderUid,
+            user.uid, // Je suis le receveur
+            trade.itemsGiven,
+            trade.itemsReceived
+        );
+
+        if (result.success) {
+            // Si le serveur dit OK, on marque l'échange comme fini
+            await updateDoc(doc(db, 'trades', trade.id), { status: 'completed' });
+            toast.success("Échange terminé avec succès !", { id: toastId });
+        } else {
+            throw new Error(result.error || "Erreur serveur inconnue");
+        }
+
+    } catch (error: any) { 
+        console.error("Erreur Accept Trade:", error);
+        toast.error(error.message || "Échec de l'échange", { id: toastId });
+    } finally {
+        setIsProcessing(false);
     }
   };
 
@@ -142,6 +154,6 @@ export function useTradeSystem() {
   return { 
     incomingTrades, outgoingTrades, loading, 
     proposeTrade, acceptTrade, rejectTrade, cancelTrade,
-    isProcessing: isTransactionProcessing 
+    isProcessing 
   };
 }

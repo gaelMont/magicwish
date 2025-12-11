@@ -26,9 +26,10 @@ export function useFriends() {
   // Écouter les amis et les demandes en temps réel
   useEffect(() => {
     if (!user) {
-      setFriends([]);
-      setRequestsReceived([]);
-      setLoading(false);
+      // CORRECTION : On ne set que si nécessaire pour éviter la boucle
+      setFriends(prev => prev.length > 0 ? [] : prev);
+      setRequestsReceived(prev => prev.length > 0 ? [] : prev);
+      setLoading(prev => prev ? false : prev);
       return;
     }
 
@@ -172,7 +173,7 @@ export function useFriends() {
     searchUsers, 
     sendFriendRequest, 
     acceptRequest, 
-    declineRequest,
+    declineRequest, 
     removeFriend
   };
 }

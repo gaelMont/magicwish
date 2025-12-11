@@ -41,6 +41,7 @@ The content is organized as follows:
 
 <directory_structure>
 .gitignore
+app/actions/trade.ts
 app/api/search/route.ts
 app/collection/page.tsx
 app/contacts/page.tsx
@@ -49,12 +50,14 @@ app/globals.css
 app/layout.tsx
 app/login/page.tsx
 app/page.tsx
+app/search/page.tsx
 app/trades/manual/page.tsx
 app/trades/new/[uid]/page.tsx
 app/trades/page.tsx
 app/user/[uid]/page.tsx
 app/wishlist/page.tsx
 components/CardVersionPickerModal.tsx
+components/CollectionToolsModal.tsx
 components/ConfirmModal.tsx
 components/DeleteAllButton.tsx
 components/Header.tsx
@@ -72,6 +75,7 @@ hooks/useTradeTransaction.ts
 hooks/useWishlists.ts
 lib/AuthContext.tsx
 lib/cardUtils.ts
+lib/firebase-admin.ts
 lib/firebase.ts
 next.config.ts
 package.json
@@ -87,6 +91,356 @@ tsconfig.json
 
 <files>
 This section contains the contents of the repository's files.
+
+<file path="app/actions/trade.ts">
+// app/actions/trade.ts
+'use server';
+
+import { getAdminFirestore } from '@/lib/firebase-admin';
+import { FieldValue } from 'firebase-admin/firestore';
+import { CardType } from '@/hooks/useCardCollection';
+
+export async function executeServerTrade(
+    senderUid: string,
+    receiverUid: string, // On force le string ici, pas de null
+    itemsGiven: CardType[],
+    itemsReceived: CardType[]
+) {
+    const db = getAdminFirestore();
+
+    try {
+        await db.runTransaction(async (t) => {
+            // --- 1. SENDER DONNE (Suppression/Décrémentation) ---
+            for (const card of itemsGiven) {
+                const ref = db.doc(`users/${senderUid}/collection/${card.id}`);
+                const docSnap = await t.get(ref);
+                if (!docSnap.exists || (docSnap.data()?.quantity || 0) < card.quantity) {
+                    throw new Error(`Erreur: ${card.name} manquante chez l'expéditeur.`);
+                }
+                // Si quantité exacte, on supprime, sinon on décrémente
+                if (docSnap.data()?.quantity === card.quantity) {
+                    t.delete(ref);
+                } else {
+                    t.update(ref, { quantity: FieldValue.increment(-card.quantity) });
+                }
+            }
+
+            // --- 2. RECEIVER DONNE (Suppression/Décrémentation) ---
+            for (const card of itemsReceived) {
+                const ref = db.doc(`users/${receiverUid}/collection/${card.id}`);
+                const docSnap = await t.get(ref);
+                if (!docSnap.exists || (docSnap.data()?.quantity || 0) < card.quantity) {
+                    throw new Error(`Erreur: ${card.name} manquante chez le partenaire.`);
+                }
+                if (docSnap.data()?.quantity === card.quantity) {
+                    t.delete(ref);
+                } else {
+                    t.update(ref, { quantity: FieldValue.increment(-card.quantity) });
+                }
+            }
+
+            // --- 3. SENDER REÇOIT (Ajout) ---
+            for (const card of itemsReceived) {
+                const colRef = db.doc(`users/${senderUid}/collection/${card.id}`);
+                const wishRef = db.doc(`users/${senderUid}/wishlist/${card.id}`);
+                
+                // Astuce Admin: set({ ... }, { merge: true }) permet de créer ou update
+                // Mais pour incrémenter proprement, on fait un get ou un increment
+                // Ici version simple : Set + Increment
+                t.set(colRef, { 
+                    name: card.name,
+                    imageUrl: card.imageUrl,
+                    setName: card.setName || '',
+                    setCode: card.setCode || '',
+                    price: card.price || 0,
+                    isFoil: card.isFoil || false,
+                    addedAt: FieldValue.serverTimestamp()
+                }, { merge: true });
+                t.update(colRef, { quantity: FieldValue.increment(card.quantity) });
+                
+                // Nettoyage wishlist
+                t.delete(wishRef);
+            }
+
+            // --- 4. RECEIVER REÇOIT (Ajout) ---
+            for (const card of itemsGiven) {
+                const colRef = db.doc(`users/${receiverUid}/collection/${card.id}`);
+                const wishRef = db.doc(`users/${receiverUid}/wishlist/${card.id}`);
+                
+                t.set(colRef, { 
+                    name: card.name,
+                    imageUrl: card.imageUrl,
+                    setName: card.setName || '',
+                    setCode: card.setCode || '',
+                    price: card.price || 0,
+                    isFoil: card.isFoil || false,
+                    addedAt: FieldValue.serverTimestamp()
+                }, { merge: true });
+                t.update(colRef, { quantity: FieldValue.increment(card.quantity) });
+                
+                t.delete(wishRef);
+            }
+        });
+
+        return { success: true };
+
+    } catch (error: unknown) { // 1. On utilise 'unknown' au lieu de 'any'
+        console.error("Trade Error:", error);
+        
+        // 2. On vérifie le type de l'erreur pour extraire le message proprement
+        let errorMessage = "Une erreur inconnue est survenue";
+        
+        if (error instanceof Error) {
+            errorMessage = error.message;
+        } else if (typeof error === "string") {
+            errorMessage = error;
+        }
+
+        return { success: false, error: errorMessage };
+    }
+}
+</file>
+
+<file path="app/search/page.tsx">
+// app/search/page.tsx
+'use client';
+
+import { useState, useMemo } from 'react';
+import { useAuth } from '@/lib/AuthContext';
+import { db } from '@/lib/firebase';
+import { doc, setDoc, increment, serverTimestamp } from 'firebase/firestore';
+import { ScryfallRawData } from '@/lib/cardUtils';
+import { CardType } from '@/hooks/useCardCollection';
+import CardVersionPickerModal from '@/components/CardVersionPickerModal';
+import toast from 'react-hot-toast';
+
+export default function SearchPage() {
+  const { user } = useAuth();
+  
+  // États de recherche
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState<ScryfallRawData[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [hasSearched, setHasSearched] = useState(false);
+
+  // États du Modal
+  const [modalOpen, setModalOpen] = useState(false);
+  const [selectedBaseCard, setSelectedBaseCard] = useState<ScryfallRawData | null>(null);
+  const [targetDestination, setTargetDestination] = useState<'collection' | 'wishlist'>('collection');
+
+  // --- 1. FONCTION DE RECHERCHE (API Next.js) ---
+  const handleSearch = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!query.trim()) return;
+
+    setIsSearching(true);
+    setHasSearched(true);
+    setResults([]);
+
+    try {
+        const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
+        const data = await res.json();
+        
+        if (data.data) {
+            setResults(data.data);
+        } else {
+            toast.error("Aucune carte trouvée.");
+        }
+    } catch (error) {
+        console.error(error);
+        toast.error("Erreur de recherche.");
+    } finally {
+        setIsSearching(false);
+    }
+  };
+
+  // --- 2. OUVERTURE DU MODAL ---
+  const openPicker = (card: ScryfallRawData, destination: 'collection' | 'wishlist') => {
+      setSelectedBaseCard(card);
+      setTargetDestination(destination);
+      setModalOpen(true);
+  };
+
+  // --- 3. SAUVEGARDE EN BASE ---
+  const handleConfirmAdd = async (card: CardType) => {
+      if (!user) return;
+
+      const toastId = toast.loading(`Ajout à la ${targetDestination === 'collection' ? 'Collection' : 'Wishlist'}...`);
+      
+      try {
+          // Chemin Firestore selon la destination
+          const collectionPath = targetDestination === 'collection' ? 'collection' : 'wishlist';
+          const cardRef = doc(db, 'users', user.uid, collectionPath, card.id);
+
+          // Construction de l'objet à sauvegarder
+          const dataToSave = {
+              ...card,
+              addedAt: serverTimestamp(),
+              // Si c'est wishlist, on s'assure que ces champs sont cohérents
+              wishlistId: targetDestination === 'wishlist' ? 'default' : null, 
+              isForTrade: false // Par défaut, on ne met pas en trade immédiatement
+          };
+
+          // Utilisation de setDoc avec { merge: true } pour incrémenter si existe déjà
+          await setDoc(cardRef, {
+              ...dataToSave,
+              quantity: increment(card.quantity) // Si existe, on ajoute la quantité choisie
+          }, { merge: true });
+
+          toast.success(`Ajouté avec succès !`, { id: toastId });
+
+      } catch (error) {
+          console.error(error);
+          toast.error("Erreur lors de l'ajout", { id: toastId });
+      }
+  };
+
+  // Filtre visuel pour éviter les doublons de noms dans les résultats initiaux
+  const uniqueResults = useMemo(() => {
+    const seen = new Set();
+    return results.filter(c => {
+        const name = c.name.split(' // ')[0];
+        if (seen.has(name)) return false;
+        seen.add(name);
+        return true;
+    });
+  }, [results]);
+
+  return (
+    <main className="container mx-auto p-4 max-w-5xl min-h-[85vh]">
+      
+      {/* HEADER */}
+      <div className="text-center mb-8 pt-4">
+          <h1 className="text-3xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent mb-2">
+              🔍 Centre de Recherche
+          </h1>
+          <p className="text-gray-500">
+              Trouvez n&apos;importe quelle carte et ajoutez-la à votre Collection ou votre Wishlist.
+          </p>
+      </div>
+
+      {/* BARRE DE RECHERCHE */}
+      <div className="max-w-2xl mx-auto mb-10 sticky top-4 z-20">
+          <form onSubmit={handleSearch} className="relative shadow-lg rounded-full">
+              <input 
+                  type="text" 
+                  className="w-full p-4 pl-6 pr-14 rounded-full border-2 border-transparent bg-white dark:bg-gray-800 dark:text-white focus:border-blue-500 outline-none transition text-lg"
+                  placeholder="Nom de la carte (ex: Black Lotus, Sol Ring...)"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  autoFocus
+              />
+              <button 
+                  type="submit"
+                  disabled={isSearching || !query.trim()}
+                  className="absolute right-2 top-2 bottom-2 bg-blue-600 hover:bg-blue-700 text-white rounded-full w-12 flex items-center justify-center transition disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                  {isSearching ? '...' : '🔎'}
+              </button>
+          </form>
+      </div>
+
+      {/* RÉSULTATS */}
+      {isSearching ? (
+          <div className="text-center py-20">
+              <div className="inline-block w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mb-4"></div>
+              <p className="text-gray-400">Interrogation de Scryfall...</p>
+          </div>
+      ) : uniqueResults.length > 0 ? (
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+              {uniqueResults.map((card) => (
+                  <div key={card.id} className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden flex flex-col group hover:shadow-md transition">
+                      {/* Image */}
+                      <div className="relative aspect-[2.5/3.5] bg-gray-200 overflow-hidden">
+                          {card.image_uris?.normal ? (
+                              <img src={card.image_uris.normal} alt={card.name} className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110" loading="lazy" />
+                          ) : (
+                             <div className="flex items-center justify-center h-full text-gray-400 text-xs">Pas d&apos;image</div>
+                          )}
+                          
+                          {/* Overlay au survol (Desktop) ou toujours visible (Mobile) */}
+                          <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center gap-3 p-4">
+                              <button 
+                                  onClick={() => openPicker(card, 'collection')}
+                                  className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 rounded-lg text-sm shadow-lg transform translate-y-4 group-hover:translate-y-0 transition-transform duration-300"
+                              >
+                                  + Collection
+                              </button>
+                              <button 
+                                  onClick={() => openPicker(card, 'wishlist')}
+                                  className="w-full bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 rounded-lg text-sm shadow-lg transform translate-y-4 group-hover:translate-y-0 transition-transform duration-300 delay-75"
+                              >
+                                  + Wishlist
+                              </button>
+                          </div>
+                      </div>
+
+                      {/* Info Rapide */}
+                      <div className="p-3">
+                          <h3 className="font-bold text-gray-900 dark:text-white truncate" title={card.name}>{card.name}</h3>
+                          <p className="text-xs text-gray-500">{card.set_name}</p>
+                      </div>
+                  </div>
+              ))}
+          </div>
+      ) : hasSearched ? (
+          <div className="text-center py-20 bg-gray-50 dark:bg-gray-800/50 rounded-2xl border-2 border-dashed border-gray-200 dark:border-gray-700">
+              <p className="text-xl text-gray-500">Aucun résultat trouvé pour &quot;{query}&quot;.</p>
+              <p className="text-sm text-gray-400 mt-2">Essayez le nom anglais exact (ex: &quot;Swords to Plowshares&quot;).</p>
+          </div>
+      ) : (
+          // État vide initial (Suggestions)
+          <div className="grid md:grid-cols-2 gap-4 max-w-3xl mx-auto opacity-50 hover:opacity-100 transition-opacity">
+               <div className="p-6 border-2 border-dashed border-gray-200 dark:border-gray-700 rounded-xl text-center">
+                   <span className="text-4xl mb-2 block">📚</span>
+                   <h3 className="font-bold">Compléter ma Collection</h3>
+                   <p className="text-sm text-gray-500">Recherchez vos cartes physiques pour les ajouter à votre inventaire numérique.</p>
+               </div>
+               <div className="p-6 border-2 border-dashed border-gray-200 dark:border-gray-700 rounded-xl text-center">
+                   <span className="text-4xl mb-2 block">✨</span>
+                   <h3 className="font-bold">Remplir ma Wishlist</h3>
+                   <p className="text-sm text-gray-500">Trouvez les cartes qui vous manquent pour permettre au système de trouver des échanges.</p>
+               </div>
+          </div>
+      )}
+
+      {/* MODALE DE SÉLECTION */}
+      <CardVersionPickerModal 
+          isOpen={modalOpen}
+          onClose={() => setModalOpen(false)}
+          baseCard={selectedBaseCard}
+          onConfirm={handleConfirmAdd}
+      />
+
+    </main>
+  );
+}
+</file>
+
+<file path="lib/firebase-admin.ts">
+// lib/firebase-admin.ts
+import 'server-only';
+import * as admin from 'firebase-admin';
+
+// Fonction pour nettoyer la clé privée (problème fréquent avec les variables d'env)
+function formatPrivateKey(key: string) {
+  return key.replace(/\\n/g, '\n');
+}
+
+export function getAdminFirestore() {
+  // On vérifie si une instance existe déjà pour éviter les erreurs de hot-reload
+  if (admin.apps.length === 0) {
+    admin.initializeApp({
+      credential: admin.credential.cert({
+        projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
+        clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+        privateKey: formatPrivateKey(process.env.FIREBASE_PRIVATE_KEY || ""),
+      }),
+    });
+  }
+  return admin.firestore();
+}
+</file>
 
 <file path=".gitignore">
 # See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
@@ -321,204 +675,114 @@ export default function UserProfilePage({ params }: { params: Promise<{ uid: str
 }
 </file>
 
-<file path="components/CardVersionPickerModal.tsx">
-// components/CardVersionPickerModal.tsx
+<file path="components/CollectionToolsModal.tsx">
+// components/CollectionToolsModal.tsx
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
-import { CardType } from '@/hooks/useCardCollection';
-import toast from 'react-hot-toast';
+import { useState } from 'react';
 
-export type ScryfallCardRaw = {
-  id: string;
-  oracle_id: string;
-  name: string;
-  set: string;
-  set_name: string;
-  collector_number: string;
-  released_at: string;
-  image_uris?: { normal: string; small?: string };
-  card_faces?: Array<{ image_uris?: { normal: string } }>;
-  prices?: { eur?: string; eur_foil?: string };
-  finishes?: string[]; 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  [key: string]: any; // <--- Autoriser les autres champs
-};
-
-type Props = {
+type CollectionToolsModalProps = {
   isOpen: boolean;
   onClose: () => void;
-  baseCard: ScryfallCardRaw | null; 
-  onConfirm: (card: CardType) => void;
+  onRefreshPrices: () => Promise<void>;
+  onBulkTrade: (action: 'excess' | 'all' | 'reset', threshold?: number) => void;
+  totalCards: number;
 };
 
-export default function CardVersionPickerModal({ isOpen, onClose, baseCard, onConfirm }: Props) {
-  const [versions, setVersions] = useState<ScryfallCardRaw[]>([]);
-  const [loading, setLoading] = useState(false);
+export default function CollectionToolsModal({ 
+    isOpen, onClose, onRefreshPrices, onBulkTrade, totalCards 
+}: CollectionToolsModalProps) {
   
-  const [selectedVersionId, setSelectedVersionId] = useState<string>('');
-  const [isFoil, setIsFoil] = useState(false);
-  const [quantity, setQuantity] = useState(1);
+  const [threshold, setThreshold] = useState(4);
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
-  useEffect(() => {
-    const fetchVersions = async (oracleId: string) => {
-        setLoading(true);
-        try {
-          const res = await fetch(`https://api.scryfall.com/cards/search?q=oracle_id:${oracleId}&unique=prints&order=released`);
-          const data = await res.json();
-          
-          if (data.data && data.data.length > 0) {
-            setVersions(data.data as ScryfallCardRaw[]); 
-            
-            const defaultVer = data.data.find((c: ScryfallCardRaw) => c.id === baseCard?.id) || data.data[0];
-            setSelectedVersionId(defaultVer.id);
-          }
-        } catch (e) {
-          console.error(e);
-          toast.error("Impossible de charger les versions");
-        } finally {
-          setLoading(false);
-        }
-    };
+  if (!isOpen) return null;
 
-    if (isOpen && baseCard?.oracle_id) {
-      fetchVersions(baseCard.oracle_id);
-    }
-
-    setQuantity(1);
-    setIsFoil(false);
-  }, [isOpen, baseCard]); 
-
-  const currentCard = useMemo(() => {
-    return versions.find(v => v.id === selectedVersionId) || baseCard;
-  }, [versions, selectedVersionId, baseCard]);
-
-  if (!isOpen || !currentCard) return null;
-
-  const imageUrl = currentCard.image_uris?.normal || currentCard.card_faces?.[0]?.image_uris?.normal || "https://cards.scryfall.io/large/front/a/6/a6984342-f723-4e80-8e69-902d287a915f.jpg";
-  
-  const priceNormal = parseFloat(currentCard.prices?.eur || "0");
-  const priceFoil = parseFloat(currentCard.prices?.eur_foil || "0");
-  
-  const currentPrice = isFoil ? (priceFoil || priceNormal) : (priceNormal || priceFoil);
-  
-  const hasFoilVersion = currentCard.finishes?.includes('foil') || !!currentCard.prices?.eur_foil;
-  const hasNonFoilVersion = currentCard.finishes?.includes('nonfoil') || !!currentCard.prices?.eur;
-
-  const handleConfirm = () => {
-    const finalCard: CardType = {
-        id: currentCard.id,
-        name: currentCard.name,
-        imageUrl: imageUrl,
-        quantity: quantity,
-        price: currentPrice,
-        setName: currentCard.set_name,
-        setCode: currentCard.set,
-        isFoil: isFoil,
-        isSpecificVersion: true,
-        // --- SAUVEGARDE COMPLÈTE ICI ---
-        scryfallData: currentCard
-    };
-    onConfirm(finalCard);
-    onClose();
+  const handleRefresh = async () => {
+      setIsRefreshing(true);
+      await onRefreshPrices();
+      setIsRefreshing(false);
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 backdrop-blur-sm animate-in fade-in duration-200">
-      <div className="bg-gray-900 w-full max-w-md rounded-2xl overflow-hidden shadow-2xl border border-gray-700 flex flex-col max-h-[90vh]">
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 backdrop-blur-sm" onClick={onClose}>
+      <div className="bg-white dark:bg-gray-800 rounded-2xl p-6 max-w-md w-full shadow-2xl border border-gray-200 dark:border-gray-700" onClick={e => e.stopPropagation()}>
         
-        {/* HEADER */}
-        <div className="p-4 flex justify-between items-center border-b border-gray-800">
-            <h3 className="text-white font-bold truncate pr-4">{currentCard.name}</h3>
-            <button onClick={onClose} className="text-gray-400 hover:text-white px-2 text-xl">✕</button>
+        <div className="flex justify-between items-center mb-6">
+            <h2 className="text-xl font-bold flex items-center gap-2 text-gray-900 dark:text-white">
+                ⚙️ Gestion Collection
+            </h2>
+            <button onClick={onClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200">✕</button>
         </div>
 
-        {/* CONTENU SCROLLABLE */}
-        <div className="overflow-y-auto p-6 flex flex-col items-center space-y-6 custom-scrollbar">
+        <div className="space-y-8">
             
-            {/* 1. IMAGE DISPLAY */}
-            <div className="relative w-64 aspect-[2.5/3.5] rounded-xl overflow-hidden shadow-lg ring-1 ring-white/10 group">
-                {loading ? (
-                    <div className="w-full h-full bg-gray-800 animate-pulse flex items-center justify-center text-gray-500">Chargement...</div>
-                ) : (
-                    <img src={imageUrl} alt="" className="w-full h-full object-cover" />
-                )}
-                {isFoil && <div className="absolute inset-0 bg-gradient-to-tr from-purple-500/30 to-transparent mix-blend-overlay pointer-events-none" />}
-            </div>
-
-            {/* 2. SÉLECTEUR D'ÉDITION */}
-            <div className="w-full space-y-2">
-                <label className="text-xs text-gray-400 uppercase font-bold tracking-wider">Édition / Set</label>
-                <div className="relative">
-                    <select 
-                        className="w-full bg-gray-800 text-white border border-gray-700 rounded-xl p-3 appearance-none focus:ring-2 focus:ring-blue-500 outline-none text-sm"
-                        value={selectedVersionId}
-                        onChange={(e) => {
-                            setSelectedVersionId(e.target.value);
-                            setIsFoil(false); 
-                        }}
-                    >
-                        {versions.map((v) => (
-                            <option key={v.id} value={v.id}>
-                                {v.set_name} ({v.set.toUpperCase()}) #{v.collector_number}
-                            </option>
-                        ))}
-                    </select>
-                    <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-gray-400">▼</div>
-                </div>
-            </div>
-
-            {/* 3. CONTROLES */}
-            <div className="grid grid-cols-2 gap-4 w-full">
-                <div className="bg-gray-800 rounded-xl p-3 flex flex-col items-center justify-center gap-2 border border-gray-700">
-                    <span className="text-xs text-gray-400 font-bold">FINITION</span>
-                    <div className="flex bg-gray-900 rounded-lg p-1 w-full">
+            {/* SECTION 1 : CLASSEUR D'ÉCHANGE */}
+            <div>
+                <h3 className="text-sm font-bold text-gray-500 uppercase mb-3 border-b border-gray-200 dark:border-gray-700 pb-1">Automatisations Échange</h3>
+                
+                {/* Option Playset */}
+                <div className="bg-green-50 dark:bg-green-900/10 p-3 rounded-xl border border-green-100 dark:border-green-800 mb-3">
+                    <label className="text-sm font-medium text-gray-800 dark:text-gray-200 mb-2 block">
+                        Mettre en échange le surplus (Playset)
+                    </label>
+                    <div className="flex gap-2">
+                        <div className="flex items-center bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded-lg px-2">
+                            <span className="text-xs text-gray-500 mr-2">Qté &gt;</span>
+                            <input 
+                                type="number" 
+                                min="1" 
+                                max="100" 
+                                value={threshold} 
+                                onChange={(e) => setThreshold(parseInt(e.target.value) || 4)}
+                                className="w-10 text-center font-bold outline-none bg-transparent text-gray-900 dark:text-white"
+                            />
+                        </div>
                         <button 
-                            onClick={() => setIsFoil(false)}
-                            disabled={!hasNonFoilVersion}
-                            className={`flex-1 text-xs py-1.5 rounded-md transition ${!isFoil ? 'bg-gray-700 text-white font-bold' : 'text-gray-500 hover:text-gray-300'} ${!hasNonFoilVersion && 'opacity-30 cursor-not-allowed'}`}
+                            onClick={() => onBulkTrade('excess', threshold)}
+                            className="flex-grow bg-green-600 hover:bg-green-700 text-white text-sm font-bold py-2 rounded-lg transition"
                         >
-                            Normal
-                        </button>
-                        <button 
-                            onClick={() => setIsFoil(true)}
-                            disabled={!hasFoilVersion}
-                            className={`flex-1 text-xs py-1.5 rounded-md transition ${isFoil ? 'bg-purple-600 text-white font-bold' : 'text-gray-500 hover:text-purple-400'} ${!hasFoilVersion && 'opacity-30 cursor-not-allowed'}`}
-                        >
-                            Foil
+                            Appliquer
                         </button>
                     </div>
+                    <p className="text-[10px] text-gray-500 mt-2">
+                        Exemple : Si Qté &gt; 4, la carte est marquée &quot;Disponible à l&apos;échange&quot;.
+                    </p>
                 </div>
 
-                <div className="bg-gray-800 rounded-xl p-3 flex flex-col items-center justify-center gap-2 border border-gray-700">
-                     <span className="text-xs text-gray-400 font-bold">QUANTITÉ</span>
-                     <div className="flex items-center gap-3">
-                        <button onClick={() => setQuantity(Math.max(1, quantity - 1))} className="w-8 h-8 rounded-full bg-gray-700 text-white hover:bg-gray-600 font-bold">-</button>
-                        <span className="text-xl font-bold text-white w-6 text-center">{quantity}</span>
-                        <button onClick={() => setQuantity(quantity + 1)} className="w-8 h-8 rounded-full bg-blue-600 text-white hover:bg-blue-500 font-bold">+</button>
-                     </div>
+                {/* Actions Rapides */}
+                <div className="grid grid-cols-2 gap-3">
+                    <button 
+                        onClick={() => onBulkTrade('all')}
+                        className="px-4 py-2 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 text-gray-700 dark:text-gray-200 rounded-lg text-xs font-bold transition"
+                    >
+                        Tout mettre en Trade
+                    </button>
+                    <button 
+                        onClick={() => onBulkTrade('reset')}
+                        className="px-4 py-2 bg-gray-100 dark:bg-gray-700 hover:bg-red-100 hover:text-red-600 text-gray-700 dark:text-gray-200 rounded-lg text-xs font-bold transition"
+                    >
+                        Tout retirer (Reset)
+                    </button>
                 </div>
             </div>
-        </div>
 
-        {/* FOOTER */}
-        <div className="p-4 bg-gray-800 border-t border-gray-700">
-            <div className="flex justify-between items-center mb-4">
-                 <div className="text-gray-400 text-sm">Prix unitaire</div>
-                 <div className="text-2xl font-bold text-white">
-                    {currentPrice > 0 ? `${currentPrice.toFixed(2)} €` : <span className="text-gray-500 text-lg">N/A</span>}
-                 </div>
+            {/* SECTION 2 : ACTUALISATION */}
+            <div>
+                <h3 className="text-sm font-bold text-gray-500 uppercase mb-3 border-b border-gray-200 dark:border-gray-700 pb-1">Données & Prix</h3>
+                <button 
+                    onClick={handleRefresh}
+                    disabled={isRefreshing}
+                    className="w-full bg-blue-50 hover:bg-blue-100 dark:bg-blue-900/20 dark:hover:bg-blue-900/40 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800 font-bold py-3 rounded-xl transition flex items-center justify-center gap-2"
+                >
+                    {isRefreshing ? 'Mise à jour en cours...' : '🔄 Actualiser Scryfall (Prix)'}
+                </button>
+                <p className="text-[10px] text-gray-400 text-center mt-2">
+                    Met à jour les prix et informations de vos {totalCards} cartes.
+                </p>
             </div>
-            
-            <button 
-                onClick={handleConfirm}
-                className="w-full bg-amber-500 hover:bg-amber-400 text-black font-bold py-4 rounded-xl text-lg transition shadow-lg transform active:scale-95 flex justify-center items-center gap-2"
-            >
-                <span>+ Ajouter</span>
-                {quantity > 1 && <span className="bg-black/20 px-2 py-0.5 rounded text-sm">{quantity}</span>}
-            </button>
-        </div>
 
+        </div>
       </div>
     </div>
   );
@@ -1023,44 +1287,6 @@ export function useWishlists() {
 }
 </file>
 
-<file path="lib/cardUtils.ts">
-// lib/cardUtils.ts
-
-// Type générique "fourre-tout" pour Scryfall
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export type ScryfallRawData = any;
-
-export const normalizeCardData = (data: ScryfallRawData) => {
-  const isDoubleFaced = data.card_faces && data.card_faces.length > 1;
-  const rawName = isDoubleFaced ? data.card_faces[0].name : data.name;
-  const name = rawName.split(' // ')[0];
-
-  let imageUrl = data.image_uris?.normal;
-  let imageBackUrl = undefined;
-
-  if (isDoubleFaced) {
-    imageUrl = data.card_faces[0].image_uris?.normal;
-    imageBackUrl = data.card_faces[1].image_uris?.normal;
-  }
-
-  if (!imageUrl) {
-    imageUrl = "https://cards.scryfall.io/large/front/a/6/a6984342-f723-4e80-8e69-902d287a915f.jpg";
-  }
-
-  return {
-    id: data.id,
-    scryfallId: data.id,
-    name,
-    imageUrl,
-    imageBackUrl,
-    setName: data.set_name,
-    setCode: data.set,
-    price: parseFloat(data.prices?.eur || "0"),
-    // On peut aussi retourner la data brute ici si besoin, mais c'est fait ailleurs
-  };
-};
-</file>
-
 <file path="postcss.config.mjs">
 const config = {
   plugins: {
@@ -1223,7 +1449,6 @@ type Props = {
 };
 
 export default function SingleWishlistView({ listId, listName }: Props) {
-    // On récupère toggleAttribute ici
     const { cards, loading, updateQuantity, removeCard, toggleAttribute, totalPrice } = useCardCollection('wishlist', listId);
     const { user } = useAuth();
     
@@ -1237,8 +1462,6 @@ export default function SingleWishlistView({ listId, listName }: Props) {
 
             await runTransaction(db, async (transaction) => {
                 const colDoc = await transaction.get(collectionRef);
-                // On garde les propriétés Foil/Version lors du déplacement si la carte n'existe pas encore
-                // Sinon on incrémente juste.
                 if (colDoc.exists()) {
                     transaction.update(collectionRef, { quantity: increment(card.quantity) });
                 } else {
@@ -1246,7 +1469,7 @@ export default function SingleWishlistView({ listId, listName }: Props) {
                         ...card, 
                         wishlistId: null, 
                         addedAt: new Date(),
-                        isFoil: card.isFoil || false // On garde l'info
+                        isFoil: card.isFoil || false
                     });
                 }
                 transaction.delete(wishlistRef);
@@ -1286,9 +1509,8 @@ export default function SingleWishlistView({ listId, listName }: Props) {
                                 if(card.quantity === 1) { if(confirm("Supprimer ?")) removeCard(card.id); } 
                                 else { updateQuantity(card.id, -1, card.quantity); }
                             }}
-                            onDelete={() => { if(confirm("Supprimer ?")) removeCard(card.id); }}
+                            // PLUS DE onDelete ICI
                             onMove={() => moveToCollection(card)}
-                            // NOUVEAU : On passe la fonction de toggle
                             onToggleAttribute={(field, val) => toggleAttribute(card.id, field, val)}
                         />
                     ))}
@@ -1328,9 +1550,10 @@ export function useFriends() {
   // Écouter les amis et les demandes en temps réel
   useEffect(() => {
     if (!user) {
-      setFriends([]);
-      setRequestsReceived([]);
-      setLoading(false);
+      // CORRECTION : On ne set que si nécessaire pour éviter la boucle
+      setFriends(prev => prev.length > 0 ? [] : prev);
+      setRequestsReceived(prev => prev.length > 0 ? [] : prev);
+      setLoading(prev => prev ? false : prev);
       return;
     }
 
@@ -1474,7 +1697,7 @@ export function useFriends() {
     searchUsers, 
     sendFriendRequest, 
     acceptRequest, 
-    declineRequest,
+    declineRequest, 
     removeFriend
   };
 }
@@ -1709,6 +1932,7 @@ export default nextConfig;
   "dependencies": {
     "@types/papaparse": "^5.5.1",
     "firebase": "^12.5.0",
+    "firebase-admin": "^13.6.0",
     "next": "^16.0.8",
     "papaparse": "^5.5.3",
     "react": "^19.2.1",
@@ -1981,145 +2205,292 @@ export default function DirectTradePage({ params }: { params: Promise<{ uid: str
 }
 </file>
 
-<file path="hooks/useTradeTransaction.ts">
-// hooks/useTradeTransaction.ts
-import { useState } from 'react';
-import { db } from '@/lib/firebase';
-import { doc, runTransaction, serverTimestamp, increment } from 'firebase/firestore';
-import { useAuth } from '@/lib/AuthContext';
-import { CardType } from './useCardCollection';
+<file path="components/CardVersionPickerModal.tsx">
+// components/CardVersionPickerModal.tsx
+'use client';
+
+import { useState, useEffect, useMemo } from 'react';
+import { CardType } from '@/hooks/useCardCollection';
+import { normalizeCardData, ScryfallRawData } from '@/lib/cardUtils'; // <--- On utilise l'utilitaire
 import toast from 'react-hot-toast';
 
-export function useTradeTransaction() {
-  const { user } = useAuth();
-  const [isProcessing, setIsProcessing] = useState(false);
+// On utilise le type brut défini dans utils
+type Props = {
+  isOpen: boolean;
+  onClose: () => void;
+  baseCard: ScryfallRawData | null; 
+  onConfirm: (card: CardType) => void;
+};
 
-  const getRef = (uid: string, collection: 'collection' | 'wishlist', cardId: string) => {
-      return doc(db, 'users', uid, collection, cardId);
-  };
+export default function CardVersionPickerModal({ isOpen, onClose, baseCard, onConfirm }: Props) {
+  const [versions, setVersions] = useState<ScryfallRawData[]>([]);
+  const [loading, setLoading] = useState(false);
+  
+  const [selectedVersionId, setSelectedVersionId] = useState<string>('');
+  const [isFoil, setIsFoil] = useState(false);
+  const [quantity, setQuantity] = useState(1);
+  const [isFlipped, setIsFlipped] = useState(false); // Pour prévisualiser le verso
 
-  const executeTrade = async (
-      myCardsToGive: CardType[], 
-      cardsToReceive: CardType[], 
-      partnerUid: string | null = null
-  ) => {
-    if (!user) return;
-    setIsProcessing(true);
-    const toastId = toast.loading("Validation de l'échange...");
+  useEffect(() => {
+    const fetchVersions = async (oracleId: string) => {
+        setLoading(true);
+        try {
+          const res = await fetch(`https://api.scryfall.com/cards/search?q=oracle_id:${oracleId}&unique=prints&order=released`);
+          const data = await res.json();
+          
+          if (data.data && data.data.length > 0) {
+            setVersions(data.data); 
+            
+            const defaultVer = data.data.find((c: ScryfallRawData) => c.id === baseCard?.id) || data.data[0];
+            setSelectedVersionId(defaultVer.id);
+          }
+        } catch (e) {
+          console.error(e);
+          toast.error("Impossible de charger les versions");
+        } finally {
+          setLoading(false);
+        }
+    };
 
-    try {
-        await runTransaction(db, async (transaction) => {
-            // 1. LECTURES
-            const myGiveOps = [];
-            for (const card of myCardsToGive) {
-                const ref = getRef(user.uid, 'collection', card.id);
-                const snap = await transaction.get(ref);
-                if (!snap.exists()) throw new Error(`Erreur : Vous n'avez plus la carte ${card.name}`);
-                myGiveOps.push({ ref, snap, card });
-            }
-
-            const myReceiveOps = [];
-            for (const card of cardsToReceive) {
-                const colRef = getRef(user.uid, 'collection', card.id);
-                const wishRef = getRef(user.uid, 'wishlist', card.id);
-                const colSnap = await transaction.get(colRef);
-                const wishSnap = await transaction.get(wishRef);
-                myReceiveOps.push({ colRef, wishRef, colSnap, wishSnap, card });
-            }
-
-            const partnerGiveOps = [];
-            const partnerReceiveOps = [];
-            if (partnerUid) {
-                for (const card of cardsToReceive) {
-                    const ref = getRef(partnerUid, 'collection', card.id);
-                    const snap = await transaction.get(ref); 
-                    partnerGiveOps.push({ ref, snap, card });
-                }
-                for (const card of myCardsToGive) {
-                    const colRef = getRef(partnerUid, 'collection', card.id);
-                    const wishRef = getRef(partnerUid, 'wishlist', card.id);
-                    const colSnap = await transaction.get(colRef);
-                    const wishSnap = await transaction.get(wishRef);
-                    partnerReceiveOps.push({ colRef, wishRef, colSnap, wishSnap, card });
-                }
-            }
-
-            // 2. ÉCRITURES
-
-            // A. MOI : Je perds
-            for (const { ref, snap, card } of myGiveOps) {
-                const currentQty = snap.data()?.quantity || 0;
-                if (currentQty <= card.quantity) {
-                    transaction.delete(ref);
-                } else {
-                    transaction.update(ref, { quantity: increment(-card.quantity) });
-                }
-            }
-
-            // B. MOI : Je gagne
-            for (const { colRef, wishRef, colSnap, wishSnap, card } of myReceiveOps) {
-                if (colSnap.exists()) {
-                    transaction.update(colRef, { quantity: increment(card.quantity) });
-                } else {
-                    transaction.set(colRef, {
-                        name: card.name,
-                        imageUrl: card.imageUrl,
-                        imageBackUrl: card.imageBackUrl || null,
-                        setName: card.setName || '',
-                        price: card.price || 0,
-                        quantity: card.quantity,
-                        isFoil: card.isFoil || false,
-                        isSpecificVersion: card.isSpecificVersion || false,
-                        addedAt: serverTimestamp(),
-                        // TRANSFERT DE LA DATA SCRYFALL
-                        scryfallData: card.scryfallData || null 
-                    });
-                }
-                if (wishSnap.exists()) {
-                    transaction.delete(wishRef);
-                }
-            }
-
-            // C. PARTENAIRE
-            if (partnerUid) {
-                for (const { ref, card } of partnerGiveOps) {
-                    transaction.update(ref, { quantity: increment(-card.quantity) });
-                }
-                for (const { colRef, wishRef, colSnap, wishSnap, card } of partnerReceiveOps) {
-                     if (colSnap.exists()) {
-                         transaction.update(colRef, { quantity: increment(card.quantity) });
-                     } else {
-                         transaction.set(colRef, {
-                             ...card, 
-                             quantity: card.quantity,
-                             addedAt: serverTimestamp(),
-                             wishlistId: null,
-                             // TRANSFERT DE LA DATA SCRYFALL
-                             scryfallData: card.scryfallData || null
-                         });
-                     }
-                     if (wishSnap.exists()) {
-                         transaction.delete(wishRef);
-                     }
-                }
-            }
-        });
-
-        toast.success("Échange validé et collections mises à jour !", { id: toastId });
-        return true;
-
-    } catch (error: unknown) {
-        console.error(error);
-        const errMsg = error instanceof Error ? error.message : "Erreur inconnue";
-        toast.error(`Erreur: ${errMsg}`, { id: toastId });
-        return false;
-    } finally {
-        setIsProcessing(false);
+    if (isOpen && baseCard?.oracle_id) {
+      // CORRECTION ICI : as string
+      fetchVersions(baseCard.oracle_id as string);
     }
+
+    setQuantity(1);
+    setIsFoil(false);
+    setIsFlipped(false);
+  }, [isOpen, baseCard]); 
+
+  const currentCardRaw = useMemo(() => {
+    return versions.find(v => v.id === selectedVersionId) || baseCard;
+  }, [versions, selectedVersionId, baseCard]);
+
+  if (!isOpen || !currentCardRaw) return null;
+
+  // UTILISATION DE LA FONCTION NORMALISÉE POUR AVOIR LES BONNES IMAGES
+  const { imageUrl, imageBackUrl, name, setName, setCode, price } = normalizeCardData(currentCardRaw);
+  
+  // Prix
+  const priceNormal = parseFloat(currentCardRaw.prices?.eur || "0");
+  const priceFoil = parseFloat(currentCardRaw.prices?.eur_foil || "0");
+  const currentPrice = isFoil ? (priceFoil || priceNormal) : (priceNormal || priceFoil);
+  
+  // Disponibilité Foil
+  const hasFoilVersion = currentCardRaw.finishes?.includes('foil') || !!currentCardRaw.prices?.eur_foil;
+  const hasNonFoilVersion = currentCardRaw.finishes?.includes('nonfoil') || !!currentCardRaw.prices?.eur;
+
+  const handleConfirm = () => {
+    const finalCard: CardType = {
+        id: currentCardRaw.id,
+        name: name,
+        imageUrl: imageUrl,
+        imageBackUrl: imageBackUrl || undefined, // undefined est accepté par le type CardType, mais null par Firestore
+        quantity: quantity,
+        price: currentPrice,
+        setName: setName,
+        setCode: setCode,
+        isFoil: isFoil,
+        isSpecificVersion: true,
+        scryfallData: currentCardRaw
+    };
+    onConfirm(finalCard);
+    onClose();
   };
 
-  return { executeTrade, isProcessing };
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 backdrop-blur-sm animate-in fade-in duration-200">
+      <div className="bg-gray-900 w-full max-w-md rounded-2xl overflow-hidden shadow-2xl border border-gray-700 flex flex-col max-h-[90vh]">
+        
+        {/* HEADER */}
+        <div className="p-4 flex justify-between items-center border-b border-gray-800">
+            <h3 className="text-white font-bold truncate pr-4">{name}</h3>
+            <button onClick={onClose} className="text-gray-400 hover:text-white px-2 text-xl">✕</button>
+        </div>
+
+        {/* CONTENU SCROLLABLE */}
+        <div className="overflow-y-auto p-6 flex flex-col items-center space-y-6 custom-scrollbar">
+            
+            {/* 1. IMAGE DISPLAY AVEC FLIP */}
+            <div 
+                className="relative w-64 aspect-[2.5/3.5] rounded-xl overflow-hidden shadow-lg ring-1 ring-white/10 group cursor-pointer"
+                onClick={() => imageBackUrl && setIsFlipped(!isFlipped)}
+            >
+                {loading ? (
+                    <div className="w-full h-full bg-gray-800 animate-pulse flex items-center justify-center text-gray-500">Chargement...</div>
+                ) : (
+                    <img 
+                        src={isFlipped && imageBackUrl ? imageBackUrl : imageUrl} 
+                        alt="" 
+                        className="w-full h-full object-cover transition-transform duration-300" 
+                    />
+                )}
+                
+                {isFoil && <div className="absolute inset-0 bg-gradient-to-tr from-purple-500/30 to-transparent mix-blend-overlay pointer-events-none" />}
+                
+                {imageBackUrl && (
+                    <div className="absolute bottom-2 right-2 bg-black/60 text-white p-1.5 rounded-full backdrop-blur-md">
+                        🔄
+                    </div>
+                )}
+            </div>
+
+            {/* 2. SÉLECTEUR D'ÉDITION */}
+            <div className="w-full space-y-2">
+                <label className="text-xs text-gray-400 uppercase font-bold tracking-wider">Édition / Set</label>
+                <div className="relative">
+                    <select 
+                        className="w-full bg-gray-800 text-white border border-gray-700 rounded-xl p-3 appearance-none focus:ring-2 focus:ring-blue-500 outline-none text-sm"
+                        value={selectedVersionId}
+                        onChange={(e) => {
+                            setSelectedVersionId(e.target.value);
+                            setIsFoil(false);
+                            setIsFlipped(false);
+                        }}
+                    >
+                        {versions.map((v) => (
+                            <option key={v.id} value={v.id}>
+                                {v.set_name} ({v.set.toUpperCase()}) #{v.collector_number}
+                            </option>
+                        ))}
+                    </select>
+                    <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-gray-400">▼</div>
+                </div>
+            </div>
+
+            {/* 3. CONTROLES */}
+            <div className="grid grid-cols-2 gap-4 w-full">
+                <div className="bg-gray-800 rounded-xl p-3 flex flex-col items-center justify-center gap-2 border border-gray-700">
+                    <span className="text-xs text-gray-400 font-bold">FINITION</span>
+                    <div className="flex bg-gray-900 rounded-lg p-1 w-full">
+                        <button 
+                            onClick={() => setIsFoil(false)}
+                            disabled={!hasNonFoilVersion}
+                            className={`flex-1 text-xs py-1.5 rounded-md transition ${!isFoil ? 'bg-gray-700 text-white font-bold' : 'text-gray-500 hover:text-gray-300'} ${!hasNonFoilVersion && 'opacity-30 cursor-not-allowed'}`}
+                        >
+                            Normal
+                        </button>
+                        <button 
+                            onClick={() => setIsFoil(true)}
+                            disabled={!hasFoilVersion}
+                            className={`flex-1 text-xs py-1.5 rounded-md transition ${isFoil ? 'bg-purple-600 text-white font-bold' : 'text-gray-500 hover:text-purple-400'} ${!hasFoilVersion && 'opacity-30 cursor-not-allowed'}`}
+                        >
+                            Foil
+                        </button>
+                    </div>
+                </div>
+
+                <div className="bg-gray-800 rounded-xl p-3 flex flex-col items-center justify-center gap-2 border border-gray-700">
+                     <span className="text-xs text-gray-400 font-bold">QUANTITÉ</span>
+                     <div className="flex items-center gap-3">
+                        <button onClick={() => setQuantity(Math.max(1, quantity - 1))} className="w-8 h-8 rounded-full bg-gray-700 text-white hover:bg-gray-600 font-bold">-</button>
+                        <span className="text-xl font-bold text-white w-6 text-center">{quantity}</span>
+                        <button onClick={() => setQuantity(quantity + 1)} className="w-8 h-8 rounded-full bg-blue-600 text-white hover:bg-blue-500 font-bold">+</button>
+                     </div>
+                </div>
+            </div>
+        </div>
+
+        {/* FOOTER */}
+        <div className="p-4 bg-gray-800 border-t border-gray-700">
+            <div className="flex justify-between items-center mb-4">
+                 <div className="text-gray-400 text-sm">Prix unitaire</div>
+                 <div className="text-2xl font-bold text-white">
+                    {currentPrice > 0 ? `${currentPrice.toFixed(2)} €` : <span className="text-gray-500 text-lg">N/A</span>}
+                 </div>
+            </div>
+            
+            <button 
+                onClick={handleConfirm}
+                className="w-full bg-amber-500 hover:bg-amber-400 text-black font-bold py-4 rounded-xl text-lg transition shadow-lg transform active:scale-95 flex justify-center items-center gap-2"
+            >
+                <span>+ Ajouter</span>
+                {quantity > 1 && <span className="bg-black/20 px-2 py-0.5 rounded text-sm">{quantity}</span>}
+            </button>
+        </div>
+
+      </div>
+    </div>
+  );
 }
+</file>
+
+<file path="lib/cardUtils.ts">
+// lib/cardUtils.ts
+
+// Définition stricte des champs Scryfall que nous utilisons
+// Cela évite les crashs si l'API change ou si on accède à un champ inexistant
+export type ScryfallRawData = {
+  id: string;
+  name: string;
+  set: string;
+  set_name: string;
+  collector_number: string;
+  released_at?: string;
+  image_uris?: {
+    small?: string;
+    normal?: string;
+    large?: string;
+    png?: string;
+  };
+  card_faces?: Array<{
+    name: string;
+    image_uris?: {
+      normal?: string;
+    };
+  }>;
+  prices?: {
+    eur?: string;
+    eur_foil?: string;
+    usd?: string;
+  };
+  finishes?: string[]; // 'foil', 'nonfoil', 'etched'
+  // On autorise d'autres champs inconnus sans casser le typage strict ci-dessus
+  [key: string]: unknown;
+};
+
+export const normalizeCardData = (data: ScryfallRawData) => {
+  // Gestion des noms pour les cartes doubles (ex: "Malakir Rebirth // Malakir Mire")
+  const rawName = data.name;
+  const name = rawName.split(' // ')[0]; 
+
+  let imageUrl = "";
+  let imageBackUrl: string | null = null;
+
+  // CAS 1 : Carte standard (image à la racine)
+  if (data.image_uris?.normal) {
+    imageUrl = data.image_uris.normal;
+  } 
+  // CAS 2 : Carte double face (Transform, Modal DFC, etc.)
+  else if (data.card_faces && data.card_faces.length > 0) {
+    // Face Avant
+    if (data.card_faces[0].image_uris?.normal) {
+      imageUrl = data.card_faces[0].image_uris.normal;
+    }
+    
+    // Face Arrière (si elle a une image)
+    if (data.card_faces[1] && data.card_faces[1].image_uris?.normal) {
+      imageBackUrl = data.card_faces[1].image_uris.normal;
+    }
+  }
+
+  // Fallback si aucune image trouvée (Card Back par défaut)
+  if (!imageUrl) {
+    imageUrl = "https://cards.scryfall.io/large/front/a/6/a6984342-f723-4e80-8e69-902d287a915f.jpg";
+  }
+
+  return {
+    id: data.id,
+    scryfallId: data.id,
+    name,
+    imageUrl,
+    imageBackUrl, // Sera string ou null (jamais undefined)
+    setName: data.set_name,
+    setCode: data.set,
+    price: parseFloat(data.prices?.eur || "0"),
+    scryfallData: data // On garde la donnée brute
+  };
+};
 </file>
 
 <file path="app/api/search/route.ts">
@@ -2192,39 +2563,62 @@ export function useTradeMatcher() {
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("");
 
-  const fetchAllCards = async (uid: string, mode: 'collection' | 'wishlist', userLists: WishlistMeta[] = []) => {
+  // --- 1. CHARGEMENT OPTIMISÉ (Retourne une Map directement) ---
+  const fetchCardsAsMap = async (uid: string, mode: 'collection' | 'wishlist', userLists: WishlistMeta[] = []) => {
     const cardsMap = new Map<string, CardType>();
 
-    if (mode === 'collection') {
-        const snap = await getDocs(collection(db, 'users', uid, 'collection'));
-        snap.forEach(d => cardsMap.set(d.id, { id: d.id, ...d.data() } as CardType));
-    } else {
-        const defSnap = await getDocs(collection(db, 'users', uid, 'wishlist'));
-        defSnap.forEach(d => cardsMap.set(d.id, { id: d.id, ...d.data() } as CardType));
-        
-        if (userLists.length > 0) {
-            for (const list of userLists) {
-                 if (list.id === 'default') continue;
-                 const snap = await getDocs(collection(db, 'users', uid, 'wishlists_data', list.id, 'cards'));
-                 snap.forEach(d => cardsMap.set(d.id, { id: d.id, ...d.data() } as CardType));
-            }
+    try {
+        if (mode === 'collection') {
+            const snap = await getDocs(collection(db, 'users', uid, 'collection'));
+            snap.forEach(d => cardsMap.set(d.id, { id: d.id, ...d.data() } as CardType));
         } else {
-            const metaSnap = await getDocs(collection(db, 'users', uid, 'wishlists_meta'));
-            for (const meta of metaSnap.docs) {
-                const snap = await getDocs(collection(db, 'users', uid, 'wishlists_data', meta.id, 'cards'));
-                snap.forEach(d => cardsMap.set(d.id, { id: d.id, ...d.data() } as CardType));
+            // Charge la liste par défaut
+            const defSnap = await getDocs(collection(db, 'users', uid, 'wishlist'));
+            defSnap.forEach(d => cardsMap.set(d.id, { id: d.id, ...d.data() } as CardType));
+            
+            // Charge les listes customs en parallèle
+            if (userLists.length > 0) {
+                const listPromises = userLists
+                    .filter(l => l.id !== 'default')
+                    .map(list => getDocs(collection(db, 'users', uid, 'wishlists_data', list.id, 'cards')));
+                
+                const snapshots = await Promise.all(listPromises);
+                snapshots.forEach(snap => {
+                    snap.forEach(d => cardsMap.set(d.id, { id: d.id, ...d.data() } as CardType));
+                });
+            } else {
+                // Fallback si pas de userLists fournies (pour les amis) : on lit les métadonnées
+                const metaSnap = await getDocs(collection(db, 'users', uid, 'wishlists_meta'));
+                const listPromises = metaSnap.docs.map(m => getDocs(collection(db, 'users', uid, 'wishlists_data', m.id, 'cards')));
+                const snapshots = await Promise.all(listPromises);
+                snapshots.forEach(snap => {
+                     snap.forEach(d => cardsMap.set(d.id, { id: d.id, ...d.data() } as CardType));
+                });
             }
         }
+    } catch (e) {
+        console.error(`Erreur chargement ${mode} pour ${uid}`, e);
     }
     return cardsMap;
   };
 
-  const refreshPrices = async (cardsToUpdate: CardType[], uid: string, collectionName: string) => {
-     if (cardsToUpdate.length === 0) return;
+  // --- 2. MISE À JOUR PRIX CIBLÉE (Uniquement sur les matchs) ---
+  const refreshPricesForProposals = async (currentProposals: TradeProposal[], myUid: string) => {
+     // On extrait toutes les cartes uniques impliquées
+     const cardsToUpdateMap = new Map<string, { card: CardType, ownerUid: string, collection: string }>();
 
+     currentProposals.forEach(p => {
+         p.toReceive.forEach(c => cardsToUpdateMap.set(`${p.friend.uid}_${c.id}`, { card: c, ownerUid: p.friend.uid, collection: 'collection' }));
+         p.toGive.forEach(c => cardsToUpdateMap.set(`${myUid}_${c.id}`, { card: c, ownerUid: myUid, collection: 'collection' }));
+     });
+
+     const updatesArray = Array.from(cardsToUpdateMap.values());
+     if (updatesArray.length === 0) return;
+
+     // On traite par paquets de 75 (limite Scryfall)
      const chunks = [];
-     for (let i = 0; i < cardsToUpdate.length; i += 75) {
-         chunks.push(cardsToUpdate.slice(i, i + 75));
+     for (let i = 0; i < updatesArray.length; i += 75) {
+         chunks.push(updatesArray.slice(i, i + 75));
      }
 
      const batch = writeBatch(db); 
@@ -2232,7 +2626,8 @@ export function useTradeMatcher() {
 
      for (const chunk of chunks) {
          try {
-             const identifiers = chunk.map(c => ({ id: c.id }));
+             // On ne demande à Scryfall que les IDs
+             const identifiers = chunk.map(item => ({ id: item.card.id }));
              
              const res = await fetch('https://api.scryfall.com/cards/collection', {
                  method: 'POST',
@@ -2243,23 +2638,26 @@ export function useTradeMatcher() {
              if (!res.ok) continue;
 
              const data = await res.json();
-             
              // eslint-disable-next-line @typescript-eslint/no-explicit-any
              const foundCards: any[] = data.data || [];
 
              foundCards.forEach(scryCard => {
                  const newPrice = parseFloat(scryCard.prices?.eur || "0");
-                 const localCard = chunk.find(c => c.id === scryCard.id);
+                 
+                 // On retrouve les cartes locales qui correspondent à cet ID Scryfall
+                 // (Il peut y en avoir plusieurs si moi et mon ami avons la même carte)
+                 const localMatches = chunk.filter(item => item.card.id === scryCard.id);
 
-                 if (localCard && localCard.price !== newPrice) {
-                     localCard.price = newPrice; 
-                     
-                     if (collectionName === 'collection') {
-                         const ref = doc(db, 'users', uid, 'collection', localCard.id);
+                 localMatches.forEach(match => {
+                     // Si le prix a changé, on met à jour l'objet en mémoire ET Firestore
+                     if (match.card.price !== newPrice) {
+                         match.card.price = newPrice; // Update mémoire (ref)
+                         
+                         const ref = doc(db, 'users', match.ownerUid, match.collection, match.card.id);
                          batch.update(ref, { price: newPrice });
                          hasUpdates = true;
                      }
-                 }
+                 });
              });
          } catch (e) { console.error("Err price fetch batch", e); }
      }
@@ -2269,91 +2667,97 @@ export function useTradeMatcher() {
      }
   };
 
+  // --- 3. ALGORITHME PRINCIPAL ---
   const runScan = async () => {
     if (!user || friends.length === 0) return;
     setLoading(true);
     setStatus("Chargement de vos données...");
 
     try {
-        const myCollectionMap = await fetchAllCards(user.uid, 'collection');
-        const myWishlistMap = await fetchAllCards(user.uid, 'wishlist', lists);
+        // A. Charger MES données
+        const [myCollectionMap, myWishlistMap] = await Promise.all([
+            fetchCardsAsMap(user.uid, 'collection'),
+            fetchCardsAsMap(user.uid, 'wishlist', lists)
+        ]);
 
-        const myWishlistNames = new Set<string>();
+        // B. Indexation de MA Wishlist (Set pour O(1))
         const myWishlistIds = new Set<string>();
-
-        myWishlistMap.forEach(card => {
-            if (card.isSpecificVersion) {
-                myWishlistIds.add(card.id);
-            } else {
-                myWishlistNames.add(card.name);
-            }
+        const myWishlistNames = new Set<string>();
+        myWishlistMap.forEach(c => {
+            if (c.isSpecificVersion) myWishlistIds.add(c.id);
+            else myWishlistNames.add(c.name);
         });
 
-        const newProposals: TradeProposal[] = [];
+        // C. Indexation de MON Trade Binder
+        // On ne garde que celles que je veux échanger
+        const myTradeCards = Array.from(myCollectionMap.values()).filter(c => c.isForTrade);
 
-        let i = 0;
-        for (const friend of friends) {
-            i++;
-            setStatus(`Analyse de ${friend.username} (${i}/${friends.length})...`);
-            
-            const friendCollectionMap = await fetchAllCards(friend.uid, 'collection');
-            const friendWishlistMap = await fetchAllCards(friend.uid, 'wishlist');
+        setStatus(`Analyse simultanée de ${friends.length} amis...`);
+
+        // D. SCAN PARALLÈLE DES AMIS
+        const matchPromises = friends.map(async (friend) => {
+            // Chargement parallèle des données de l'ami
+            const [friendCollectionMap, friendWishlistMap] = await Promise.all([
+                fetchCardsAsMap(friend.uid, 'collection'),
+                fetchCardsAsMap(friend.uid, 'wishlist')
+            ]);
 
             const toReceive: CardType[] = [];
             const toGive: CardType[] = [];
 
-            // 1. CE QUE JE PEUX RECEVOIR (CHECK AMI)
-            // On vérifie que l'ami a marqué la carte "isForTrade"
-            friendCollectionMap.forEach((card) => {
-                if (card.isForTrade) { 
-                    if (myWishlistIds.has(card.id)) {
-                        toReceive.push(card);
-                    } 
-                    else if (myWishlistNames.has(card.name)) {
+            // 1. Check ce que JE reçois (Sa Collection vs Ma Wishlist)
+            friendCollectionMap.forEach(card => {
+                if (card.isForTrade) { // Il doit vouloir l'échanger
+                    if (myWishlistIds.has(card.id) || myWishlistNames.has(card.name)) {
                         toReceive.push(card);
                     }
                 }
             });
 
-            const friendWishlistNames = new Set<string>();
+            // 2. Check ce que JE donne (Ma Collection vs Sa Wishlist)
+            // Indexation rapide de SA wishlist
             const friendWishlistIds = new Set<string>();
-
+            const friendWishlistNames = new Set<string>();
             friendWishlistMap.forEach(c => {
                 if (c.isSpecificVersion) friendWishlistIds.add(c.id);
                 else friendWishlistNames.add(c.name);
             });
 
-            // 2. CE QUE JE PEUX DONNER (CHECK MOI)
-            // On vérifie que J'AI marqué la carte "isForTrade"
-            myCollectionMap.forEach((card) => {
-                if (card.isForTrade) {
-                    if (friendWishlistIds.has(card.id)) {
-                        toGive.push(card);
-                    }
-                    else if (friendWishlistNames.has(card.name)) {
-                        toGive.push(card);
-                    }
+            myTradeCards.forEach(card => {
+                if (friendWishlistIds.has(card.id) || friendWishlistNames.has(card.name)) {
+                    toGive.push(card);
                 }
             });
 
             if (toReceive.length > 0 || toGive.length > 0) {
-                // On met à jour les prix pour avoir une balance précise
-                await refreshPrices(toReceive, friend.uid, 'collection');
-                await refreshPrices(toGive, user.uid, 'collection');
-
-                const valueReceive = toReceive.reduce((sum, c) => sum + (c.customPrice ?? c.price ?? 0), 0);
-                const valueGive = toGive.reduce((sum, c) => sum + (c.customPrice ?? c.price ?? 0), 0);
-
-                newProposals.push({
+                return {
                     friend,
                     toReceive,
                     toGive,
-                    balance: valueGive - valueReceive
-                });
+                    balance: 0 // Sera calculé après refresh
+                } as TradeProposal;
             }
+            return null;
+        });
+
+        // Attente de tous les scans
+        const results = await Promise.all(matchPromises);
+        const validProposals = results.filter((p): p is TradeProposal => p !== null);
+
+        // E. MISE À JOUR DES PRIX (Seulement pour les cartes matchées)
+        if (validProposals.length > 0) {
+            setStatus("Actualisation des prix...");
+            await refreshPricesForProposals(validProposals, user.uid);
+            
+            // Recalcul des balances avec les prix frais
+            validProposals.forEach(p => {
+                const valReceive = p.toReceive.reduce((sum, c) => sum + (c.customPrice ?? c.price ?? 0), 0);
+                const valGive = p.toGive.reduce((sum, c) => sum + (c.customPrice ?? c.price ?? 0), 0);
+                p.balance = valGive - valReceive;
+            });
         }
 
-        setProposals(newProposals);
+        setProposals(validProposals);
 
     } catch (error) {
         console.error("Erreur scan", error);
@@ -2364,6 +2768,198 @@ export function useTradeMatcher() {
   };
 
   return { proposals, loading, status, runScan };
+}
+</file>
+
+<file path="hooks/useTradeTransaction.ts">
+// hooks/useTradeTransaction.ts
+import { useState } from 'react';
+import { db } from '@/lib/firebase';
+import { doc, runTransaction, serverTimestamp, increment, DocumentReference, DocumentSnapshot } from 'firebase/firestore';
+import { useAuth } from '@/lib/AuthContext';
+import { CardType } from './useCardCollection';
+import toast from 'react-hot-toast';
+
+// Helper pour nettoyer l'objet avant écriture (Sécurité & Propreté)
+// On ne garde que ce qui est pertinent pour la DB, on vire les états UI
+const createCardData = (card: CardType) => {
+    return {
+        name: card.name,
+        imageUrl: card.imageUrl,
+        imageBackUrl: card.imageBackUrl || null,
+        setName: card.setName || '',
+        setCode: card.setCode || '',
+        price: card.price || 0,
+        // On force la quantité à celle de l'échange lors de la création
+        quantity: card.quantity, 
+        isFoil: card.isFoil || false,
+        isSpecificVersion: card.isSpecificVersion || false,
+        scryfallData: card.scryfallData || null,
+        addedAt: serverTimestamp(),
+        // On s'assure que ces champs sont reset
+        wishlistId: null,
+        isForTrade: false 
+    };
+};
+
+export function useTradeTransaction() {
+  const { user } = useAuth();
+  const [isProcessing, setIsProcessing] = useState(false);
+
+  const getRef = (uid: string, collection: 'collection' | 'wishlist', cardId: string) => {
+      return doc(db, 'users', uid, collection, cardId);
+  };
+
+  const executeTrade = async (
+      myCardsToGive: CardType[], 
+      cardsToReceive: CardType[], 
+      partnerUid: string | null = null
+  ) => {
+    if (!user) return false;
+    
+    setIsProcessing(true);
+    const toastId = toast.loading("Vérification des stocks et échange...");
+
+    try {
+        await runTransaction(db, async (transaction) => {
+            // --- ÉTAPE 1 : LECTURES & VÉRIFICATIONS (READS) ---
+            // Dans une transaction Firestore, TOUTES les lectures doivent se faire AVANT les écritures.
+
+            // 1.A. Vérifier MON inventaire (Je dois posséder ce que je donne)
+            const myGiveOps: { ref: DocumentReference; snap: DocumentSnapshot; card: CardType }[] = [];
+            
+            for (const card of myCardsToGive) {
+                const ref = getRef(user.uid, 'collection', card.id);
+                const snap = await transaction.get(ref);
+                
+                if (!snap.exists()) {
+                    throw new Error(`Annulé : Vous ne possédez pas (ou plus) la carte "${card.name}".`);
+                }
+                
+                const currentQty = snap.data()?.quantity || 0;
+                if (currentQty < card.quantity) {
+                    throw new Error(`Annulé : Stock insuffisant pour "${card.name}" (Requis: ${card.quantity}, Dispo: ${currentQty}).`);
+                }
+                
+                myGiveOps.push({ ref, snap, card });
+            }
+
+            // 1.B. Vérifier inventaire PARTENAIRE (Si échange entre utilisateurs)
+            const partnerGiveOps: { ref: DocumentReference; snap: DocumentSnapshot; card: CardType }[] = [];
+            
+            if (partnerUid) {
+                for (const card of cardsToReceive) {
+                    const ref = getRef(partnerUid, 'collection', card.id);
+                    const snap = await transaction.get(ref);
+
+                    if (!snap.exists()) {
+                        throw new Error(`Annulé : Le partenaire ne possède plus "${card.name}".`);
+                    }
+                    
+                    const currentQty = snap.data()?.quantity || 0;
+                    if (currentQty < card.quantity) {
+                         throw new Error(`Annulé : Stock partenaire insuffisant pour "${card.name}".`);
+                    }
+
+                    partnerGiveOps.push({ ref, snap, card });
+                }
+            }
+
+            // 1.C. Préparer les lectures pour les RÉCEPTIONS (Pour savoir si on update ou create)
+            // MOI je reçois
+            const myReceiveOps = [];
+            for (const card of cardsToReceive) {
+                const colRef = getRef(user.uid, 'collection', card.id);
+                const wishRef = getRef(user.uid, 'wishlist', card.id);
+                // On lit les deux potentiels (Collection pour update, Wishlist pour delete)
+                const colSnap = await transaction.get(colRef);
+                const wishSnap = await transaction.get(wishRef);
+                myReceiveOps.push({ colRef, wishRef, colSnap, wishSnap, card });
+            }
+
+            // PARTENAIRE reçoit (ce que je donne)
+            const partnerReceiveOps = [];
+            if (partnerUid) {
+                for (const card of myCardsToGive) {
+                    const colRef = getRef(partnerUid, 'collection', card.id);
+                    const wishRef = getRef(partnerUid, 'wishlist', card.id);
+                    const colSnap = await transaction.get(colRef);
+                    const wishSnap = await transaction.get(wishRef);
+                    partnerReceiveOps.push({ colRef, wishRef, colSnap, wishSnap, card });
+                }
+            }
+
+            // --- ÉTAPE 2 : ÉCRITURES (WRITES) ---
+            
+            // 2.A. MOI : Je donne (Décrémenter ou Supprimer)
+            for (const { ref, snap, card } of myGiveOps) {
+                const currentQty = snap.data()?.quantity || 0;
+                // Si stock exact, on supprime le document
+                if (currentQty === card.quantity) {
+                    transaction.delete(ref);
+                } else {
+                    transaction.update(ref, { quantity: increment(-card.quantity) });
+                }
+            }
+
+            // 2.B. PARTENAIRE : Il donne (Décrémenter ou Supprimer)
+            if (partnerUid) {
+                for (const { ref, snap, card } of partnerGiveOps) {
+                    const currentQty = snap.data()?.quantity || 0;
+                    if (currentQty === card.quantity) {
+                        transaction.delete(ref);
+                    } else {
+                        transaction.update(ref, { quantity: increment(-card.quantity) });
+                    }
+                }
+            }
+
+            // 2.C. MOI : Je reçois (Incrémenter ou Créer + Nettoyer Wishlist)
+            for (const { colRef, wishRef, colSnap, wishSnap, card } of myReceiveOps) {
+                if (colSnap.exists()) {
+                    transaction.update(colRef, { quantity: increment(card.quantity) });
+                } else {
+                    // C'est ici qu'on utilise le Helper pour être sûr des données insérées
+                    transaction.set(colRef, createCardData(card));
+                }
+                
+                // Si la carte était dans ma wishlist, je l'enlève !
+                if (wishSnap.exists()) {
+                    transaction.delete(wishRef);
+                }
+            }
+
+            // 2.D. PARTENAIRE : Il reçoit (Incrémenter ou Créer + Nettoyer Wishlist)
+            if (partnerUid) {
+                for (const { colRef, wishRef, colSnap, wishSnap, card } of partnerReceiveOps) {
+                    if (colSnap.exists()) {
+                        transaction.update(colRef, { quantity: increment(card.quantity) });
+                    } else {
+                        transaction.set(colRef, createCardData(card));
+                    }
+                    
+                    if (wishSnap.exists()) {
+                        transaction.delete(wishRef);
+                    }
+                }
+            }
+        });
+
+        toast.success("Échange validé avec succès !", { id: toastId });
+        return true;
+
+    } catch (error: unknown) {
+        console.error("Erreur Transaction:", error);
+        // Gestion propre de l'erreur pour l'utilisateur
+        const errMsg = error instanceof Error ? error.message : "Erreur inconnue lors de l'échange";
+        toast.error(errMsg, { id: toastId, duration: 5000 });
+        return false;
+    } finally {
+        setIsProcessing(false);
+    }
+  };
+
+  return { executeTrade, isProcessing };
 }
 </file>
 
@@ -2484,202 +3080,6 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 };
 </file>
 
-<file path="app/trades/manual/page.tsx">
-'use client';
-
-import { useState, useMemo } from 'react';
-import { useAuth } from '@/lib/AuthContext';
-import { useCardCollection, CardType } from '@/hooks/useCardCollection';
-import { useTradeTransaction } from '@/hooks/useTradeTransaction';
-import toast from 'react-hot-toast';
-import CardVersionPickerModal, { ScryfallCardRaw } from '@/components/CardVersionPickerModal';
-
-export default function ManualTradePage() {
-  const { user } = useAuth();
-  const { cards: myCollection, loading } = useCardCollection('collection'); 
-  const { executeTrade, isProcessing } = useTradeTransaction();
-
-  const [toGive, setToGive] = useState<CardType[]>([]);
-  const [toReceive, setToReceive] = useState<CardType[]>([]);
-  
-  const [localSearch, setLocalSearch] = useState('');
-  const [remoteSearch, setRemoteSearch] = useState('');
-  const [searchResults, setSearchResults] = useState<ScryfallCardRaw[]>([]);
-  const [isSearching, setIsSearching] = useState(false);
-  const [cardToPick, setCardToPick] = useState<ScryfallCardRaw | null>(null);
-
-  // --- LOGIQUE ---
-  const handleAddToGive = (card: CardType) => {
-      const existing = toGive.find(c => c.id === card.id);
-      if (existing) {
-          if (existing.quantity < card.quantity) { 
-              setToGive(prev => prev.map(c => c.id === card.id ? { ...c, quantity: c.quantity + 1 } : c));
-          } else { toast.error("Max quantité atteinte"); }
-      } else { setToGive(prev => [...prev, { ...card, quantity: 1 }]); }
-  };
-
-  const handleSearchScryfall = async (e: React.FormEvent) => {
-      e.preventDefault();
-      if (!remoteSearch.trim()) return;
-      setIsSearching(true);
-      try {
-          const res = await fetch(`/api/search?q=${remoteSearch}`); 
-          const data = await res.json();
-          setSearchResults(data.data || []);
-      } catch (e) { toast.error("Erreur recherche"); }
-      finally { setIsSearching(false); }
-  };
-
-  const handleSearchResultClick = (scryfallCard: ScryfallCardRaw) => { setCardToPick(scryfallCard); };
-
-  const handleConfirmReceive = (card: CardType) => {
-      const existing = toReceive.find(c => c.id === card.id && c.isFoil === card.isFoil); 
-      if (existing) {
-          setToReceive(prev => prev.map(c => (c.id === card.id && c.isFoil === card.isFoil) ? { ...c, quantity: c.quantity + card.quantity } : c));
-      } else { setToReceive(prev => [...prev, card]); }
-      setSearchResults([]); setRemoteSearch(""); toast.success(`Ajouté : ${card.name}`);
-  };
-
-  const handleValidate = async () => {
-      if (toGive.length === 0 && toReceive.length === 0) return;
-      if (!confirm("Confirmer cet échange ?")) return;
-      const success = await executeTrade(toGive, toReceive, null);
-      if (success) { setToGive([]); setToReceive([]); setLocalSearch(""); }
-  };
-
-  // CALCULS
-  const valGive = toGive.reduce((acc, c) => acc + (c.customPrice ?? c.price ?? 0) * c.quantity, 0);
-  const valReceive = toReceive.reduce((acc, c) => acc + (c.price || 0) * c.quantity, 0);
-  const balance = valGive - valReceive;
-
-  const uniqueSearchResults = useMemo(() => {
-    const seen = new Set();
-    return searchResults.filter(card => {
-      const name = card.name.split(' // ')[0];
-      if (seen.has(name)) return false;
-      seen.add(name);
-      return true;
-    });
-  }, [searchResults]);
-
-  if (!user) return <div className="p-10 text-center">Connectez-vous.</div>;
-
-  return (
-    <div className="container mx-auto p-4 h-[calc(100vh-64px)] flex flex-col">
-        <h1 className="text-2xl font-bold mb-4 flex-none flex items-center gap-2">🖐️ Échange Manuel</h1>
-
-        <div className="grid lg:grid-cols-2 gap-6 grow overflow-hidden pb-24">
-            
-            {/* --- COLONNE GAUCHE --- */}
-            <div className="flex flex-col h-full bg-red-50/50 dark:bg-red-900/10 rounded-xl border border-red-100 dark:border-red-900 overflow-hidden relative shadow-sm">
-                 <div className="p-4 pb-0 flex-none">
-                     <h2 className="font-bold text-red-600 mb-2">📤 Je donne</h2>
-                     <input type="text" placeholder="Chercher dans ma collection..." className="w-full p-2 mb-2 rounded border dark:bg-gray-800 dark:text-white dark:border-gray-600 text-sm" value={localSearch} onChange={e => setLocalSearch(e.target.value)} />
-                 </div>
-                 
-                 <div className="grow overflow-y-auto custom-scrollbar p-4 pt-0 space-y-4">
-                     {toGive.length > 0 && (
-                        <div className="bg-white dark:bg-gray-800 rounded-lg border border-red-200 dark:border-red-800 overflow-hidden">
-                             <div className="bg-red-100 dark:bg-red-900/30 px-3 py-1 text-xs font-bold text-red-700 dark:text-red-300">SÉLECTION</div>
-                             {toGive.map(card => (
-                                <div key={card.id} className="flex justify-between items-center text-sm p-2 border-b dark:border-gray-700 last:border-0 hover:bg-gray-50">
-                                    <span>{card.quantity}x {card.name}</span>
-                                    <button onClick={() => setToGive(p => p.filter(c => c.id !== card.id))} className="text-red-500 rounded px-1">✕</button>
-                                </div>
-                            ))}
-                        </div>
-                     )}
-                     
-                     <div className="space-y-1">
-                        <p className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Ma Collection</p>
-                        {loading ? <p className="text-sm">Chargement...</p> : 
-                            myCollection.filter(c => c.name.toLowerCase().includes(localSearch.toLowerCase())).slice(0, 50).map(card => (
-                                <div key={card.id} onClick={() => handleAddToGive(card)} className="cursor-pointer bg-white dark:bg-gray-800/50 hover:bg-red-100 p-2 rounded flex items-center gap-2 border border-transparent hover:border-red-200 transition shadow-sm group">
-                                    <img src={card.imageUrl} className="w-8 h-11 rounded object-cover bg-gray-200 shrink-0" alt="" />
-                                    <div className="grow min-w-0">
-                                        <p className="font-bold text-xs truncate dark:text-gray-200">{card.name}</p>
-                                        <p className="text-[10px] text-gray-500">{card.setName} - Stock: {card.quantity}</p>
-                                    </div>
-                                    <span className="text-xs font-bold text-gray-400 group-hover:text-red-500 shrink-0">+</span>
-                                </div>
-                            ))
-                        }
-                     </div>
-                 </div>
-                 
-                 <div className="flex-none bg-red-50 dark:bg-red-900/20 p-3 border-t border-red-100 dark:border-red-900 text-center">
-                    <span className="text-xs text-red-600 font-bold uppercase">Total Donné</span>
-                    <div className="text-xl font-bold text-red-700 dark:text-red-300">{valGive.toFixed(2)} €</div>
-                </div>
-            </div>
-
-            {/* --- COLONNE DROITE --- */}
-            <div className="flex flex-col h-full bg-green-50/50 dark:bg-green-900/10 rounded-xl border border-green-100 dark:border-green-900 overflow-hidden relative shadow-sm">
-                <div className="p-4 pb-0 flex-none">
-                    <h2 className="font-bold text-green-600 mb-2">📥 Je reçois</h2>
-                    <form onSubmit={handleSearchScryfall} className="flex gap-2 mb-2">
-                         <input type="text" placeholder="Rechercher carte..." className="grow p-2 rounded border dark:bg-gray-800 dark:text-white dark:border-gray-600 text-sm" value={remoteSearch} onChange={e => setRemoteSearch(e.target.value)} />
-                         <button type="submit" className="bg-green-600 hover:bg-green-700 text-white px-3 rounded shadow-sm">🔍</button>
-                    </form>
-                </div>
-
-                <div className="grow overflow-y-auto custom-scrollbar p-4 pt-0 space-y-4">
-                     {toReceive.length > 0 && (
-                        <div className="bg-white dark:bg-gray-800 rounded-lg border border-green-200 dark:border-green-800 overflow-hidden">
-                             <div className="bg-green-100 dark:bg-green-900/30 px-3 py-1 text-xs font-bold text-green-700 dark:text-green-300">SÉLECTION</div>
-                             {toReceive.map((card, idx) => (
-                                <div key={`${card.id}-${idx}`} className="flex justify-between items-center text-sm p-2 border-b dark:border-gray-700 last:border-0 hover:bg-gray-50">
-                                    <div className="flex items-center gap-2 overflow-hidden">
-                                        <span className="font-bold shrink-0">{card.quantity}x</span>
-                                        <div className="flex flex-col truncate"><span className="truncate">{card.name}</span><span className="text-[10px] text-gray-500 truncate">{card.setName} {card.isFoil && '✨'}</span></div>
-                                    </div>
-                                    <button onClick={() => setToReceive(p => p.filter((_, i) => i !== idx))} className="text-red-500 rounded px-1 ml-2">✕</button>
-                                </div>
-                            ))}
-                        </div>
-                     )}
-
-                     <div className="space-y-1">
-                        <p className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Résultats Scryfall</p>
-                        {uniqueSearchResults.map(card => (
-                            <div key={card.id} onClick={() => handleSearchResultClick(card)} className="cursor-pointer bg-white dark:bg-gray-800/50 hover:bg-green-100 p-2 rounded flex items-center gap-2 border border-transparent hover:border-green-200 transition shadow-sm group">
-                                <div className="w-8 h-11 bg-gray-200 rounded overflow-hidden shrink-0"><img src={card.image_uris?.small} className="w-full h-full object-cover" alt="" /></div>
-                                <div className="grow min-w-0"><p className="font-bold text-xs truncate dark:text-gray-200">{card.name}</p><p className="text-[10px] text-gray-500 italic">Sélectionner...</p></div>
-                                <span className="text-xs font-bold text-gray-400 group-hover:text-green-500 shrink-0">Choisir ›</span>
-                            </div>
-                        ))}
-                     </div>
-                </div>
-
-                <div className="flex-none bg-green-50 dark:bg-green-900/20 p-3 border-t border-green-100 dark:border-green-900 text-center">
-                    <span className="text-xs text-green-600 font-bold uppercase">Total Reçu</span>
-                    <div className="text-xl font-bold text-green-700 dark:text-green-300">{valReceive.toFixed(2)} €</div>
-                </div>
-            </div>
-        </div>
-
-        {/* FOOTER */}
-        <div className="fixed bottom-0 left-0 right-0 h-20 bg-white dark:bg-gray-900 border-t dark:border-gray-800 flex items-center px-6 z-40 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)]">
-            <div className="flex-1"></div>
-            <div className="flex-1 flex flex-col items-center justify-center">
-                <span className="text-xs text-gray-400 font-bold uppercase tracking-widest">Balance</span>
-                <div className={`text-2xl font-black ${balance >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                    {balance > 0 ? '+' : ''}{balance.toFixed(2)} €
-                </div>
-            </div>
-            <div className="flex-1 flex justify-end">
-                <button onClick={handleValidate} disabled={isProcessing || (toGive.length === 0 && toReceive.length === 0)} className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-3 rounded-xl font-bold disabled:opacity-50 transition shadow-lg transform active:scale-95">
-                    {isProcessing ? 'Validation...' : '✅ Valider'}
-                </button>
-            </div>
-        </div>
-
-        <CardVersionPickerModal isOpen={!!cardToPick} baseCard={cardToPick} onClose={() => setCardToPick(null)} onConfirm={handleConfirmReceive} />
-    </div>
-  );
-}
-</file>
-
 <file path="components/Header.tsx">
 // components/Header.tsx
 'use client';
@@ -2720,14 +3120,14 @@ export default function Header() {
               <>
                 {/* NAVIGATION DESKTOP (Cachée sur mobile) */}
                 <nav className="hidden md:flex gap-6 mr-4 items-center">
-                  <Link href="/" className={linkClass('/')}>Recherche</Link>
+                  {/* MODIFICATION ICI : Lien vers /search */}
+                  <Link href="/search" className={linkClass('/search')}>🔍 Recherche</Link> 
+                  
                   <Link href="/wishlist" className={linkClass('/wishlist')}>Ma Wishlist</Link>
                   <Link href="/collection" className={linkClass('/collection')}>Ma Collection</Link>
                   
-                  {/* NOUVEAU LIEN ÉCHANGES */}
                   <Link href="/trades" className={linkClass('/trades')}>🤝 Échanges</Link>
 
-                  {/* LIEN CONTACTS AVEC PASTILLE DE NOTIF */}
                   <Link href="/contacts" className={`${linkClass('/contacts')} relative flex items-center gap-1`}>
                     👥 Contacts
                     {friendRequestCount > 0 && (
@@ -2740,7 +3140,7 @@ export default function Header() {
 
                 <div className="h-6 w-px bg-gray-300 dark:bg-gray-600 hidden md:block"></div>
 
-                {/* AVATAR + LOGOUT (Toujours visible si connecté) */}
+                {/* AVATAR + LOGOUT */}
                 <div className="flex items-center gap-3">
                   {user.photoURL && (
                     <img 
@@ -2761,15 +3161,12 @@ export default function Header() {
                   <button 
                     onClick={() => setIsMenuOpen(!isMenuOpen)}
                     className="md:hidden p-2 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg focus:outline-none"
-                    aria-label="Menu"
                   >
                     {isMenuOpen ? (
-                      // Icône Croix (Fermer)
                       <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6">
                         <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
                       </svg>
                     ) : (
-                      // Icône Burger (Ouvrir)
                       <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6">
                         <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" />
                       </svg>
@@ -2788,13 +3185,15 @@ export default function Header() {
           </div>
         </div>
         
-        {/* MENU MOBILE (Visible uniquement si ouvert + petit écran) */}
+        {/* MENU MOBILE */}
         {user && isMenuOpen && (
           <div className="md:hidden mt-4 pt-4 border-t border-gray-100 dark:border-gray-800 animate-in slide-in-from-top-2 duration-200">
              <nav className="flex flex-col space-y-2">
-               <Link href="/" className={linkClass('/')} onClick={() => setIsMenuOpen(false)}>
+               {/* MODIFICATION ICI : Lien vers /search */}
+               <Link href="/search" className={linkClass('/search')} onClick={() => setIsMenuOpen(false)}>
                  🔍 Recherche
                </Link>
+               
                <Link href="/wishlist" className={linkClass('/wishlist')} onClick={() => setIsMenuOpen(false)}>
                  ✨ Ma Wishlist
                </Link>
@@ -2802,7 +3201,6 @@ export default function Header() {
                  📚 Ma Collection
                </Link>
                
-               {/* NOUVEAU LIEN MOBILE */}
                <Link href="/trades" className={linkClass('/trades')} onClick={() => setIsMenuOpen(false)}>
                  🤝 Centre d&apos;Échanges
                </Link>
@@ -2828,139 +3226,6 @@ export default function Header() {
       </div>
     </header>
   );
-}
-</file>
-
-<file path="hooks/useCardCollection.ts">
-// hooks/useCardCollection.ts
-import { useState, useEffect, useMemo } from 'react';
-import { db } from '@/lib/firebase';
-import { collection, onSnapshot, doc, updateDoc, deleteDoc, increment } from 'firebase/firestore';
-import { useAuth } from '@/lib/AuthContext';
-import toast from 'react-hot-toast';
-
-export type CardType = {
-  id: string;
-  name: string;
-  imageUrl: string;
-  imageBackUrl?: string;
-  quantity: number;
-  price?: number; 
-  customPrice?: number;
-  setName?: string;
-  setCode?: string;
-  wishlistId?: string;
-  
-  // --- OPTIONS ---
-  isFoil?: boolean;             
-  isSpecificVersion?: boolean;
-  isForTrade?: boolean; 
-  
-  // --- NOUVEAU : DONNÉES BRUTES SCRYFALL ---
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  scryfallData?: any;
-};
-
-export function useCardCollection(
-    target: 'collection' | 'wishlist', 
-    listId: string = 'default',
-    targetUid?: string
-) {
-  const { user, loading: authLoading } = useAuth();
-  const [cards, setCards] = useState<CardType[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  const effectiveUid = targetUid || user?.uid;
-  const isOwner = user?.uid === effectiveUid; 
-
-  useEffect(() => {
-    if (!effectiveUid || authLoading) {
-        if (!authLoading && !effectiveUid) setLoading(false);
-        return;
-    }
-    setLoading(true);
-
-    let collectionPath = '';
-    if (target === 'collection') {
-        collectionPath = `users/${effectiveUid}/collection`;
-    } else {
-        if (listId === 'default') collectionPath = `users/${effectiveUid}/wishlist`;
-        else collectionPath = `users/${effectiveUid}/wishlists_data/${listId}/cards`;
-    }
-
-    const colRef = collection(db, collectionPath);
-    const unsubscribe = onSnapshot(colRef, (snapshot) => {
-      const items = snapshot.docs.map((doc) => ({
-        id: doc.id,
-        wishlistId: listId,
-        ...doc.data(),
-      })) as CardType[];
-      setCards(items);
-      setLoading(false);
-    });
-    return () => unsubscribe();
-  }, [effectiveUid, target, listId, authLoading]);
-
-  // --- ACTIONS ---
-
-  const getDocRef = (cardId: string) => {
-      if (!isOwner || !effectiveUid) return null;
-      let path = '';
-      if (target === 'collection') path = `users/${effectiveUid}/collection`;
-      else if (listId === 'default') path = `users/${effectiveUid}/wishlist`;
-      else path = `users/${effectiveUid}/wishlists_data/${listId}/cards`;
-      return doc(db, path, cardId);
-  };
-
-  const setCustomPrice = async (cardId: string, price: number) => {
-      if (!isOwner) return;
-      const ref = getDocRef(cardId);
-      if (ref) {
-          await updateDoc(ref, { customPrice: price });
-          toast.success("Prix mis à jour");
-      }
-  };
-
-  const toggleAttribute = async (
-      cardId: string, 
-      field: 'isFoil' | 'isSpecificVersion' | 'isForTrade', 
-      currentValue: boolean
-  ) => {
-      if (!isOwner) return;
-      const ref = getDocRef(cardId);
-      if (ref) {
-          await updateDoc(ref, { [field]: !currentValue });
-      }
-  };
-
-  const updateQuantity = async (cardId: string, amount: number, currentQuantity: number) => {
-    if (!isOwner) return;
-    const ref = getDocRef(cardId);
-    if (!ref) return;
-    if (currentQuantity + amount <= 0) return 'shouldDelete';
-    try {
-      await updateDoc(ref, { quantity: increment(amount) });
-      return 'updated';
-    } catch (err) { return 'error'; }
-  };
-
-  const removeCard = async (cardId: string) => {
-    if (!isOwner) return;
-    const ref = getDocRef(cardId);
-    if(ref) { await deleteDoc(ref); toast.success('Carte retirée', { icon: '🗑️' }); }
-  };
-
-  const totalPrice = useMemo(() => {
-    return cards.reduce((acc, card) => {
-        const effectivePrice = card.customPrice !== undefined ? card.customPrice : (card.price || 0);
-        return acc + effectivePrice * card.quantity;
-    }, 0);
-  }, [cards]);
-
-  return { 
-      cards, loading, isOwner, totalPrice,
-      updateQuantity, removeCard, setCustomPrice, toggleAttribute 
-  };
 }
 </file>
 
@@ -3187,6 +3452,303 @@ export default function ContactsPage() {
 
       </div>
     </main>
+  );
+}
+</file>
+
+<file path="app/trades/manual/page.tsx">
+'use client';
+
+import { useState, useMemo } from 'react';
+import { useAuth } from '@/lib/AuthContext';
+import { useCardCollection, CardType } from '@/hooks/useCardCollection';
+import { useTradeTransaction } from '@/hooks/useTradeTransaction';
+import toast from 'react-hot-toast';
+import CardVersionPickerModal from '@/components/CardVersionPickerModal';
+// CORRECTION ICI : On importe le type depuis l'utilitaire, pas le composant
+import { ScryfallRawData } from '@/lib/cardUtils';
+
+export default function ManualTradePage() {
+  const { user } = useAuth();
+  const { cards: myCollection, loading } = useCardCollection('collection'); 
+  const { executeTrade, isProcessing } = useTradeTransaction();
+
+  // --- ÉTATS ---
+  const [toGive, setToGive] = useState<CardType[]>([]);
+  const [toReceive, setToReceive] = useState<CardType[]>([]);
+  
+  const [localSearch, setLocalSearch] = useState('');
+  
+  const [remoteSearch, setRemoteSearch] = useState('');
+  // CORRECTION TYPE ICI
+  const [searchResults, setSearchResults] = useState<ScryfallRawData[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+
+  // CORRECTION TYPE ICI
+  const [cardToPick, setCardToPick] = useState<ScryfallRawData | null>(null);
+
+  // --- LOGIQUE AJOUT / RETRAIT ---
+  
+  const handleAddToGive = (card: CardType) => {
+      const existing = toGive.find(c => c.id === card.id);
+      if (existing) {
+          if (existing.quantity < card.quantity) { 
+              setToGive(prev => prev.map(c => c.id === card.id ? { ...c, quantity: c.quantity + 1 } : c));
+          } else {
+              toast.error("Max quantité atteinte");
+          }
+      } else {
+          setToGive(prev => [...prev, { ...card, quantity: 1 }]);
+      }
+  };
+
+  const handleSearchScryfall = async (e: React.FormEvent) => {
+      e.preventDefault();
+      if (!remoteSearch.trim()) return;
+      setIsSearching(true);
+      try {
+          const res = await fetch(`/api/search?q=${remoteSearch}`); 
+          const data = await res.json();
+          setSearchResults(data.data || []);
+      } catch (e) { toast.error("Erreur recherche"); }
+      finally { setIsSearching(false); }
+  };
+
+  // Click sur résultat recherche -> Ouvre la modale
+  // CORRECTION TYPE ICI
+  const handleSearchResultClick = (scryfallCard: ScryfallRawData) => {
+    setCardToPick(scryfallCard);
+  };
+
+  // Retour de la modale -> Ajoute à la liste "Je reçois"
+  const handleConfirmReceive = (card: CardType) => {
+      const existing = toReceive.find(c => c.id === card.id && c.isFoil === card.isFoil); 
+      
+      if (existing) {
+          setToReceive(prev => prev.map(c => 
+              (c.id === card.id && c.isFoil === card.isFoil) 
+              ? { ...c, quantity: c.quantity + card.quantity } 
+              : c
+          ));
+      } else {
+          setToReceive(prev => [...prev, card]);
+      }
+      
+      // On vide la recherche pour nettoyer l'interface
+      setSearchResults([]); 
+      setRemoteSearch("");
+      toast.success(`Ajouté : ${card.name}`);
+  };
+
+  // --- VALIDATION ---
+  const handleValidate = async () => {
+      if (toGive.length === 0 && toReceive.length === 0) return;
+      if (!confirm("Confirmer cet échange ? Vos cartes données seront retirées de votre collection.")) return;
+
+      const success = await executeTrade(toGive, toReceive, null);
+      if (success) {
+          setToGive([]);
+          setToReceive([]);
+          setLocalSearch("");
+      }
+  };
+
+  // --- CALCULS & FILTRES ---
+  const valGive = toGive.reduce((acc, c) => acc + (c.customPrice ?? c.price ?? 0) * c.quantity, 0);
+  const valReceive = toReceive.reduce((acc, c) => acc + (c.price || 0) * c.quantity, 0);
+
+  // ⚡ On filtre les doublons de nom pour l'affichage
+  const uniqueSearchResults = useMemo(() => {
+    const seen = new Set();
+    return searchResults.filter(card => {
+      // Sécurisation : on vérifie que le nom existe (pour éviter crash sur data corrompue)
+      const rawName = card.name || "";
+      const name = rawName.split(' // ')[0];
+      if (seen.has(name)) return false;
+      seen.add(name);
+      return true;
+    });
+  }, [searchResults]);
+
+  if (!user) return <div className="p-10 text-center">Connectez-vous.</div>;
+
+  return (
+    // CONTENEUR PRINCIPAL FIXE (Hauteur écran - Header)
+    <div className="container mx-auto p-4 h-[calc(100vh-64px)] flex flex-col">
+        
+        <h1 className="text-2xl font-bold mb-4 flex-none flex items-center gap-2">
+            🖐️ Échange Manuel / Externe
+        </h1>
+
+        {/* GRILLE QUI PREND TOUT L'ESPACE RESTANT */}
+        <div className="grid lg:grid-cols-2 gap-6 grow overflow-hidden pb-24">
+            
+            {/* --- COLONNE GAUCHE : JE DONNE --- */}
+            <div className="flex flex-col h-full bg-red-50/50 dark:bg-red-900/10 rounded-xl border border-red-100 dark:border-red-900 overflow-hidden relative shadow-sm">
+                <div className="p-4 pb-0 flex-none">
+                    <h2 className="font-bold text-red-600 mb-2">📤 Je donne (De ma collection)</h2>
+                    <input 
+                        type="text" 
+                        placeholder="Chercher dans ma collection..." 
+                        className="w-full p-2 mb-2 rounded border dark:bg-gray-800 dark:text-white dark:border-gray-600 text-sm"
+                        value={localSearch}
+                        onChange={e => setLocalSearch(e.target.value)}
+                    />
+                </div>
+                
+                {/* LISTE DÉFILANTE */}
+                 <div className="grow overflow-y-auto custom-scrollbar p-4 pt-0 space-y-4">
+                    
+                    {/* SÉLECTIONNÉS */}
+                    {toGive.length > 0 && (
+                        <div className="bg-white dark:bg-gray-800 rounded-lg border border-red-200 dark:border-red-800 overflow-hidden">
+                            <div className="bg-red-100 dark:bg-red-900/30 px-3 py-1 text-xs font-bold text-red-700 dark:text-red-300">
+                                SÉLECTION ({toGive.reduce((a,c)=>a+c.quantity,0)})
+                            </div>
+                            {toGive.map(card => (
+                                <div key={card.id} className="flex justify-between items-center text-sm p-2 border-b dark:border-gray-700 last:border-0 hover:bg-gray-50 dark:hover:bg-gray-700/50">
+                                    <span className="truncate">{card.quantity}x {card.name}</span>
+                                    <button onClick={() => setToGive(p => p.filter(c => c.id !== card.id))} className="text-red-500 hover:bg-red-50 rounded px-1">✕</button>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+
+                    {/* DISPONIBLES */}
+                    <div className="space-y-1">
+                        <p className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Ma Collection</p>
+                        {loading ? <p className="text-sm">Chargement...</p> : 
+                            myCollection
+                                .filter(c => c.name.toLowerCase().includes(localSearch.toLowerCase()))
+                                .slice(0, 50)
+                                .map(card => (
+                                    <div key={card.id} onClick={() => handleAddToGive(card)} className="cursor-pointer bg-white dark:bg-gray-800/50 hover:bg-red-100 dark:hover:bg-red-900/30 p-2 rounded flex items-center gap-2 border border-transparent hover:border-red-200 transition shadow-sm group">
+                                        <div className="w-8 h-11 bg-gray-200 rounded shrink-0 overflow-hidden">
+                                            <img src={card.imageUrl} className="w-full h-full object-cover" alt="" />
+                                        </div>
+                                        <div className="grow min-w-0">
+                                            <p className="font-bold text-xs truncate dark:text-gray-200">{card.name}</p>
+                                            <p className="text-[10px] text-gray-500">{card.setName} - Stock: {card.quantity}</p>
+                                        </div>
+                                        <span className="text-xs font-bold text-gray-400 group-hover:text-red-500 shrink-0">+</span>
+                                    </div>
+                                ))
+                        }
+                    </div>
+                </div>
+
+                {/* TOTAL */}
+                <div className="flex-none bg-red-50 dark:bg-red-900/20 p-3 border-t border-red-100 dark:border-red-900 text-center">
+                    <span className="text-xs text-red-600 dark:text-red-400 font-bold uppercase">Total Donné</span>
+                    <div className="text-xl font-bold text-red-700 dark:text-red-300">{valGive.toFixed(2)} €</div>
+                </div>
+            </div>
+
+            {/* --- COLONNE DROITE : JE REÇOIS --- */}
+            <div className="flex flex-col h-full bg-green-50/50 dark:bg-green-900/10 rounded-xl border border-green-100 dark:border-green-900 overflow-hidden relative shadow-sm">
+                <div className="p-4 pb-0 flex-none">
+                    <h2 className="font-bold text-green-600 mb-2">📥 Je reçois (Ajout libre)</h2>
+                    <form onSubmit={handleSearchScryfall} className="flex gap-2 mb-2">
+                        <input 
+                            type="text" 
+                            placeholder="Rechercher carte à recevoir..." 
+                            className="grow p-2 rounded border dark:bg-gray-800 dark:text-white dark:border-gray-600 text-sm"
+                            value={remoteSearch}
+                            onChange={e => setRemoteSearch(e.target.value)}
+                        />
+                        <button type="submit" className="bg-green-600 hover:bg-green-700 text-white px-3 rounded shadow-sm">🔍</button>
+                    </form>
+                </div>
+
+                {/* LISTE DÉFILANTE */}
+                 <div className="grow overflow-y-auto custom-scrollbar p-4 pt-0 space-y-4">
+                    
+                    {/* SÉLECTIONNÉS */}
+                    {toReceive.length > 0 && (
+                        <div className="bg-white dark:bg-gray-800 rounded-lg border border-green-200 dark:border-green-800 overflow-hidden">
+                            <div className="bg-green-100 dark:bg-green-900/30 px-3 py-1 text-xs font-bold text-green-700 dark:text-green-300">
+                                SÉLECTION ({toReceive.reduce((a,c)=>a+c.quantity,0)})
+                            </div>
+                            {toReceive.map((card, idx) => (
+                                <div key={`${card.id}-${idx}`} className="flex justify-between items-center text-sm p-2 border-b dark:border-gray-700 last:border-0 hover:bg-gray-50 dark:hover:bg-gray-700/50">
+                                    <div className="flex items-center gap-2 overflow-hidden">
+                                        <span className="font-bold shrink-0">{card.quantity}x</span>
+                                        <div className="flex flex-col truncate">
+                                            <span className="dark:text-gray-200 truncate">{card.name}</span>
+                                            <span className="text-[10px] text-gray-500 truncate">
+                                                {card.setName} {card.isFoil && '✨'}
+                                            </span>
+                                        </div>
+                                    </div>
+                                    <button onClick={() => setToReceive(p => p.filter((_, i) => i !== idx))} className="text-red-500 hover:bg-red-50 rounded px-1 ml-2">✕</button>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+
+                    {/* RÉSULTATS SCRYFALL */}
+                     <div className="space-y-1">
+                        <p className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Résultats Scryfall</p>
+                        {isSearching && <p className="text-xs text-center py-4">Recherche...</p>}
+                        
+                        {uniqueSearchResults.map(card => (
+                            <div key={card.id} onClick={() => handleSearchResultClick(card)} className="cursor-pointer bg-white dark:bg-gray-800/50 hover:bg-green-100 dark:hover:bg-green-900/30 p-2 rounded flex items-center gap-2 border border-transparent hover:border-green-200 transition shadow-sm group">
+                                 <div className="w-8 h-11 bg-gray-200 rounded overflow-hidden shrink-0">
+                                    {card.image_uris?.small && <img src={card.image_uris.small} className="w-full h-full object-cover" alt="" />}
+                                 </div>
+                                 <div className="grow min-w-0">
+                                    <p className="font-bold text-xs truncate dark:text-gray-200">{card.name}</p>
+                                    <p className="text-[10px] text-gray-500 italic">Sélectionner version...</p>
+                                 </div>
+                                 <span className="text-xs font-bold text-gray-400 group-hover:text-green-500 shrink-0">Choisir ›</span>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+
+                {/* TOTAL */}
+                <div className="flex-none bg-green-50 dark:bg-green-900/20 p-3 border-t border-green-100 dark:border-green-900 text-center">
+                    <span className="text-xs text-green-600 dark:text-green-400 font-bold uppercase">Total Reçu</span>
+                    <div className="text-xl font-bold text-green-700 dark:text-green-300">{valReceive.toFixed(2)} €</div>
+                </div>
+            </div>
+        </div>
+
+        {/* --- FOOTER DE VALIDATION --- */}
+        <div className="fixed bottom-0 left-0 right-0 h-20 bg-white dark:bg-gray-900 border-t dark:border-gray-800 flex justify-between items-center px-6 z-40 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)]">
+            
+            {/* Espace vide pour centrer */}
+            <div className="flex-1"></div>
+
+            {/* BALANCE */}
+            <div className="flex-1 flex flex-col items-center justify-center">
+                <span className="text-xs text-gray-400 font-bold uppercase tracking-widest">Balance</span>
+                <div className={`text-2xl font-black ${valGive - valReceive >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                    {valGive - valReceive > 0 ? '+' : ''}{(valGive - valReceive).toFixed(2)} €
+                </div>
+            </div>
+
+            {/* BOUTON */}
+            <div className="flex-1 flex justify-end">
+                <button 
+                    onClick={handleValidate}
+                    disabled={isProcessing || (toGive.length === 0 && toReceive.length === 0)}
+                    className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-3 rounded-xl font-bold disabled:opacity-50 transition shadow-lg transform active:scale-95"
+                >
+                    {isProcessing ? 'Validation...' : '✅ Valider l\'échange'}
+                </button>
+            </div>
+        </div>
+
+        {/* MODALE DE SÉLECTION DE VERSION */}
+        <CardVersionPickerModal 
+            isOpen={!!cardToPick}
+            baseCard={cardToPick}
+            onClose={() => setCardToPick(null)}
+            onConfirm={handleConfirmReceive}
+        />
+
+    </div>
   );
 }
 </file>
@@ -3448,102 +4010,279 @@ export default function TradesPage() {
 }
 </file>
 
-<file path="app/collection/page.tsx">
-// app/collection/page.tsx
-'use client';
-
-import { useState } from 'react';
+<file path="hooks/useCardCollection.ts">
+// hooks/useCardCollection.ts
+import { useState, useEffect, useMemo } from 'react';
+import { db } from '@/lib/firebase';
+import { collection, onSnapshot, doc, updateDoc, deleteDoc, increment, writeBatch } from 'firebase/firestore';
 import { useAuth } from '@/lib/AuthContext';
-import { useCardCollection } from '@/hooks/useCardCollection'; 
-import MagicCard from '@/components/MagicCard';
-import ImportModal from '@/components/ImportModal';
-import ConfirmModal from '@/components/ConfirmModal';
-import DeleteAllButton from '@/components/DeleteAllButton';
+import toast from 'react-hot-toast';
 
-export default function CollectionPage() {
-  const { user } = useAuth();
+// Definition d'un type partiel pour Scryfall
+type ScryfallDataRaw = {
+    id: string;
+    prices?: { eur?: string; usd?: string };
+    [key: string]: unknown; 
+};
+
+export type CardType = {
+  id: string;
+  name: string;
+  imageUrl: string;
+  imageBackUrl?: string;
+  quantity: number;
+  price?: number; 
+  customPrice?: number;
+  setName?: string;
+  setCode?: string;
+  wishlistId?: string;
   
-  const { 
-    cards, loading, updateQuantity, removeCard, 
-    setCustomPrice, toggleAttribute, 
-    totalPrice 
-  } = useCardCollection('collection');
+  isFoil?: boolean;             
+  isSpecificVersion?: boolean;
+  isForTrade?: boolean; 
+  
+  scryfallData?: Record<string, unknown>;
+};
 
-  const [isImportOpen, setIsImportOpen] = useState(false);
-  const [cardToDelete, setCardToDelete] = useState<string | null>(null);
+export function useCardCollection(
+    target: 'collection' | 'wishlist', 
+    listId: string = 'default',
+    targetUid?: string
+) {
+  const { user, loading: authLoading } = useAuth();
+  const [cards, setCards] = useState<CardType[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  const handleDecrement = async (cardId: string, currentQty: number) => {
-    const result = await updateQuantity(cardId, -1, currentQty);
-    if (result === 'shouldDelete') {
-      setCardToDelete(cardId);
+  const effectiveUid = targetUid || user?.uid;
+  const isOwner = user?.uid === effectiveUid; 
+
+  useEffect(() => {
+    if (!effectiveUid || authLoading) {
+        if (!authLoading && !effectiveUid) setLoading(false);
+        return;
     }
+    setLoading(true);
+
+    let collectionPath = '';
+    if (target === 'collection') {
+        collectionPath = `users/${effectiveUid}/collection`;
+    } else {
+        if (listId === 'default') collectionPath = `users/${effectiveUid}/wishlist`;
+        else collectionPath = `users/${effectiveUid}/wishlists_data/${listId}/cards`;
+    }
+
+    const colRef = collection(db, collectionPath);
+    const unsubscribe = onSnapshot(colRef, (snapshot) => {
+      const items = snapshot.docs.map((doc) => ({
+        id: doc.id,
+        wishlistId: listId,
+        ...doc.data(),
+      })) as CardType[];
+      setCards(items);
+      setLoading(false);
+    });
+    return () => unsubscribe();
+  }, [effectiveUid, target, listId, authLoading]);
+
+  // --- ACTIONS ---
+
+  const getDocRef = (cardId: string) => {
+      if (!isOwner || !effectiveUid) return null;
+      let path = '';
+      if (target === 'collection') path = `users/${effectiveUid}/collection`;
+      else if (listId === 'default') path = `users/${effectiveUid}/wishlist`;
+      else path = `users/${effectiveUid}/wishlists_data/${listId}/cards`;
+      return doc(db, path, cardId);
   };
 
-  if (loading) return <p className="text-center p-10 text-gray-500">Chargement de votre collection...</p>;
-  if (!user) return <p className="text-center p-10">Veuillez vous connecter.</p>;
+  const setCustomPrice = async (cardId: string, price: number) => {
+      if (!isOwner) return;
+      const ref = getDocRef(cardId);
+      if (ref) {
+          await updateDoc(ref, { customPrice: price });
+          toast.success("Prix mis à jour");
+      }
+  };
 
-  return (
-    <main className="container mx-auto p-4 pb-20">
-      {/* HEADER */}
-      <div className="flex flex-col md:flex-row justify-between items-center mb-8 gap-4">
-        <div className="flex items-center gap-4">
-          <h1 className="text-3xl font-bold text-blue-700 dark:text-blue-400">
-            Ma Collection <span className="ml-3 text-lg font-normal text-gray-500">({cards.reduce((acc, c) => acc + c.quantity, 0)})</span>
-          </h1>
-          <button 
-            onClick={() => setIsImportOpen(true)} 
-            className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition flex items-center gap-2 shadow-sm"
-          >
-            Importer des cartes
-          </button>
-        </div>
-        
-        <div className="flex items-center gap-4">
-           <DeleteAllButton targetCollection="collection" />
-           <div className="bg-blue-50 dark:bg-blue-900/30 text-blue-800 dark:text-blue-100 px-6 py-3 rounded-xl shadow-sm border border-blue-200 dark:border-blue-700">
-             <span className="text-sm uppercase tracking-wide opacity-80">Valeur</span>
-             <div className="text-2xl font-bold">{totalPrice.toFixed(2)} €</div>
-           </div>
-        </div>
-      </div>
+  const toggleAttribute = async (
+      cardId: string, 
+      field: 'isFoil' | 'isSpecificVersion' | 'isForTrade', 
+      currentValue: boolean
+  ) => {
+      if (!isOwner) return;
+      const ref = getDocRef(cardId);
+      if (ref) {
+          await updateDoc(ref, { [field]: !currentValue });
+      }
+  };
 
-      {/* LISTE DES CARTES */}
-      {cards.length === 0 ? (
-        <div className="text-center py-20 bg-gray-50 dark:bg-gray-800/50 rounded-xl border-2 border-dashed border-gray-200 dark:border-gray-700">
-          <p className="text-xl text-gray-500 mb-4">Votre collection est vide.</p>
-        </div>
-      ) : (
-        // --- MODIFICATION ICI : Ajout de xl:grid-cols-5 ---
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
-          {cards.map((card) => (
-            <MagicCard 
-              key={card.id}
-              {...card}
-              // Actions de base
-              onIncrement={() => updateQuantity(card.id, 1, card.quantity)}
-              onDecrement={() => handleDecrement(card.id, card.quantity)}
-              onDelete={() => setCardToDelete(card.id)}
+  const updateQuantity = async (cardId: string, amount: number, currentQuantity: number) => {
+    if (!isOwner) return;
+    const ref = getDocRef(cardId);
+    if (!ref) return;
+    if (currentQuantity + amount <= 0) return 'shouldDelete';
+    try {
+      await updateDoc(ref, { quantity: increment(amount) });
+      return 'updated';
+    } catch (err) { return 'error'; }
+  };
+
+  const removeCard = async (cardId: string) => {
+    if (!isOwner) return;
+    const ref = getDocRef(cardId);
+    if(ref) { await deleteDoc(ref); toast.success('Carte retirée', { icon: '🗑️' }); }
+  };
+
+  // --- MISE À JOUR GLOBALE DES PRIX ---
+  const refreshCollectionPrices = async () => {
+      if (!isOwner || cards.length === 0) return;
+      const toastId = toast.loading(`Mise à jour de ${cards.length} cartes...`);
+
+      try {
+          const chunks = [];
+          for (let i = 0; i < cards.length; i += 75) {
+              chunks.push(cards.slice(i, i + 75));
+          }
+
+          for (const chunk of chunks) {
+              const identifiers = chunk.map(c => ({ id: c.id }));
+
+              const res = await fetch('https://api.scryfall.com/cards/collection', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ identifiers })
+              });
+
+              if (!res.ok) continue;
+
+              const data = await res.json();
+              const foundCards = (data.data as ScryfallDataRaw[]) || [];
               
-              // Actions avancées (Prix & Toggle)
-              onEditPrice={(newPrice) => setCustomPrice(card.id, newPrice)}
-              onToggleAttribute={(field, val) => toggleAttribute(card.id, field, val)}
-            />
-          ))}
-        </div>
-      )}
+              const batch = writeBatch(db);
+              let batchHasOps = false;
 
-      {/* MODALES */}
-      <ImportModal isOpen={isImportOpen} onClose={() => setIsImportOpen(false)} targetCollection="collection" />
+              foundCards.forEach(scryCard => {
+                  const localCard = chunk.find(c => c.id === scryCard.id);
+                  const newPrice = parseFloat(scryCard.prices?.eur || "0");
+
+                  if (localCard) {
+                      const ref = getDocRef(localCard.id);
+                      if (ref) {
+                          batch.update(ref, { 
+                              price: newPrice,
+                              scryfallData: scryCard as Record<string, unknown>
+                          });
+                          batchHasOps = true;
+                      }
+                  }
+              });
+
+              if (batchHasOps) await batch.commit();
+              await new Promise(r => setTimeout(r, 100));
+          }
+
+          toast.success("Collection mise à jour avec succès !", { id: toastId });
+
+      } catch (e) {
+          console.error(e);
+          toast.error("Erreur lors de la mise à jour", { id: toastId });
+      }
+  };
+
+  // --- GESTION DE MASSE DU CLASSEUR D'ÉCHANGE ---
+  const bulkSetTradeStatus = async (
+      action: 'excess' | 'all' | 'reset', 
+      threshold: number = 4
+  ) => {
+      if (!isOwner || cards.length === 0) return;
       
-      <ConfirmModal 
-        isOpen={!!cardToDelete} 
-        onClose={() => setCardToDelete(null)} 
-        onConfirm={() => { if(cardToDelete) removeCard(cardToDelete); }} 
-        title="Retirer ?" 
-        message="Cette carte sera retirée de votre collection."
-      />
-    </main>
-  );
+      const batch = writeBatch(db);
+      let opCount = 0;
+      let label = "";
+
+      cards.forEach(card => {
+          let shouldUpdate = false;
+          let newValue = false;
+
+          if (action === 'reset') {
+              if (card.isForTrade) {
+                  shouldUpdate = true;
+                  newValue = false;
+              }
+              label = "Remise à zéro";
+          } 
+          else if (action === 'all') {
+              if (!card.isForTrade) {
+                  shouldUpdate = true;
+                  newValue = true;
+              }
+              label = "Tout ajouter";
+          } 
+          else if (action === 'excess') {
+              if (card.quantity > threshold && !card.isForTrade) {
+                  shouldUpdate = true;
+                  newValue = true;
+              }
+          }
+
+          if (shouldUpdate) {
+              const ref = getDocRef(card.id);
+              if (ref) {
+                  batch.update(ref, { isForTrade: newValue });
+                  opCount++;
+              }
+          }
+      });
+
+      if (opCount > 0) {
+          await batch.commit();
+          toast.success(`${opCount} cartes mises à jour (${action === 'excess' ? `Quantité > ${threshold}` : label})`);
+      } else {
+          toast(`Aucune carte ne correspond aux critères.`);
+      }
+  };
+
+  // --- NOUVEAU : ACTIONS DE SÉLECTION MULTIPLE ---
+
+  const bulkRemoveCards = async (cardIds: string[]) => {
+      if (!isOwner || cardIds.length === 0) return;
+      
+      const batch = writeBatch(db);
+      cardIds.forEach(id => {
+          const ref = getDocRef(id);
+          if (ref) batch.delete(ref);
+      });
+
+      await batch.commit();
+      toast.success(`${cardIds.length} cartes supprimées`);
+  };
+
+  const bulkUpdateAttribute = async (cardIds: string[], field: 'isForTrade' | 'isFoil', value: boolean) => {
+      if (!isOwner || cardIds.length === 0) return;
+
+      const batch = writeBatch(db);
+      cardIds.forEach(id => {
+          const ref = getDocRef(id);
+          if (ref) batch.update(ref, { [field]: value });
+      });
+
+      await batch.commit();
+      toast.success("Mise à jour effectuée");
+  };
+
+  const totalPrice = useMemo(() => {
+    return cards.reduce((acc, card) => {
+        const effectivePrice = card.customPrice !== undefined ? card.customPrice : (card.price || 0);
+        return acc + effectivePrice * card.quantity;
+    }, 0);
+  }, [cards]);
+
+  return { 
+      cards, loading, isOwner, totalPrice,
+      updateQuantity, removeCard, setCustomPrice, toggleAttribute,
+      refreshCollectionPrices, bulkSetTradeStatus,
+      bulkRemoveCards, bulkUpdateAttribute 
+  };
 }
 </file>
 
@@ -3551,7 +4290,7 @@ export default function CollectionPage() {
 // components/MagicCard.tsx
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, memo } from 'react';
 
 type MagicCardProps = {
   id?: string;
@@ -3567,7 +4306,6 @@ type MagicCardProps = {
   isSpecificVersion?: boolean;
   isForTrade?: boolean; 
   
-  onDelete?: () => void;
   onIncrement?: () => void;
   onDecrement?: () => void;
   onMove?: () => void;
@@ -3579,30 +4317,35 @@ type MagicCardProps = {
   readOnly?: boolean;
   isTradeView?: boolean;
   allowPriceEdit?: boolean;
+
+  isSelectMode?: boolean;
+  isSelected?: boolean;
+  onSelect?: () => void;
 };
 
 const CARD_BACK_URL = "https://cards.scryfall.io/large/front/a/6/a6984342-f723-4e80-8e69-902d287a915f.jpg";
 
-export default function MagicCard(props: MagicCardProps) {
+function MagicCard(props: MagicCardProps) {
   const { 
-      id, name, imageUrl, imageBackUrl, quantity = 1, 
+      name, imageUrl, imageBackUrl, quantity = 1, 
       price, customPrice, setName, 
       isFoil, isSpecificVersion, isForTrade,
       isTradeView, allowPriceEdit, 
       onEditPrice, onToggleAttribute, 
       readOnly, isWishlist,
-      onDelete, onIncrement, onDecrement, onMove
+      onIncrement, onDecrement, onMove,
+      isSelectMode, isSelected, onSelect
   } = props;
   
   const [isFlipped, setIsFlipped] = useState(false);
   const [isEditingPrice, setIsEditingPrice] = useState(false);
-  
   const [tempPrice, setTempPrice] = useState(customPrice?.toString() || price?.toString() || "0");
 
   useEffect(() => {
     if (!isEditingPrice) {
         const newVal = customPrice?.toString() || price?.toString() || "0";
-        setTempPrice(newVal);
+        // CORRECTION ICI : Vérifier avant d'appliquer
+        setTempPrice(prev => (prev !== newVal ? newVal : prev));
     }
   }, [customPrice, price, isEditingPrice]);
 
@@ -3617,12 +4360,20 @@ export default function MagicCard(props: MagicCardProps) {
 
   const currentImage = isFlipped && imageBackUrl ? imageBackUrl : imageUrl;
 
-  // --- VUE LISTE COMPACTE (TRADE) ---
+  const handleCardClick = () => {
+      if (isSelectMode && onSelect) {
+          onSelect();
+      } else if (imageBackUrl) {
+          setIsFlipped(!isFlipped);
+      }
+  };
+
+  // --- VUE LISTE (TRADE) ---
   if (isTradeView) {
       return (
-        <div className="flex items-center gap-3 bg-white dark:bg-gray-800 p-2 rounded-lg border border-gray-100 dark:border-gray-700">
+        <div className="flex items-center gap-3 bg-white dark:bg-gray-800 p-2 rounded-lg border border-gray-100 dark:border-gray-700 content-visibility-auto">
             <div className="w-10 h-14 bg-gray-200 rounded overflow-hidden flex-shrink-0 relative group cursor-pointer" onClick={() => setIsFlipped(!isFlipped)}>
-                 <img src={currentImage} className="w-full h-full object-cover" alt={name} />
+                 <img src={currentImage} className="w-full h-full object-cover" alt={name} loading="lazy" />
                  {isFoil && <div className="absolute top-0 right-0 bg-purple-600/80 text-white text-[8px] px-1 font-bold">✨</div>}
             </div>
             
@@ -3660,26 +4411,50 @@ export default function MagicCard(props: MagicCardProps) {
 
   // --- VUE NORMALE (GRILLE) ---
   return (
-    <div className={`relative group flex flex-col bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden p-3 gap-2 border transition-colors h-full ${isFoil ? 'border-purple-300 dark:border-purple-800 shadow-purple-100 dark:shadow-none' : 'border-gray-100 dark:border-gray-700 hover:border-blue-300 dark:hover:border-blue-500'}`}>
+    <div 
+        onClick={handleCardClick}
+        className={`relative group flex flex-col bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden p-3 gap-2 border transition-all duration-200 h-full content-visibility-auto
+        ${isSelected 
+            ? 'border-blue-500 ring-2 ring-blue-500 bg-blue-50 dark:bg-blue-900/20' 
+            : isFoil 
+                ? 'border-purple-300 dark:border-purple-800' 
+                : 'border-gray-100 dark:border-gray-700 hover:border-blue-300 dark:hover:border-blue-500'
+        }
+        ${isSelectMode ? 'cursor-pointer' : ''}
+        `}
+    >
       
-      {/* IMAGE (Sans boutons flottants) */}
+      {!readOnly && !isSelectMode && isWishlist && onMove && (
+        <div className="absolute top-2 left-2 right-2 flex justify-end z-20 pointer-events-none">
+            <button onClick={(e) => { e.stopPropagation(); onMove(); }} className="pointer-events-auto p-1.5 bg-green-100 text-green-700 hover:bg-green-600 hover:text-white rounded-full transition opacity-100 md:opacity-0 md:group-hover:opacity-100 shadow-sm" title="Déplacer vers Collection">📦</button>
+        </div>
+      )}
+
+      {isSelectMode && (
+          <div className="absolute top-2 right-2 z-30 pointer-events-none">
+              <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center transition-colors shadow-sm ${isSelected ? 'bg-blue-600 border-blue-600' : 'bg-white/90 border-gray-400'}`}>
+                  {isSelected && <span className="text-white text-sm font-bold">✓</span>}
+              </div>
+          </div>
+      )}
+
       <div className="relative w-full aspect-[2.5/3.5] bg-gray-200 rounded-lg overflow-hidden shrink-0">
         <img
           src={currentImage || CARD_BACK_URL}
           alt={name}
+          loading="lazy"
           className="w-full h-full object-cover transition-transform duration-300"
           onError={(e) => { e.currentTarget.src = CARD_BACK_URL; }}
         />
         {isFoil && <div className="absolute inset-0 bg-gradient-to-tr from-purple-500/20 to-transparent pointer-events-none mix-blend-overlay"></div>}
 
-        {imageBackUrl && (
-          <button onClick={() => setIsFlipped(!isFlipped)} className="absolute top-1/2 right-2 -translate-y-1/2 bg-black/50 hover:bg-black/80 text-white p-2 rounded-full backdrop-blur-sm transition-all shadow-lg border border-white/20 z-10 pointer-events-auto">
+        {imageBackUrl && !isSelectMode && (
+          <button onClick={(e) => { e.stopPropagation(); setIsFlipped(!isFlipped); }} className="absolute top-1/2 right-2 -translate-y-1/2 bg-black/50 hover:bg-black/80 text-white p-2 rounded-full backdrop-blur-sm transition-all shadow-lg border border-white/20 z-10 pointer-events-auto">
             🔄
           </button>
         )}
       </div>
       
-      {/* --- INFO CARTE --- */}
       <div className="flex-1 flex flex-col min-w-0">
         <div className="flex justify-between items-start mb-1">
             <h3 className="font-bold text-sm md:text-base truncate flex-grow" title={name}>{name}</h3>
@@ -3687,13 +4462,11 @@ export default function MagicCard(props: MagicCardProps) {
         
         <p className="text-xs text-blue-600 dark:text-blue-400 truncate font-medium mb-2">{setName}</p>
 
-        {/* --- ZONE D'OPTIONS TEXTUELLES --- */}
-        <div className="flex flex-wrap gap-1.5 mb-2">
+        <div className={`flex flex-wrap gap-1.5 mb-2 ${isSelectMode ? 'pointer-events-none opacity-50' : ''}`}>
             
-            {/* 1. TOGGLE FOIL */}
             {onToggleAttribute ? (
                 <button 
-                    onClick={() => onToggleAttribute('isFoil', !!isFoil)}
+                    onClick={(e) => { e.stopPropagation(); onToggleAttribute('isFoil', !!isFoil); }}
                     className={`text-[10px] px-2 py-0.5 rounded border transition-colors font-medium flex-1 text-center ${
                         isFoil 
                         ? 'bg-purple-100 text-purple-700 border-purple-200 hover:bg-purple-200 dark:bg-purple-900/30 dark:text-purple-300' 
@@ -3702,70 +4475,53 @@ export default function MagicCard(props: MagicCardProps) {
                 >
                     {isFoil ? '✨ Foil' : 'Normal'}
                 </button>
-            ) : isFoil && (
-                <span className="text-[10px] bg-purple-100 text-purple-700 px-2 py-0.5 rounded border border-purple-200 font-medium">✨ Foil</span>
-            )}
+            ) : isFoil && ( <span className="text-[10px] bg-purple-100 text-purple-700 px-2 py-0.5 rounded border border-purple-200 font-medium">✨ Foil</span> )}
 
-            {/* 2. WISHLIST : VERSION & ACHAT */}
-            {isWishlist && (
-                <>
-                    {/* Version */}
-                    {onToggleAttribute && (
-                        <button 
-                            onClick={() => onToggleAttribute('isSpecificVersion', !!isSpecificVersion)}
-                            className={`text-[10px] px-2 py-0.5 rounded border transition-colors font-medium flex-1 text-center ${
-                                isSpecificVersion 
-                                ? 'bg-blue-100 text-blue-700 border-blue-200 hover:bg-blue-200 dark:bg-blue-900/30 dark:text-blue-300' 
-                                : 'bg-gray-50 text-gray-400 border-gray-200 hover:bg-gray-100 dark:bg-gray-800 dark:border-gray-600'
-                            }`}
-                            title="Exiger cette version exacte"
-                        >
-                            {isSpecificVersion ? '🔒 Exact' : 'Auto'}
-                        </button>
-                    )}
-                    {/* BOUTON J'AI ACHETÉ */}
-                    {!readOnly && onMove && (
-                        <button 
-                            onClick={onMove}
-                            className="text-[10px] px-2 py-0.5 rounded border transition-colors font-bold flex-1 text-center bg-green-50 text-green-700 border-green-200 hover:bg-green-100 dark:bg-green-900/30 dark:text-green-300 dark:border-green-800"
-                            title="Déplacer vers Collection"
-                        >
-                            J&apos;ai acheté
-                        </button>
-                    )}
-                </>
-            )}
-
-            {/* 3. COLLECTION : ÉCHANGE */}
-            {!isWishlist && (
-                onToggleAttribute ? (
+            {isWishlist ? (
+                onToggleAttribute && (
                     <button 
-                        onClick={() => onToggleAttribute('isForTrade', !!isForTrade)}
+                        onClick={(e) => { e.stopPropagation(); onToggleAttribute('isSpecificVersion', !!isSpecificVersion); }}
+                        className={`text-[10px] px-2 py-0.5 rounded border transition-colors font-medium flex-1 text-center ${
+                            isSpecificVersion ? 'bg-blue-100 text-blue-700 border-blue-200' : 'bg-gray-50 text-gray-400 border-gray-200'
+                        }`}
+                    >
+                        {isSpecificVersion ? '🔒 Exact' : 'Auto'}
+                    </button>
+                )
+            ) : (
+                onToggleAttribute && (
+                    <button 
+                        onClick={(e) => { e.stopPropagation(); onToggleAttribute('isForTrade', !!isForTrade); }}
                         className={`text-[10px] px-2 py-0.5 rounded border transition-colors font-medium flex-1 text-center ${
                             isForTrade 
                             ? 'bg-green-100 text-green-700 border-green-200 hover:bg-green-200 dark:bg-green-900/30 dark:text-green-300' 
                             : 'bg-gray-50 text-gray-400 border-gray-200 hover:bg-gray-100 dark:bg-gray-800 dark:border-gray-600'
                         }`}
-                        title="Disponible dans les échanges ?"
                     >
                         {isForTrade ? '🤝 Échange' : 'Privé'}
                     </button>
-                ) : isForTrade && (
-                    <span className="text-[10px] bg-green-100 text-green-700 px-2 py-0.5 rounded border border-green-200 font-medium">🤝 Échange</span>
                 )
+            )}
+            
+            {isWishlist && !readOnly && !isSelectMode && onMove && (
+                <button 
+                    onClick={(e) => { e.stopPropagation(); onMove(); }}
+                    className="text-[10px] px-2 py-0.5 rounded border transition-colors font-bold flex-1 text-center bg-green-50 text-green-700 border-green-200 hover:bg-green-100 dark:bg-green-900/30 dark:text-green-300 dark:border-green-800"
+                    title="Déplacer vers Collection"
+                >
+                    📥 J&apos;ai acheté
+                </button>
             )}
         </div>
         
-        {/* --- FOOTER (Quantité & Prix) --- */}
-        <div className="mt-auto flex justify-between items-end border-t border-gray-100 dark:border-gray-700 pt-2">
-          
+        <div className={`mt-auto flex justify-between items-end border-t border-gray-100 dark:border-gray-700 pt-2 ${isSelectMode ? 'pointer-events-none opacity-50' : ''}`}>
           <div className="flex items-center gap-1.5">
-            {!readOnly && <button onClick={onDecrement} className="bg-gray-200 dark:bg-gray-700 w-6 h-6 rounded hover:bg-gray-300 font-bold flex items-center justify-center text-sm">-</button>}
+            {!readOnly && <button onClick={(e) => {e.stopPropagation(); onDecrement?.()}} className="bg-gray-200 dark:bg-gray-700 w-6 h-6 rounded hover:bg-gray-300 font-bold flex items-center justify-center text-sm">-</button>}
             <span className={`font-mono text-base ${readOnly ? 'font-bold text-gray-800 dark:text-white' : 'w-4 text-center'}`}>{readOnly && "x"}{quantity}</span>
-            {!readOnly && <button onClick={onIncrement} className="bg-blue-100 dark:bg-blue-900 text-blue-600 font-bold w-6 h-6 rounded hover:bg-blue-200 flex items-center justify-center text-sm">+</button>}
+            {!readOnly && <button onClick={(e) => {e.stopPropagation(); onIncrement?.()}} className="bg-blue-100 dark:bg-blue-900 text-blue-600 font-bold w-6 h-6 rounded hover:bg-blue-200 flex items-center justify-center text-sm">+</button>}
           </div>
           
-          <div className="text-right cursor-help" title="Prix unitaire Scryfall ou Perso">
+          <div className="text-right">
              <p className="text-[10px] text-gray-400">Unit: {effectivePrice.toFixed(2)}€</p>
              <p className={`font-bold text-sm ${customPrice ? 'text-orange-600' : 'text-gray-700 dark:text-gray-200'}`}>
                  {(effectivePrice * quantity).toFixed(2)} €
@@ -3776,246 +4532,477 @@ export default function MagicCard(props: MagicCardProps) {
     </div>
   );
 }
+
+// Utilisation de memo pour éviter les re-renders inutiles
+export default memo(MagicCard);
+</file>
+
+<file path="app/collection/page.tsx">
+// app/collection/page.tsx
+'use client';
+
+import { useState, useMemo, useEffect } from 'react';
+import { useAuth } from '@/lib/AuthContext';
+import { useCardCollection } from '@/hooks/useCardCollection'; 
+import MagicCard from '@/components/MagicCard';
+import ImportModal from '@/components/ImportModal';
+import ConfirmModal from '@/components/ConfirmModal';
+import DeleteAllButton from '@/components/DeleteAllButton';
+import CollectionToolsModal from '@/components/CollectionToolsModal';
+
+type SortOption = 'name' | 'price_desc' | 'price_asc' | 'quantity' | 'date';
+
+const ITEMS_PER_PAGE = 50; // Nombre de cartes affichées par bloc
+
+export default function CollectionPage() {
+  const { user } = useAuth();
+  
+  const { 
+    cards, loading, updateQuantity, removeCard, 
+    setCustomPrice, toggleAttribute, refreshCollectionPrices, bulkSetTradeStatus,
+    bulkRemoveCards, bulkUpdateAttribute, 
+    totalPrice 
+  } = useCardCollection('collection');
+
+  const [isImportOpen, setIsImportOpen] = useState(false);
+  const [isToolsOpen, setIsToolsOpen] = useState(false);
+  const [cardToDelete, setCardToDelete] = useState<string | null>(null);
+
+  // --- SÉLECTION & UI ---
+  const [isSelectMode, setIsSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  
+  // --- PAGINATION ---
+  const [visibleCount, setVisibleCount] = useState(ITEMS_PER_PAGE);
+
+  // --- FILTRES ---
+  const [searchQuery, setSearchQuery] = useState('');
+  const [sortBy, setSortBy] = useState<SortOption>('date');
+  const [filterSet, setFilterSet] = useState<string>('all');
+  const [filterTrade, setFilterTrade] = useState(false);
+  const [filterFoil, setFilterFoil] = useState(false);
+
+  // Reset pagination quand on filtre/trie
+  useEffect(() => {
+    // CORRECTION : Évite le set inutile
+    setVisibleCount(prev => (prev !== ITEMS_PER_PAGE ? ITEMS_PER_PAGE : prev));
+  }, [searchQuery, sortBy, filterSet, filterTrade, filterFoil]);
+
+  const filteredAndSortedCards = useMemo(() => {
+    let result = [...cards];
+
+    if (searchQuery) {
+        const lowerQ = searchQuery.toLowerCase();
+        result = result.filter(c => c.name.toLowerCase().includes(lowerQ));
+    }
+    if (filterSet !== 'all') {
+        result = result.filter(c => c.setName === filterSet);
+    }
+    if (filterTrade) {
+        result = result.filter(c => c.isForTrade);
+    }
+    if (filterFoil) {
+        result = result.filter(c => c.isFoil);
+    }
+
+    result.sort((a, b) => {
+        const priceA = a.customPrice ?? a.price ?? 0;
+        const priceB = b.customPrice ?? b.price ?? 0;
+        switch (sortBy) {
+            case 'name': return a.name.localeCompare(b.name);
+            case 'price_desc': return priceB - priceA;
+            case 'price_asc': return priceA - priceB;
+            case 'quantity': return b.quantity - a.quantity;
+            case 'date': default: return 0; 
+        }
+    });
+
+    return result;
+  }, [cards, searchQuery, sortBy, filterSet, filterTrade, filterFoil]);
+
+  // Cartes actuellement visibles
+  const visibleCards = useMemo(() => {
+      return filteredAndSortedCards.slice(0, visibleCount);
+  }, [filteredAndSortedCards, visibleCount]);
+
+  const availableSets = useMemo(() => {
+      const sets = new Set(cards.map(c => c.setName).filter((s): s is string => !!s));
+      return Array.from(sets).sort();
+  }, [cards]);
+
+  const handleDecrement = async (cardId: string, currentQty: number) => {
+    const result = await updateQuantity(cardId, -1, currentQty);
+    if (result === 'shouldDelete') {
+      setCardToDelete(cardId);
+    }
+  };
+
+  const toggleSelection = (id: string) => {
+      setSelectedIds(prev => 
+          prev.includes(id) ? prev.filter(pid => pid !== id) : [...prev, id]
+      );
+  };
+
+  const handleSelectAll = () => {
+      if (selectedIds.length === filteredAndSortedCards.length) {
+          setSelectedIds([]); 
+      } else {
+          // On sélectionne TOUT, pas juste les visibles
+          setSelectedIds(filteredAndSortedCards.map(c => c.id)); 
+      }
+  };
+
+  const handleBulkDelete = async () => {
+      if (!confirm(`Supprimer ces ${selectedIds.length} cartes définitivement ?`)) return;
+      await bulkRemoveCards(selectedIds);
+      setSelectedIds([]);
+      setIsSelectMode(false);
+  };
+
+  const handleBulkTrade = async (isTrade: boolean) => {
+      await bulkUpdateAttribute(selectedIds, 'isForTrade', isTrade);
+      setSelectedIds([]);
+      setIsSelectMode(false);
+  };
+
+  if (loading) return <div className="flex h-screen items-center justify-center text-gray-500 animate-pulse">Chargement de votre collection...</div>;
+  if (!user) return <p className="text-center p-10">Veuillez vous connecter.</p>;
+
+  return (
+    <main className="container mx-auto p-4 pb-24 relative">
+      
+      {/* HEADER */}
+      <div className="flex flex-col md:flex-row justify-between items-center mb-6 gap-4">
+        <h1 className="text-3xl font-bold text-blue-700 dark:text-blue-400">
+            Ma Collection 
+            <span className="ml-3 text-lg font-normal text-gray-500">
+                ({filteredAndSortedCards.length} / {cards.reduce((acc, c) => acc + c.quantity, 0)})
+            </span>
+        </h1>
+        
+        <div className="flex items-center gap-2">
+           <button 
+             onClick={() => { setIsSelectMode(!isSelectMode); setSelectedIds([]); }}
+             className={`px-3 py-2 rounded-lg text-sm font-medium transition shadow-sm border flex items-center gap-2 ${isSelectMode ? 'bg-blue-600 text-white border-blue-600' : 'bg-white hover:bg-gray-100 text-gray-700 border-gray-300 dark:bg-gray-800 dark:border-gray-600 dark:text-gray-200'}`}
+           >
+             {isSelectMode ? 'Annuler' : '☑ Sélectionner'}
+           </button>
+
+           {!isSelectMode && (
+               <>
+                <button 
+                    onClick={() => setIsToolsOpen(true)}
+                    className="bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200 px-3 py-2 rounded-lg text-sm font-medium transition shadow-sm border border-gray-200 dark:border-gray-600 flex items-center gap-2"
+                >
+                    ⚙️ Gérer
+                </button>
+
+                <DeleteAllButton targetCollection="collection" />
+                
+                <button 
+                    onClick={() => setIsImportOpen(true)} 
+                    className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition shadow-sm"
+                >
+                    Importer CSV
+                </button>
+                <div className="bg-blue-50 dark:bg-blue-900/30 text-blue-800 dark:text-blue-100 px-4 py-2 rounded-lg border border-blue-200 dark:border-blue-700 text-right min-w-[100px]">
+                    <span className="text-[10px] uppercase tracking-wide opacity-70 block">Valeur Totale</span>
+                    <span className="font-bold">{totalPrice.toFixed(2)} €</span>
+                </div>
+               </>
+           )}
+        </div>
+      </div>
+
+      {/* FILTRES */}
+      <div className="bg-white dark:bg-gray-800 p-4 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm mb-6 space-y-4 md:space-y-0 md:flex md:items-end md:gap-4">
+          <div className="flex-grow">
+              <label className="block text-xs font-bold text-gray-500 mb-1 uppercase">Nom de la carte</label>
+              <input 
+                  type="text" 
+                  placeholder="Rechercher..." 
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-full p-2.5 rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-900 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+              />
+          </div>
+          <div className="min-w-[200px]">
+              <label className="block text-xs font-bold text-gray-500 mb-1 uppercase">Édition</label>
+              <select value={filterSet} onChange={(e) => setFilterSet(e.target.value)} className="w-full p-2.5 rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-900 text-sm cursor-pointer">
+                  <option value="all">Toutes les éditions</option>
+                  {availableSets.map(set => <option key={set} value={set}>{set}</option>)}
+              </select>
+          </div>
+          <div className="min-w-[180px]">
+              <label className="block text-xs font-bold text-gray-500 mb-1 uppercase">Trier par</label>
+              <select value={sortBy} onChange={(e) => setSortBy(e.target.value as SortOption)} className="w-full p-2.5 rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-900 text-sm cursor-pointer">
+                  <option value="date">Date d&apos;ajout</option>
+                  <option value="price_desc">Prix : Haut → Bas</option>
+                  <option value="price_asc">Prix : Bas → Haut</option>
+                  <option value="name">Nom : A → Z</option>
+                  <option value="quantity">Quantité</option>
+              </select>
+          </div>
+          <div className="flex items-center gap-4 pb-3">
+              <label className="flex items-center gap-2 cursor-pointer select-none">
+                  <input type="checkbox" checked={filterFoil} onChange={(e) => setFilterFoil(e.target.checked)} className="w-4 h-4 text-blue-600 rounded" />
+                  <span className="text-sm font-medium">Foil</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer select-none">
+                  <input type="checkbox" checked={filterTrade} onChange={(e) => setFilterTrade(e.target.checked)} className="w-4 h-4 text-green-600 rounded" />
+                  <span className="text-sm font-medium">Échange</span>
+              </label>
+          </div>
+      </div>
+
+      {isSelectMode && (
+          <div className="mb-4 flex items-center justify-between bg-blue-50 dark:bg-blue-900/20 p-3 rounded-lg border border-blue-100 dark:border-blue-800 animate-in fade-in slide-in-from-top-2">
+              <span className="font-bold text-blue-800 dark:text-blue-200 pl-2">
+                  {selectedIds.length} carte(s) sélectionnée(s)
+              </span>
+              <button onClick={handleSelectAll} className="text-sm text-blue-600 hover:text-blue-800 font-medium px-3 py-1 rounded hover:bg-blue-100 transition">
+                  {selectedIds.length === filteredAndSortedCards.length ? 'Tout désélectionner' : 'Tout sélectionner'}
+              </button>
+          </div>
+      )}
+
+      {/* GRILLE */}
+      {filteredAndSortedCards.length === 0 ? (
+        <div className="text-center py-20 bg-gray-50 dark:bg-gray-800/50 rounded-xl border-2 border-dashed border-gray-200 dark:border-gray-700">
+          <p className="text-xl text-gray-500 mb-4">Aucun résultat ne correspond à vos filtres.</p>
+          <button onClick={() => { setSearchQuery(''); setFilterSet('all'); setFilterTrade(false); setFilterFoil(false); }} className="text-blue-600 hover:underline">Réinitialiser les filtres</button>
+        </div>
+      ) : (
+        <>
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+            {visibleCards.map((card) => (
+                <MagicCard 
+                    key={card.id}
+                    {...card}
+                    onIncrement={() => updateQuantity(card.id, 1, card.quantity)}
+                    onDecrement={() => handleDecrement(card.id, card.quantity)}
+                    onEditPrice={(newPrice) => setCustomPrice(card.id, newPrice)}
+                    onToggleAttribute={(field, val) => toggleAttribute(card.id, field, val)}
+                    isSelectMode={isSelectMode}
+                    isSelected={selectedIds.includes(card.id)}
+                    onSelect={() => toggleSelection(card.id)}
+                />
+            ))}
+            </div>
+
+            {/* BOUTON CHARGER PLUS (Pagination) */}
+            {visibleCount < filteredAndSortedCards.length && (
+                <div className="mt-8 flex justify-center pb-10">
+                    <button 
+                        onClick={() => setVisibleCount(prev => prev + ITEMS_PER_PAGE)}
+                        className="bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-800 dark:text-gray-200 px-8 py-3 rounded-full font-bold shadow-sm transition flex items-center gap-2"
+                    >
+                        Afficher plus de cartes ({filteredAndSortedCards.length - visibleCount} restantes) ↓
+                    </button>
+                </div>
+            )}
+        </>
+      )}
+
+      {/* BARRE FLOTTANTE ACTIONS */}
+      {isSelectMode && selectedIds.length > 0 && (
+          <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-white dark:bg-gray-800 shadow-2xl border border-gray-200 dark:border-gray-700 p-2 rounded-2xl flex items-center gap-2 z-50 animate-in slide-in-from-bottom-6 duration-300">
+              <button onClick={() => handleBulkTrade(true)} className="px-4 py-2 bg-green-100 hover:bg-green-200 text-green-800 rounded-xl text-sm font-bold transition flex flex-col items-center leading-none gap-1">
+                  <span>🤝</span><span className="text-[10px]">Ajouter Trade</span>
+              </button>
+              <button onClick={() => handleBulkTrade(false)} className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-800 rounded-xl text-sm font-bold transition flex flex-col items-center leading-none gap-1">
+                  <span>🔒</span><span className="text-[10px]">Retirer Trade</span>
+              </button>
+              <div className="w-px h-8 bg-gray-300 mx-1"></div>
+              <button onClick={handleBulkDelete} className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-xl text-sm font-bold transition flex flex-col items-center leading-none gap-1 shadow-md">
+                  <span>🗑️</span><span className="text-[10px]">Supprimer</span>
+              </button>
+          </div>
+      )}
+
+      <ImportModal isOpen={isImportOpen} onClose={() => setIsImportOpen(false)} targetCollection="collection" />
+      <CollectionToolsModal isOpen={isToolsOpen} onClose={() => setIsToolsOpen(false)} totalCards={cards.length} onRefreshPrices={refreshCollectionPrices} onBulkTrade={bulkSetTradeStatus} />
+      <ConfirmModal isOpen={!!cardToDelete} onClose={() => setCardToDelete(null)} onConfirm={() => { if(cardToDelete) removeCard(cardToDelete); }} title="Retirer ?" message="Cette carte sera retirée de votre collection." />
+    </main>
+  );
+}
 </file>
 
 <file path="app/page.tsx">
-// app/page.tsx
-'use client'; 
+'use client';
 
-import { useState } from 'react';
 import { useAuth } from '@/lib/AuthContext';
+import { useCardCollection } from '@/hooks/useCardCollection';
+import { useTradeSystem } from '@/hooks/useTradeSystem';
+import Link from 'next/link';
+import { useState, useEffect } from 'react';
 import { db } from '@/lib/firebase';
-import { doc, setDoc, updateDoc, getDoc, increment } from 'firebase/firestore'; 
-import { useWishlists } from '@/hooks/useWishlists';
-import toast from 'react-hot-toast';
+import { collection, query, orderBy, limit, getDocs } from 'firebase/firestore';
+import { CardType } from '@/hooks/useCardCollection';
 
-// --- TYPES ---
-type ScryfallCard = {
-  id: string;
-  oracle_id: string;
-  name: string;
-  set_name: string;
-  set: string;
-  released_at: string;
-  image_uris?: { small: string; normal: string; };
-  card_faces?: { image_uris?: { small: string; normal: string; }; }[];
-  prices?: { eur?: string; };
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  [key: string]: any; // Permet de stocker tout le reste
-};
-
-const CARD_BACK_URL = "https://cards.scryfall.io/large/front/a/6/a6984342-f723-4e80-8e69-902d287a915f.jpg";
-
-const getCardImage = (card: ScryfallCard): string => {
-  if (card.image_uris?.normal) return card.image_uris.normal;
-  if (card.card_faces && card.card_faces[0]?.image_uris?.normal) {
-    return card.card_faces[0].image_uris.normal;
-  }
-  return CARD_BACK_URL;
-};
-
-// --- SOUS-COMPOSANT CARTE ---
-const CardGroup = ({ name, versions, targetListId }: { name: string, versions: ScryfallCard[], targetListId: string }) => {
-  const { user } = useAuth();
-  const [selectedCard, setSelectedCard] = useState<ScryfallCard>(versions[0]);
+export default function DashboardPage() {
+  const { user, loading: authLoading, friendRequestCount, username } = useAuth();
+  const { totalPrice, cards } = useCardCollection('collection'); // Pour la valeur totale et stats
+  const { incomingTrades, outgoingTrades } = useTradeSystem(); // Pour les notifs d'échange
   
-  const [isFoil, setIsFoil] = useState(false);
-  const [isSpecificVersion, setIsSpecificVersion] = useState(false);
+  const [recentCards, setRecentCards] = useState<CardType[]>([]);
 
-  const handleVersionChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    const newVersion = versions.find(v => v.id === e.target.value);
-    if (newVersion) setSelectedCard(newVersion);
-  };
+  // Charger les 5 dernières cartes ajoutées (Optimisation : requête dédiée)
+  useEffect(() => {
+    const fetchRecent = async () => {
+      if (!user) return;
+      try {
+        const q = query(
+            collection(db, 'users', user.uid, 'collection'), 
+            orderBy('addedAt', 'desc'), 
+            limit(5)
+        );
+        const snap = await getDocs(q);
+        setRecentCards(snap.docs.map(d => ({ id: d.id, ...d.data() } as CardType)));
+      } catch (e) { console.error(e); }
+    };
+    fetchRecent();
+  }, [user]);
 
-  const addToWishlist = async () => {
-    if (!user) {
-      toast.error("Connectez-vous pour ajouter des cartes !");
-      return;
-    }
+  if (authLoading) return <div className="flex h-screen items-center justify-center animate-pulse">Chargement MagicWish...</div>;
 
-    const card = selectedCard; 
-    let collectionPath = '';
-    if (targetListId === 'default') {
-        collectionPath = `users/${user.uid}/wishlist`;
-    } else {
-        collectionPath = `users/${user.uid}/wishlists_data/${targetListId}/cards`;
-    }
-    
-    const wishlistRef = doc(db, collectionPath, card.id);
-    const validImageUrl = getCardImage(card);
-    const priceNumber = card.prices?.eur ? parseFloat(card.prices.eur) : 0;
-    const cleanName = card.name.split(' // ')[0];
-
-    try {
-      const docSnap = await getDoc(wishlistRef);
-      if (docSnap.exists()) {
-        await updateDoc(wishlistRef, { 
-          quantity: increment(1),
-          price: priceNumber,
-          isFoil: isFoil,
-          isSpecificVersion: isSpecificVersion,
-          // Mise à jour de la data fraîche
-          scryfallData: card 
-        });
-        toast.success(`+1 exemplaire (${card.set_name})`);
-      } else {
-        await setDoc(wishlistRef, {
-          name: cleanName,
-          imageUrl: validImageUrl,
-          quantity: 1,
-          price: priceNumber,
-          setName: card.set_name,
-          setCode: card.set,
-          addedAt: new Date(),
-          isFoil: isFoil,
-          isSpecificVersion: isSpecificVersion,
-          // SAUVEGARDE DE TOUTES LES DONNÉES
-          scryfallData: card 
-        });
-        toast.success(`Ajoutée : ${card.set_name}`);
-      }
-    } catch (error) {
-      console.error(error);
-      toast.error("Erreur lors de l'ajout.");
-    }
-  };
-
-  return (
-    <div className="relative group flex flex-col h-full bg-white dark:bg-gray-800 rounded-xl shadow-md border border-gray-100 dark:border-gray-700 overflow-hidden">
-      <div className="relative w-full min-h-[250px] bg-gray-200 dark:bg-gray-900 flex items-center justify-center p-2">
-        <img src={getCardImage(selectedCard)} alt={name} className="w-full h-full object-contain max-h-[350px]" />
-      </div>
-
-      <div className="p-3 flex flex-col flex-grow gap-2">
-        <h3 className="font-bold text-center truncate" title={name}>{name}</h3>
-
-        <select 
-          value={selectedCard.id}
-          onChange={handleVersionChange}
-          className="w-full p-2 text-xs border rounded bg-gray-50 dark:bg-gray-700 dark:border-gray-600 text-gray-900 dark:text-white outline-none cursor-pointer"
+  // Si pas connecté, Landing Page simple
+  if (!user) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[80vh] text-center p-4">
+        <h1 className="text-5xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent mb-6">
+          MagicWish
+        </h1>
+        <p className="text-xl text-gray-600 dark:text-gray-300 max-w-lg mb-8">
+          Gérez votre collection Magic: The Gathering, créez vos wishlists et trouvez automatiquement des échanges avec vos amis.
+        </p>
+        <Link 
+          href="/login"
+          className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-8 rounded-full text-lg shadow-lg transition transform hover:scale-105"
         >
-          {versions.map((v) => (
-            <option key={v.id} value={v.id}>
-              {v.set_name} ({v.set.toUpperCase()}) - {v.prices?.eur ? `${v.prices.eur}€` : "N/A"}
-            </option>
-          ))}
-        </select>
-
-        {user && (
-            <div className="flex justify-between items-center text-xs text-gray-600 dark:text-gray-300 px-1">
-                <label className="flex items-center gap-1 cursor-pointer select-none">
-                    <input type="checkbox" checked={isSpecificVersion} onChange={e => setIsSpecificVersion(e.target.checked)} className="rounded text-blue-600 focus:ring-blue-500" />
-                    <span>Version exacte</span>
-                </label>
-                <label className="flex items-center gap-1 cursor-pointer select-none">
-                    <input type="checkbox" checked={isFoil} onChange={e => setIsFoil(e.target.checked)} className="rounded text-purple-600 focus:ring-purple-500" />
-                    <span>Foil ✨</span>
-                </label>
-            </div>
-        )}
-
-        <div className="flex justify-between items-center mt-auto pt-2 border-t border-gray-100 dark:border-gray-700">
-          <span className="font-bold text-blue-600 dark:text-blue-400">
-             {selectedCard.prices?.eur ? `${selectedCard.prices.eur} €` : "Prix N/A"}
-          </span>
-
-          {user && (
-            <button
-              onClick={addToWishlist}
-              className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-1.5 rounded-full text-sm font-medium transition shadow-sm"
-            >
-              Ajouter +
-            </button>
-          )}
-        </div>
+          Commencer maintenant
+        </Link>
       </div>
-    </div>
-  );
-};
+    );
+  }
 
-// --- COMPOSANT PRINCIPAL ---
-export default function HomePage() {
-  const { user } = useAuth();
-  const { lists, loading: listsLoading } = useWishlists();
-  const [selectedTargetList, setSelectedTargetList] = useState<string>('default');
-
-  const [query, setQuery] = useState('');
-  const [groupedResults, setGroupedResults] = useState<{ name: string, versions: ScryfallCard[] }[]>([]);
-  const [isSearching, setIsSearching] = useState(false);
-
-  const handleSearch = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!query.trim()) return;
-    setIsSearching(true);
-    setGroupedResults([]); 
-
-    try {
-      const response = await fetch(`/api/search?q=${query}`);
-      if (!response.ok) throw new Error('Erreur');
-      const data = await response.json();
-      const rawCards: ScryfallCard[] = data.data || [];
-
-      const groups = new Map<string, ScryfallCard[]>();
-      rawCards.forEach(card => {
-        const cleanName = card.name.split(' // ')[0];
-        if (!groups.has(cleanName)) groups.set(cleanName, []);
-        groups.get(cleanName)?.push(card);
-      });
-
-      const resultsArray = Array.from(groups.entries()).map(([cleanName, versions]) => ({
-        name: cleanName, versions: versions
-      }));
-      setGroupedResults(resultsArray);
-    } catch (err) {
-      toast.error("Aucune carte trouvée.");
-    } finally {
-      setIsSearching(false);
-    }
-  };
-
+  // --- DASHBOARD CONNECTÉ ---
   return (
-    <main className="container mx-auto p-4 max-w-7xl">
-      <h1 className="text-3xl font-bold mb-8 text-center mt-8 text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-purple-600">MagicWish ✨</h1>
-
-      <div className="max-w-xl mx-auto mb-10 space-y-3">
-        <form onSubmit={handleSearch} className="flex gap-2">
-            <input
-            type="text"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Rechercher (ex: Black Lotus)..."
-            className="flex-grow p-3 border rounded-lg shadow-sm outline-none transition-colors bg-white text-gray-900 border-gray-300 placeholder-gray-500 dark:bg-gray-800 dark:text-white dark:border-gray-600 dark:placeholder-gray-400 focus:border-blue-500"
-            />
-            <button type="submit" disabled={isSearching} className="bg-blue-600 hover:bg-blue-700 text-white px-6 rounded-lg font-semibold disabled:opacity-50 transition shadow-sm">
-            {isSearching ? '...' : '🔍'}
-            </button>
-        </form>
-
-        {user && (
-            <div className="flex justify-end items-center gap-2 animate-in fade-in slide-in-from-top-1">
-                <label htmlFor="targetList" className="text-sm text-gray-500 dark:text-gray-400">Ajouter dans :</label>
-                <div className="relative">
-                    <select
-                        id="targetList"
-                        value={selectedTargetList}
-                        onChange={(e) => setSelectedTargetList(e.target.value)}
-                        disabled={listsLoading}
-                        className="appearance-none bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 text-gray-700 dark:text-gray-200 py-1.5 pl-3 pr-8 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer shadow-sm"
-                    >
-                        {lists.length === 0 ? <option value="default">Liste principale</option> : lists.map((list) => <option key={list.id} value={list.id}>{list.name}</option>)}
-                    </select>
-                    <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-gray-500">
-                        <svg className="fill-current h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><path d="M9.293 12.95l.707.707L15.657 8l-1.414-1.414L10 10.828 5.757 6.586 4.343 8z"/></svg>
-                    </div>
-                </div>
-            </div>
-        )}
+    <main className="container mx-auto p-4 max-w-5xl">
+      <div className="mb-8">
+        <h1 className="text-3xl font-bold text-gray-900 dark:text-white">
+          Bonjour, <span className="text-blue-600">{username || user.displayName}</span> 👋
+        </h1>
+        <p className="text-gray-500">Voici ce qui se passe sur votre compte.</p>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
-        {groupedResults.map((group) => (
-          <CardGroup key={group.name} name={group.name} versions={group.versions} targetListId={selectedTargetList} />
-        ))}
+      {/* 1. BLOCS DE STATUTS (Alertes) */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+        
+        {/* CARTE : ÉCHANGES */}
+        <Link href="/trades" className={`p-6 rounded-2xl border transition shadow-sm hover:shadow-md ${incomingTrades.length > 0 ? 'bg-orange-50 border-orange-200 dark:bg-orange-900/20 dark:border-orange-800' : 'bg-white border-gray-100 dark:bg-gray-800 dark:border-gray-700'}`}>
+            <div className="flex justify-between items-start mb-2">
+                <span className="text-2xl">🤝</span>
+                {incomingTrades.length > 0 && <span className="bg-orange-500 text-white text-xs font-bold px-2 py-1 rounded-full">{incomingTrades.length} Attente</span>}
+            </div>
+            <h3 className="font-bold text-lg mb-1">Échanges</h3>
+            <p className="text-sm text-gray-500">
+                {incomingTrades.length > 0 
+                    ? "Vous avez des propositions à valider !" 
+                    : `${outgoingTrades.length} propositions envoyées.`}
+            </p>
+        </Link>
+
+        {/* CARTE : AMIS */}
+        <Link href="/contacts" className={`p-6 rounded-2xl border transition shadow-sm hover:shadow-md ${friendRequestCount > 0 ? 'bg-blue-50 border-blue-200 dark:bg-blue-900/20 dark:border-blue-800' : 'bg-white border-gray-100 dark:bg-gray-800 dark:border-gray-700'}`}>
+            <div className="flex justify-between items-start mb-2">
+                <span className="text-2xl">👥</span>
+                {friendRequestCount > 0 && <span className="bg-blue-500 text-white text-xs font-bold px-2 py-1 rounded-full">{friendRequestCount} Reçues</span>}
+            </div>
+            <h3 className="font-bold text-lg mb-1">Contacts</h3>
+            <p className="text-sm text-gray-500">
+                {friendRequestCount > 0 
+                    ? "De nouveaux joueurs veulent vous ajouter." 
+                    : "Gérez votre liste d'amis."}
+            </p>
+        </Link>
+
+        {/* CARTE : VALEUR */}
+        <Link href="/collection" className="p-6 rounded-2xl border border-gray-100 dark:border-gray-700 bg-white dark:bg-gray-800 transition shadow-sm hover:shadow-md group">
+            <div className="flex justify-between items-start mb-2">
+                <span className="text-2xl">📈</span>
+                <span className="text-green-600 font-bold bg-green-50 dark:bg-green-900/30 px-2 py-1 rounded text-xs">Total</span>
+            </div>
+            <h3 className="font-bold text-lg mb-1">{totalPrice.toFixed(2)} €</h3>
+            <p className="text-sm text-gray-500 group-hover:text-blue-500 transition-colors">
+                Valeur estimée de vos {cards.length} cartes.
+            </p>
+        </Link>
+      </div>
+
+      {/* 2. DERNIERS AJOUTS & ACTIONS RAPIDES */}
+      <div className="grid lg:grid-cols-3 gap-8">
+          
+          {/* COLONNE GAUCHE : Derniers ajouts */}
+          <div className="lg:col-span-2 space-y-4">
+              <div className="flex justify-between items-center">
+                  <h2 className="font-bold text-lg">Derniers ajouts</h2>
+                  <Link href="/collection" className="text-sm text-blue-600 hover:underline">Tout voir</Link>
+              </div>
+              
+              <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-100 dark:border-gray-700 overflow-hidden">
+                  {recentCards.length === 0 ? (
+                      <div className="p-8 text-center text-gray-400">
+                          Pas encore de cartes ? <Link href="/collection" className="text-blue-500 underline">Importez-en !</Link>
+                      </div>
+                  ) : (
+                      recentCards.map((card) => (
+                          <div key={card.id} className="flex items-center gap-4 p-3 border-b border-gray-50 dark:border-gray-700 last:border-0 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition">
+                              <div className="w-10 h-14 bg-gray-200 rounded overflow-hidden shrink-0">
+                                  <img src={card.imageUrl} className="w-full h-full object-cover" alt="" />
+                              </div>
+                              <div className="flex-grow">
+                                  <p className="font-bold text-sm text-gray-900 dark:text-white">{card.name}</p>
+                                  <p className="text-xs text-gray-500">{card.setName} {card.isFoil && '✨ Foil'}</p>
+                              </div>
+                              <div className="text-right">
+                                  <span className="font-bold text-gray-700 dark:text-gray-300 text-sm">{(card.customPrice ?? card.price ?? 0).toFixed(2)} €</span>
+                              </div>
+                          </div>
+                      ))
+                  )}
+              </div>
+          </div>
+
+          {/* COLONNE DROITE : Actions */}
+          <div className="space-y-6">
+              
+              {/* Box Raccourcis */}
+              <div className="bg-gradient-to-br from-purple-600 to-blue-600 rounded-xl p-6 text-white shadow-lg">
+                  <h3 className="font-bold text-lg mb-2">Action Rapide</h3>
+                  {/* CORRECTION ICI : &apos; */}
+                  <p className="text-white/80 text-sm mb-6">Vous revenez de tournoi ou d&apos;ouverture de boosters ?</p>
+                  
+                  <Link href="/collection" className="block w-full bg-white text-blue-600 font-bold text-center py-3 rounded-lg hover:bg-gray-50 transition shadow-sm">
+                      + Ajouter des cartes
+                  </Link>
+                  <Link href="/trades/manual" className="block w-full mt-3 bg-blue-700 hover:bg-blue-800 text-white font-bold text-center py-3 rounded-lg border border-blue-500 transition">
+                      🖐️ Échange Manuel
+                  </Link>
+              </div>
+
+              {/* Box Wishlist Suggestion (Statique pour l'instant) */}
+              <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-100 dark:border-gray-700 p-6">
+                  <h3 className="font-bold text-gray-900 dark:text-white mb-2">Astuce 💡</h3>
+                  <p className="text-sm text-gray-500 mb-4">
+                      Remplissez votre Wishlist pour permettre au scanner de trouver des échanges automatiquement avec vos amis.
+                  </p>
+                  <Link href="/wishlist" className="text-sm font-bold text-purple-600 hover:text-purple-700">
+                      Gérer ma Wishlist →
+                  </Link>
+              </div>
+
+          </div>
       </div>
     </main>
   );

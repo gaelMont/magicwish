@@ -1,333 +1,178 @@
-// app/collection/page.tsx
 'use client';
 
-import { useState, useMemo } from 'react';
 import { useAuth } from '@/lib/AuthContext';
-import { useCardCollection } from '@/hooks/useCardCollection'; 
-import MagicCard from '@/components/MagicCard';
-import ImportModal from '@/components/ImportModal';
-import ConfirmModal from '@/components/ConfirmModal';
-import DeleteAllButton from '@/components/DeleteAllButton';
-import CollectionToolsModal from '@/components/CollectionToolsModal';
+import { useCardCollection } from '@/hooks/useCardCollection';
+import { useTradeSystem } from '@/hooks/useTradeSystem';
+import Link from 'next/link';
+import { useState, useEffect } from 'react';
+import { db } from '@/lib/firebase';
+import { collection, query, orderBy, limit, getDocs } from 'firebase/firestore';
+import { CardType } from '@/hooks/useCardCollection';
 
-type SortOption = 'name' | 'price_desc' | 'price_asc' | 'quantity' | 'date';
-
-export default function CollectionPage() {
-  const { user } = useAuth();
+export default function DashboardPage() {
+  const { user, loading: authLoading, friendRequestCount, username } = useAuth();
+  const { totalPrice, cards } = useCardCollection('collection'); // Pour la valeur totale et stats
+  const { incomingTrades, outgoingTrades } = useTradeSystem(); // Pour les notifs d'échange
   
-  const { 
-    cards, loading, updateQuantity, removeCard, 
-    setCustomPrice, toggleAttribute, refreshCollectionPrices, bulkSetTradeStatus,
-    bulkRemoveCards, bulkUpdateAttribute, 
-    totalPrice 
-  } = useCardCollection('collection');
+  const [recentCards, setRecentCards] = useState<CardType[]>([]);
 
-  const [isImportOpen, setIsImportOpen] = useState(false);
-  const [isToolsOpen, setIsToolsOpen] = useState(false);
-  const [cardToDelete, setCardToDelete] = useState<string | null>(null);
+  // Charger les 5 dernières cartes ajoutées (Optimisation : requête dédiée)
+  useEffect(() => {
+    const fetchRecent = async () => {
+      if (!user) return;
+      try {
+        const q = query(
+            collection(db, 'users', user.uid, 'collection'), 
+            orderBy('addedAt', 'desc'), 
+            limit(5)
+        );
+        const snap = await getDocs(q);
+        setRecentCards(snap.docs.map(d => ({ id: d.id, ...d.data() } as CardType)));
+      } catch (e) { console.error(e); }
+    };
+    fetchRecent();
+  }, [user]);
 
-  // --- ÉTATS SÉLECTION MULTIPLE ---
-  const [isSelectMode, setIsSelectMode] = useState(false);
-  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  if (authLoading) return <div className="flex h-screen items-center justify-center animate-pulse">Chargement MagicWish...</div>;
 
-  const [searchQuery, setSearchQuery] = useState('');
-  const [sortBy, setSortBy] = useState<SortOption>('date');
-  const [filterSet, setFilterSet] = useState<string>('all');
-  const [filterTrade, setFilterTrade] = useState(false);
-  const [filterFoil, setFilterFoil] = useState(false);
-
-  // --- LOGIQUE DE FILTRAGE ET TRI ---
-  const filteredAndSortedCards = useMemo(() => {
-    let result = [...cards];
-
-    // Filtrage
-    if (searchQuery) {
-        const lowerQ = searchQuery.toLowerCase();
-        result = result.filter(c => c.name.toLowerCase().includes(lowerQ));
-    }
-    if (filterSet !== 'all') {
-        result = result.filter(c => c.setName === filterSet);
-    }
-    if (filterTrade) {
-        result = result.filter(c => c.isForTrade);
-    }
-    if (filterFoil) {
-        result = result.filter(c => c.isFoil);
-    }
-
-    // Tri
-    result.sort((a, b) => {
-        const priceA = a.customPrice ?? a.price ?? 0;
-        const priceB = b.customPrice ?? b.price ?? 0;
-
-        switch (sortBy) {
-            case 'name':
-                return a.name.localeCompare(b.name);
-            case 'price_desc':
-                return priceB - priceA;
-            case 'price_asc':
-                return priceA - priceB;
-            case 'quantity':
-                return b.quantity - a.quantity;
-            case 'date':
-            default:
-                return 0; 
-        }
-    });
-
-    return result;
-  }, [cards, searchQuery, sortBy, filterSet, filterTrade, filterFoil]);
-
-  const availableSets = useMemo(() => {
-      const sets = new Set(cards.map(c => c.setName).filter((s): s is string => !!s));
-      return Array.from(sets).sort();
-  }, [cards]);
-
-  const handleDecrement = async (cardId: string, currentQty: number) => {
-    const result = await updateQuantity(cardId, -1, currentQty);
-    if (result === 'shouldDelete') {
-      setCardToDelete(cardId);
-    }
-  };
-
-  // --- GESTION SÉLECTION ---
-  const toggleSelection = (id: string) => {
-      setSelectedIds(prev => 
-          prev.includes(id) ? prev.filter(pid => pid !== id) : [...prev, id]
-      );
-  };
-
-  const handleSelectAll = () => {
-      if (selectedIds.length === filteredAndSortedCards.length) {
-          setSelectedIds([]); 
-      } else {
-          setSelectedIds(filteredAndSortedCards.map(c => c.id)); 
-      }
-  };
-
-  const handleBulkDelete = async () => {
-      if (!confirm(`Supprimer ces ${selectedIds.length} cartes définitivement ?`)) return;
-      await bulkRemoveCards(selectedIds);
-      setSelectedIds([]);
-      setIsSelectMode(false);
-  };
-
-  const handleBulkTrade = async (isTrade: boolean) => {
-      await bulkUpdateAttribute(selectedIds, 'isForTrade', isTrade);
-      setSelectedIds([]);
-      setIsSelectMode(false);
-  };
-
-  if (loading) return <p className="text-center p-10 text-gray-500">Chargement de votre collection...</p>;
-  if (!user) return <p className="text-center p-10">Veuillez vous connecter.</p>;
-
-  return (
-    <main className="container mx-auto p-4 pb-24 relative">
-      
-      {/* HEADER */}
-      <div className="flex flex-col md:flex-row justify-between items-center mb-6 gap-4">
-        <h1 className="text-3xl font-bold text-blue-700 dark:text-blue-400">
-            Ma Collection 
-            <span className="ml-3 text-lg font-normal text-gray-500">
-                ({filteredAndSortedCards.length} / {cards.reduce((acc, c) => acc + c.quantity, 0)})
-            </span>
+  // Si pas connecté, Landing Page simple
+  if (!user) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[80vh] text-center p-4">
+        <h1 className="text-5xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent mb-6">
+          MagicWish
         </h1>
+        <p className="text-xl text-gray-600 dark:text-gray-300 max-w-lg mb-8">
+          Gérez votre collection Magic: The Gathering, créez vos wishlists et trouvez automatiquement des échanges avec vos amis.
+        </p>
+        <Link 
+          href="/login"
+          className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-8 rounded-full text-lg shadow-lg transition transform hover:scale-105"
+        >
+          Commencer maintenant
+        </Link>
+      </div>
+    );
+  }
+
+  // --- DASHBOARD CONNECTÉ ---
+  return (
+    <main className="container mx-auto p-4 max-w-5xl">
+      <div className="mb-8">
+        <h1 className="text-3xl font-bold text-gray-900 dark:text-white">
+          Bonjour, <span className="text-blue-600">{username || user.displayName}</span> 👋
+        </h1>
+        <p className="text-gray-500">Voici ce qui se passe sur votre compte.</p>
+      </div>
+
+      {/* 1. BLOCS DE STATUTS (Alertes) */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
         
-        <div className="flex items-center gap-2">
-           {/* TOGGLE SELECT MODE */}
-           <button 
-             onClick={() => { setIsSelectMode(!isSelectMode); setSelectedIds([]); }}
-             className={`px-3 py-2 rounded-lg text-sm font-medium transition shadow-sm border flex items-center gap-2 ${isSelectMode ? 'bg-blue-600 text-white border-blue-600' : 'bg-white hover:bg-gray-100 text-gray-700 border-gray-300 dark:bg-gray-800 dark:border-gray-600 dark:text-gray-200'}`}
-           >
-             {isSelectMode ? 'Annuler' : '☑ Sélectionner'}
-           </button>
+        {/* CARTE : ÉCHANGES */}
+        <Link href="/trades" className={`p-6 rounded-2xl border transition shadow-sm hover:shadow-md ${incomingTrades.length > 0 ? 'bg-orange-50 border-orange-200 dark:bg-orange-900/20 dark:border-orange-800' : 'bg-white border-gray-100 dark:bg-gray-800 dark:border-gray-700'}`}>
+            <div className="flex justify-between items-start mb-2">
+                <span className="text-2xl">🤝</span>
+                {incomingTrades.length > 0 && <span className="bg-orange-500 text-white text-xs font-bold px-2 py-1 rounded-full">{incomingTrades.length} Attente</span>}
+            </div>
+            <h3 className="font-bold text-lg mb-1">Échanges</h3>
+            <p className="text-sm text-gray-500">
+                {incomingTrades.length > 0 
+                    ? "Vous avez des propositions à valider !" 
+                    : `${outgoingTrades.length} propositions envoyées.`}
+            </p>
+        </Link>
 
-           {!isSelectMode && (
-               <>
-                <button 
-                    onClick={() => setIsToolsOpen(true)}
-                    className="bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200 px-3 py-2 rounded-lg text-sm font-medium transition shadow-sm border border-gray-200 dark:border-gray-600 flex items-center gap-2"
-                >
-                    ⚙️ Gérer
-                </button>
+        {/* CARTE : AMIS */}
+        <Link href="/contacts" className={`p-6 rounded-2xl border transition shadow-sm hover:shadow-md ${friendRequestCount > 0 ? 'bg-blue-50 border-blue-200 dark:bg-blue-900/20 dark:border-blue-800' : 'bg-white border-gray-100 dark:bg-gray-800 dark:border-gray-700'}`}>
+            <div className="flex justify-between items-start mb-2">
+                <span className="text-2xl">👥</span>
+                {friendRequestCount > 0 && <span className="bg-blue-500 text-white text-xs font-bold px-2 py-1 rounded-full">{friendRequestCount} Reçues</span>}
+            </div>
+            <h3 className="font-bold text-lg mb-1">Contacts</h3>
+            <p className="text-sm text-gray-500">
+                {friendRequestCount > 0 
+                    ? "De nouveaux joueurs veulent vous ajouter." 
+                    : "Gérez votre liste d'amis."}
+            </p>
+        </Link>
 
-                <DeleteAllButton targetCollection="collection" />
-                
-                <button 
-                    onClick={() => setIsImportOpen(true)} 
-                    className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition shadow-sm"
-                >
-                    Importer CSV
-                </button>
-                <div className="bg-blue-50 dark:bg-blue-900/30 text-blue-800 dark:text-blue-100 px-4 py-2 rounded-lg border border-blue-200 dark:border-blue-700 text-right min-w-[100px]">
-                    <span className="text-[10px] uppercase tracking-wide opacity-70 block">Valeur Totale</span>
-                    <span className="font-bold">{totalPrice.toFixed(2)} €</span>
-                </div>
-               </>
-           )}
-        </div>
+        {/* CARTE : VALEUR */}
+        <Link href="/collection" className="p-6 rounded-2xl border border-gray-100 dark:border-gray-700 bg-white dark:bg-gray-800 transition shadow-sm hover:shadow-md group">
+            <div className="flex justify-between items-start mb-2">
+                <span className="text-2xl">📈</span>
+                <span className="text-green-600 font-bold bg-green-50 dark:bg-green-900/30 px-2 py-1 rounded text-xs">Total</span>
+            </div>
+            <h3 className="font-bold text-lg mb-1">{totalPrice.toFixed(2)} €</h3>
+            <p className="text-sm text-gray-500 group-hover:text-blue-500 transition-colors">
+                Valeur estimée de vos {cards.length} cartes.
+            </p>
+        </Link>
       </div>
 
-      {/* BARRE D'OUTILS DE FILTRES */}
-      <div className="bg-white dark:bg-gray-800 p-4 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm mb-6 space-y-4 md:space-y-0 md:flex md:items-end md:gap-4">
+      {/* 2. DERNIERS AJOUTS & ACTIONS RAPIDES */}
+      <div className="grid lg:grid-cols-3 gap-8">
           
-          <div className="flex-grow">
-              <label className="block text-xs font-bold text-gray-500 mb-1 uppercase">Nom de la carte</label>
-              <input 
-                  type="text" 
-                  placeholder="Rechercher..." 
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full p-2.5 rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-900 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
-              />
+          {/* COLONNE GAUCHE : Derniers ajouts */}
+          <div className="lg:col-span-2 space-y-4">
+              <div className="flex justify-between items-center">
+                  <h2 className="font-bold text-lg">Derniers ajouts</h2>
+                  <Link href="/collection" className="text-sm text-blue-600 hover:underline">Tout voir</Link>
+              </div>
+              
+              <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-100 dark:border-gray-700 overflow-hidden">
+                  {recentCards.length === 0 ? (
+                      <div className="p-8 text-center text-gray-400">
+                          Pas encore de cartes ? <Link href="/collection" className="text-blue-500 underline">Importez-en !</Link>
+                      </div>
+                  ) : (
+                      recentCards.map((card) => (
+                          <div key={card.id} className="flex items-center gap-4 p-3 border-b border-gray-50 dark:border-gray-700 last:border-0 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition">
+                              <div className="w-10 h-14 bg-gray-200 rounded overflow-hidden shrink-0">
+                                  <img src={card.imageUrl} className="w-full h-full object-cover" alt="" />
+                              </div>
+                              <div className="flex-grow">
+                                  <p className="font-bold text-sm text-gray-900 dark:text-white">{card.name}</p>
+                                  <p className="text-xs text-gray-500">{card.setName} {card.isFoil && '✨ Foil'}</p>
+                              </div>
+                              <div className="text-right">
+                                  <span className="font-bold text-gray-700 dark:text-gray-300 text-sm">{(card.customPrice ?? card.price ?? 0).toFixed(2)} €</span>
+                              </div>
+                          </div>
+                      ))
+                  )}
+              </div>
           </div>
 
-          <div className="min-w-[200px]">
-              <label className="block text-xs font-bold text-gray-500 mb-1 uppercase">Édition</label>
-              <select 
-                  value={filterSet} 
-                  onChange={(e) => setFilterSet(e.target.value)}
-                  className="w-full p-2.5 rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-900 text-sm focus:ring-2 focus:ring-blue-500 outline-none cursor-pointer"
-              >
-                  <option value="all">Toutes les éditions</option>
-                  {availableSets.map(set => (
-                      <option key={set} value={set}>{set}</option>
-                  ))}
-              </select>
-          </div>
+          {/* COLONNE DROITE : Actions */}
+          <div className="space-y-6">
+              
+              {/* Box Raccourcis */}
+              <div className="bg-gradient-to-br from-purple-600 to-blue-600 rounded-xl p-6 text-white shadow-lg">
+                  <h3 className="font-bold text-lg mb-2">Action Rapide</h3>
+                  {/* CORRECTION ICI : &apos; */}
+                  <p className="text-white/80 text-sm mb-6">Vous revenez de tournoi ou d&apos;ouverture de boosters ?</p>
+                  
+                  <Link href="/collection" className="block w-full bg-white text-blue-600 font-bold text-center py-3 rounded-lg hover:bg-gray-50 transition shadow-sm">
+                      + Ajouter des cartes
+                  </Link>
+                  <Link href="/trades/manual" className="block w-full mt-3 bg-blue-700 hover:bg-blue-800 text-white font-bold text-center py-3 rounded-lg border border-blue-500 transition">
+                      🖐️ Échange Manuel
+                  </Link>
+              </div>
 
-          <div className="min-w-[180px]">
-              <label className="block text-xs font-bold text-gray-500 mb-1 uppercase">Trier par</label>
-              <select 
-                  value={sortBy} 
-                  onChange={(e) => setSortBy(e.target.value as SortOption)}
-                  className="w-full p-2.5 rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-900 text-sm focus:ring-2 focus:ring-blue-500 outline-none cursor-pointer"
-              >
-                  <option value="date">Date d&apos;ajout</option>
-                  <option value="price_desc">Prix : Haut → Bas</option>
-                  <option value="price_asc">Prix : Bas → Haut</option>
-                  <option value="name">Nom : A → Z</option>
-                  <option value="quantity">Quantité</option>
-              </select>
-          </div>
+              {/* Box Wishlist Suggestion (Statique pour l'instant) */}
+              <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-100 dark:border-gray-700 p-6">
+                  <h3 className="font-bold text-gray-900 dark:text-white mb-2">Astuce 💡</h3>
+                  <p className="text-sm text-gray-500 mb-4">
+                      Remplissez votre Wishlist pour permettre au scanner de trouver des échanges automatiquement avec vos amis.
+                  </p>
+                  <Link href="/wishlist" className="text-sm font-bold text-purple-600 hover:text-purple-700">
+                      Gérer ma Wishlist →
+                  </Link>
+              </div>
 
-          <div className="flex items-center gap-4 pb-3">
-              <label className="flex items-center gap-2 cursor-pointer select-none">
-                  <input 
-                    type="checkbox" 
-                    checked={filterFoil} 
-                    onChange={(e) => setFilterFoil(e.target.checked)}
-                    className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500 border-gray-300"
-                  />
-                  <span className="text-sm font-medium">Foil</span>
-              </label>
-              <label className="flex items-center gap-2 cursor-pointer select-none">
-                  <input 
-                    type="checkbox" 
-                    checked={filterTrade} 
-                    onChange={(e) => setFilterTrade(e.target.checked)}
-                    className="w-4 h-4 text-green-600 rounded focus:ring-green-500 border-gray-300"
-                  />
-                  <span className="text-sm font-medium">Échange</span>
-              </label>
           </div>
       </div>
-
-      {/* HEADER DE SÉLECTION (Si mode actif) */}
-      {isSelectMode && (
-          <div className="mb-4 flex items-center justify-between bg-blue-50 dark:bg-blue-900/20 p-3 rounded-lg border border-blue-100 dark:border-blue-800 animate-in fade-in slide-in-from-top-2">
-              <span className="font-bold text-blue-800 dark:text-blue-200 pl-2">
-                  {selectedIds.length} carte(s) sélectionnée(s)
-              </span>
-              <button 
-                onClick={handleSelectAll} 
-                className="text-sm text-blue-600 hover:text-blue-800 font-medium px-3 py-1 rounded hover:bg-blue-100 transition"
-              >
-                  {selectedIds.length === filteredAndSortedCards.length ? 'Tout désélectionner' : 'Tout sélectionner'}
-              </button>
-          </div>
-      )}
-
-      {/* GRILLE DE CARTES */}
-      {filteredAndSortedCards.length === 0 ? (
-        <div className="text-center py-20 bg-gray-50 dark:bg-gray-800/50 rounded-xl border-2 border-dashed border-gray-200 dark:border-gray-700">
-          <p className="text-xl text-gray-500 mb-4">Aucun résultat ne correspond à vos filtres.</p>
-          <button 
-            onClick={() => { setSearchQuery(''); setFilterSet('all'); setFilterTrade(false); setFilterFoil(false); }}
-            className="text-blue-600 hover:underline"
-          >
-            Réinitialiser les filtres
-          </button>
-        </div>
-      ) : (
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
-          {filteredAndSortedCards.map((card) => (
-            <MagicCard 
-              key={card.id}
-              {...card}
-              onIncrement={() => updateQuantity(card.id, 1, card.quantity)}
-              onDecrement={() => handleDecrement(card.id, card.quantity)}
-              onDelete={() => setCardToDelete(card.id)}
-              onEditPrice={(newPrice) => setCustomPrice(card.id, newPrice)}
-              onToggleAttribute={(field, val) => toggleAttribute(card.id, field, val)}
-              
-              // Props Sélection
-              isSelectMode={isSelectMode}
-              isSelected={selectedIds.includes(card.id)}
-              onSelect={() => toggleSelection(card.id)}
-            />
-          ))}
-        </div>
-      )}
-
-      {/* BARRE D'ACTION FLOTTANTE (Si mode sélection et items sélectionnés) */}
-      {isSelectMode && selectedIds.length > 0 && (
-          <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-white dark:bg-gray-800 shadow-2xl border border-gray-200 dark:border-gray-700 p-2 rounded-2xl flex items-center gap-2 z-50 animate-in slide-in-from-bottom-6 duration-300">
-              <button 
-                onClick={() => handleBulkTrade(true)}
-                className="px-4 py-2 bg-green-100 hover:bg-green-200 text-green-800 rounded-xl text-sm font-bold transition flex flex-col items-center leading-none gap-1"
-              >
-                  <span>🤝</span>
-                  <span className="text-[10px]">Ajouter Trade</span>
-              </button>
-              <button 
-                onClick={() => handleBulkTrade(false)}
-                className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-800 rounded-xl text-sm font-bold transition flex flex-col items-center leading-none gap-1"
-              >
-                  <span>🔒</span>
-                  <span className="text-[10px]">Retirer Trade</span>
-              </button>
-              
-              <div className="w-px h-8 bg-gray-300 mx-1"></div>
-
-              <button 
-                onClick={handleBulkDelete}
-                className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-xl text-sm font-bold transition flex flex-col items-center leading-none gap-1 shadow-md"
-              >
-                  <span>🗑️</span>
-                  <span className="text-[10px]">Supprimer</span>
-              </button>
-          </div>
-      )}
-
-      {/* MODALES */}
-      <ImportModal isOpen={isImportOpen} onClose={() => setIsImportOpen(false)} targetCollection="collection" />
-      
-      <CollectionToolsModal 
-        isOpen={isToolsOpen}
-        onClose={() => setIsToolsOpen(false)}
-        totalCards={cards.length}
-        onRefreshPrices={refreshCollectionPrices}
-        onBulkTrade={bulkSetTradeStatus}
-      />
-
-      <ConfirmModal 
-        isOpen={!!cardToDelete} 
-        onClose={() => setCardToDelete(null)} 
-        onConfirm={() => { if(cardToDelete) removeCard(cardToDelete); }} 
-        title="Retirer ?" 
-        message="Cette carte sera retirée de votre collection."
-      />
     </main>
   );
 }

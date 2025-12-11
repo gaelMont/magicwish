@@ -1,7 +1,7 @@
 // components/MagicCard.tsx
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, memo } from 'react';
 
 type MagicCardProps = {
   id?: string;
@@ -17,7 +17,6 @@ type MagicCardProps = {
   isSpecificVersion?: boolean;
   isForTrade?: boolean; 
   
-  // onIncrement/onDecrement suffisent pour la gestion individuelle
   onIncrement?: () => void;
   onDecrement?: () => void;
   onMove?: () => void;
@@ -30,7 +29,6 @@ type MagicCardProps = {
   isTradeView?: boolean;
   allowPriceEdit?: boolean;
 
-  // --- PROPS SÉLECTION ---
   isSelectMode?: boolean;
   isSelected?: boolean;
   onSelect?: () => void;
@@ -38,9 +36,9 @@ type MagicCardProps = {
 
 const CARD_BACK_URL = "https://cards.scryfall.io/large/front/a/6/a6984342-f723-4e80-8e69-902d287a915f.jpg";
 
-export default function MagicCard(props: MagicCardProps) {
+function MagicCard(props: MagicCardProps) {
   const { 
-      id, name, imageUrl, imageBackUrl, quantity = 1, 
+      name, imageUrl, imageBackUrl, quantity = 1, 
       price, customPrice, setName, 
       isFoil, isSpecificVersion, isForTrade,
       isTradeView, allowPriceEdit, 
@@ -57,7 +55,8 @@ export default function MagicCard(props: MagicCardProps) {
   useEffect(() => {
     if (!isEditingPrice) {
         const newVal = customPrice?.toString() || price?.toString() || "0";
-        setTempPrice(newVal);
+        // CORRECTION ICI : Vérifier avant d'appliquer
+        setTempPrice(prev => (prev !== newVal ? newVal : prev));
     }
   }, [customPrice, price, isEditingPrice]);
 
@@ -72,7 +71,6 @@ export default function MagicCard(props: MagicCardProps) {
 
   const currentImage = isFlipped && imageBackUrl ? imageBackUrl : imageUrl;
 
-  // Clic sur la carte : Sélectionne ou Retourne l'image
   const handleCardClick = () => {
       if (isSelectMode && onSelect) {
           onSelect();
@@ -81,12 +79,12 @@ export default function MagicCard(props: MagicCardProps) {
       }
   };
 
-  // --- VUE LISTE COMPACTE (TRADE) ---
+  // --- VUE LISTE (TRADE) ---
   if (isTradeView) {
       return (
-        <div className="flex items-center gap-3 bg-white dark:bg-gray-800 p-2 rounded-lg border border-gray-100 dark:border-gray-700">
+        <div className="flex items-center gap-3 bg-white dark:bg-gray-800 p-2 rounded-lg border border-gray-100 dark:border-gray-700 content-visibility-auto">
             <div className="w-10 h-14 bg-gray-200 rounded overflow-hidden flex-shrink-0 relative group cursor-pointer" onClick={() => setIsFlipped(!isFlipped)}>
-                 <img src={currentImage} className="w-full h-full object-cover" alt={name} />
+                 <img src={currentImage} className="w-full h-full object-cover" alt={name} loading="lazy" />
                  {isFoil && <div className="absolute top-0 right-0 bg-purple-600/80 text-white text-[8px] px-1 font-bold">✨</div>}
             </div>
             
@@ -126,7 +124,7 @@ export default function MagicCard(props: MagicCardProps) {
   return (
     <div 
         onClick={handleCardClick}
-        className={`relative group flex flex-col bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden p-3 gap-2 border transition-all duration-200 h-full 
+        className={`relative group flex flex-col bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden p-3 gap-2 border transition-all duration-200 h-full content-visibility-auto
         ${isSelected 
             ? 'border-blue-500 ring-2 ring-blue-500 bg-blue-50 dark:bg-blue-900/20' 
             : isFoil 
@@ -137,14 +135,12 @@ export default function MagicCard(props: MagicCardProps) {
         `}
     >
       
-      {/* BOUTON DÉPLACEMENT (Wishlist seulement) - Pas de suppression ici */}
       {!readOnly && !isSelectMode && isWishlist && onMove && (
         <div className="absolute top-2 left-2 right-2 flex justify-end z-20 pointer-events-none">
             <button onClick={(e) => { e.stopPropagation(); onMove(); }} className="pointer-events-auto p-1.5 bg-green-100 text-green-700 hover:bg-green-600 hover:text-white rounded-full transition opacity-100 md:opacity-0 md:group-hover:opacity-100 shadow-sm" title="Déplacer vers Collection">📦</button>
         </div>
       )}
 
-      {/* CASE À COCHER (Visible uniquement en mode sélection) */}
       {isSelectMode && (
           <div className="absolute top-2 right-2 z-30 pointer-events-none">
               <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center transition-colors shadow-sm ${isSelected ? 'bg-blue-600 border-blue-600' : 'bg-white/90 border-gray-400'}`}>
@@ -153,17 +149,16 @@ export default function MagicCard(props: MagicCardProps) {
           </div>
       )}
 
-      {/* IMAGE */}
       <div className="relative w-full aspect-[2.5/3.5] bg-gray-200 rounded-lg overflow-hidden shrink-0">
         <img
           src={currentImage || CARD_BACK_URL}
           alt={name}
+          loading="lazy"
           className="w-full h-full object-cover transition-transform duration-300"
           onError={(e) => { e.currentTarget.src = CARD_BACK_URL; }}
         />
         {isFoil && <div className="absolute inset-0 bg-gradient-to-tr from-purple-500/20 to-transparent pointer-events-none mix-blend-overlay"></div>}
 
-        {/* Bouton Flip (Masqué en mode sélection) */}
         {imageBackUrl && !isSelectMode && (
           <button onClick={(e) => { e.stopPropagation(); setIsFlipped(!isFlipped); }} className="absolute top-1/2 right-2 -translate-y-1/2 bg-black/50 hover:bg-black/80 text-white p-2 rounded-full backdrop-blur-sm transition-all shadow-lg border border-white/20 z-10 pointer-events-auto">
             🔄
@@ -171,7 +166,6 @@ export default function MagicCard(props: MagicCardProps) {
         )}
       </div>
       
-      {/* INFO CARTE */}
       <div className="flex-1 flex flex-col min-w-0">
         <div className="flex justify-between items-start mb-1">
             <h3 className="font-bold text-sm md:text-base truncate flex-grow" title={name}>{name}</h3>
@@ -179,10 +173,8 @@ export default function MagicCard(props: MagicCardProps) {
         
         <p className="text-xs text-blue-600 dark:text-blue-400 truncate font-medium mb-2">{setName}</p>
 
-        {/* OPTIONS TEXTUELLES (Désactivées en mode sélection) */}
         <div className={`flex flex-wrap gap-1.5 mb-2 ${isSelectMode ? 'pointer-events-none opacity-50' : ''}`}>
             
-            {/* FOIL */}
             {onToggleAttribute ? (
                 <button 
                     onClick={(e) => { e.stopPropagation(); onToggleAttribute('isFoil', !!isFoil); }}
@@ -196,9 +188,7 @@ export default function MagicCard(props: MagicCardProps) {
                 </button>
             ) : isFoil && ( <span className="text-[10px] bg-purple-100 text-purple-700 px-2 py-0.5 rounded border border-purple-200 font-medium">✨ Foil</span> )}
 
-            {/* VERSION / TRADE */}
             {isWishlist ? (
-                // WISHLIST BUTTONS
                 onToggleAttribute && (
                     <button 
                         onClick={(e) => { e.stopPropagation(); onToggleAttribute('isSpecificVersion', !!isSpecificVersion); }}
@@ -210,7 +200,6 @@ export default function MagicCard(props: MagicCardProps) {
                     </button>
                 )
             ) : (
-                // COLLECTION BUTTONS
                 onToggleAttribute && (
                     <button 
                         onClick={(e) => { e.stopPropagation(); onToggleAttribute('isForTrade', !!isForTrade); }}
@@ -225,7 +214,6 @@ export default function MagicCard(props: MagicCardProps) {
                 )
             )}
             
-            {/* BOUTON J'AI ACHETÉ (Texte) */}
             {isWishlist && !readOnly && !isSelectMode && onMove && (
                 <button 
                     onClick={(e) => { e.stopPropagation(); onMove(); }}
@@ -237,7 +225,6 @@ export default function MagicCard(props: MagicCardProps) {
             )}
         </div>
         
-        {/* FOOTER QUANTITÉ */}
         <div className={`mt-auto flex justify-between items-end border-t border-gray-100 dark:border-gray-700 pt-2 ${isSelectMode ? 'pointer-events-none opacity-50' : ''}`}>
           <div className="flex items-center gap-1.5">
             {!readOnly && <button onClick={(e) => {e.stopPropagation(); onDecrement?.()}} className="bg-gray-200 dark:bg-gray-700 w-6 h-6 rounded hover:bg-gray-300 font-bold flex items-center justify-center text-sm">-</button>}
@@ -256,3 +243,6 @@ export default function MagicCard(props: MagicCardProps) {
     </div>
   );
 }
+
+// Utilisation de memo pour éviter les re-renders inutiles
+export default memo(MagicCard);

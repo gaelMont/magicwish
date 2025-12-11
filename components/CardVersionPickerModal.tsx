@@ -45,7 +45,8 @@ export default function CardVersionPickerModal({ isOpen, onClose, baseCard, onCo
     };
 
     if (isOpen && baseCard?.oracle_id) {
-      fetchVersions(baseCard.oracle_id);
+      // CORRECTION ICI : as string
+      fetchVersions(baseCard.oracle_id as string);
     }
 
     setQuantity(1);

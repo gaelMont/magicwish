@@ -1,8 +1,35 @@
 // lib/cardUtils.ts
 
-// Type générique "fourre-tout" pour Scryfall
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export type ScryfallRawData = any;
+// Définition stricte des champs Scryfall que nous utilisons
+// Cela évite les crashs si l'API change ou si on accède à un champ inexistant
+export type ScryfallRawData = {
+  id: string;
+  name: string;
+  set: string;
+  set_name: string;
+  collector_number: string;
+  released_at?: string;
+  image_uris?: {
+    small?: string;
+    normal?: string;
+    large?: string;
+    png?: string;
+  };
+  card_faces?: Array<{
+    name: string;
+    image_uris?: {
+      normal?: string;
+    };
+  }>;
+  prices?: {
+    eur?: string;
+    eur_foil?: string;
+    usd?: string;
+  };
+  finishes?: string[]; // 'foil', 'nonfoil', 'etched'
+  // On autorise d'autres champs inconnus sans casser le typage strict ci-dessus
+  [key: string]: unknown;
+};
 
 export const normalizeCardData = (data: ScryfallRawData) => {
   // Gestion des noms pour les cartes doubles (ex: "Malakir Rebirth // Malakir Mire")
@@ -19,7 +46,9 @@ export const normalizeCardData = (data: ScryfallRawData) => {
   // CAS 2 : Carte double face (Transform, Modal DFC, etc.)
   else if (data.card_faces && data.card_faces.length > 0) {
     // Face Avant
-    imageUrl = data.card_faces[0].image_uris?.normal;
+    if (data.card_faces[0].image_uris?.normal) {
+      imageUrl = data.card_faces[0].image_uris.normal;
+    }
     
     // Face Arrière (si elle a une image)
     if (data.card_faces[1] && data.card_faces[1].image_uris?.normal) {

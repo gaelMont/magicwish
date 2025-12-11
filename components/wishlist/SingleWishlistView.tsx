@@ -14,7 +14,6 @@ type Props = {
 };
 
 export default function SingleWishlistView({ listId, listName }: Props) {
-    // On récupère toggleAttribute ici
     const { cards, loading, updateQuantity, removeCard, toggleAttribute, totalPrice } = useCardCollection('wishlist', listId);
     const { user } = useAuth();
     
@@ -28,8 +27,6 @@ export default function SingleWishlistView({ listId, listName }: Props) {
 
             await runTransaction(db, async (transaction) => {
                 const colDoc = await transaction.get(collectionRef);
-                // On garde les propriétés Foil/Version lors du déplacement si la carte n'existe pas encore
-                // Sinon on incrémente juste.
                 if (colDoc.exists()) {
                     transaction.update(collectionRef, { quantity: increment(card.quantity) });
                 } else {
@@ -37,7 +34,7 @@ export default function SingleWishlistView({ listId, listName }: Props) {
                         ...card, 
                         wishlistId: null, 
                         addedAt: new Date(),
-                        isFoil: card.isFoil || false // On garde l'info
+                        isFoil: card.isFoil || false
                     });
                 }
                 transaction.delete(wishlistRef);
@@ -77,9 +74,8 @@ export default function SingleWishlistView({ listId, listName }: Props) {
                                 if(card.quantity === 1) { if(confirm("Supprimer ?")) removeCard(card.id); } 
                                 else { updateQuantity(card.id, -1, card.quantity); }
                             }}
-                            onDelete={() => { if(confirm("Supprimer ?")) removeCard(card.id); }}
+                            // PLUS DE onDelete ICI
                             onMove={() => moveToCollection(card)}
-                            // NOUVEAU : On passe la fonction de toggle
                             onToggleAttribute={(field, val) => toggleAttribute(card.id, field, val)}
                         />
                     ))}
