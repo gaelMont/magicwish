@@ -1,7 +1,7 @@
 // components/MagicCard.tsx
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react'; // <--- useEffect ajouté
 
 type MagicCardProps = {
   id?: string;
@@ -13,7 +13,6 @@ type MagicCardProps = {
   customPrice?: number; 
   setName?: string;
   
-  // NOUVELLES PROPS
   isFoil?: boolean;
   isSpecificVersion?: boolean;
   
@@ -22,7 +21,6 @@ type MagicCardProps = {
   onDecrement?: () => void;
   onMove?: () => void;
   
-  // Fonctions d'édition passées par le parent (Optimisation)
   onEditPrice?: (newPrice: number) => void;
   onToggleAttribute?: (field: 'isFoil' | 'isSpecificVersion', currentValue: boolean) => void;
   
@@ -38,7 +36,7 @@ export default function MagicCard(props: MagicCardProps) {
   const { 
       id, name, imageUrl, imageBackUrl, quantity = 1, 
       price, customPrice, setName, 
-      isFoil, isSpecificVersion, // Récupération
+      isFoil, isSpecificVersion, 
       isTradeView, allowPriceEdit, 
       onEditPrice, onToggleAttribute, 
       readOnly, isWishlist,
@@ -47,7 +45,19 @@ export default function MagicCard(props: MagicCardProps) {
   
   const [isFlipped, setIsFlipped] = useState(false);
   const [isEditingPrice, setIsEditingPrice] = useState(false);
+  
+  // Initialisation
   const [tempPrice, setTempPrice] = useState(customPrice?.toString() || price?.toString() || "0");
+
+  // --- CORRECTION : Synchronisation ---
+  // Si le parent met à jour customPrice, on met à jour l'input local
+ useEffect(() => {
+    if (!isEditingPrice) {
+        const newVal = customPrice?.toString() || price?.toString() || "0";
+        // eslint-disable-next-line react-hooks/set-state-in-effect
+        setTempPrice(newVal);
+    }
+  }, [customPrice, price, isEditingPrice]);
 
   const effectivePrice = customPrice !== undefined ? customPrice : (price || 0);
 
@@ -66,7 +76,6 @@ export default function MagicCard(props: MagicCardProps) {
         <div className="flex items-center gap-3 bg-white dark:bg-gray-800 p-2 rounded-lg border border-gray-100 dark:border-gray-700">
             <div className="w-10 h-14 bg-gray-200 rounded overflow-hidden flex-shrink-0 relative group cursor-pointer" onClick={() => setIsFlipped(!isFlipped)}>
                  <img src={currentImage} className="w-full h-full object-cover" alt={name} />
-                 {/* Badges Miniatures */}
                  {isFoil && <div className="absolute top-0 right-0 bg-purple-600/80 text-white text-[8px] px-1 font-bold">✨</div>}
             </div>
             
@@ -106,9 +115,8 @@ export default function MagicCard(props: MagicCardProps) {
   return (
     <div className={`relative group flex flex-col bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden p-3 gap-3 border transition-colors h-full ${isFoil ? 'border-purple-300 dark:border-purple-800 shadow-purple-100 dark:shadow-none' : 'border-gray-100 dark:border-gray-700 hover:border-blue-300 dark:hover:border-blue-500'}`}>
       
-      {/* --- BADGES ET TOGGLES (Sur l'image) --- */}
+      {/* --- BADGES ET TOGGLES --- */}
       <div className="absolute top-14 left-4 z-10 flex flex-col gap-1">
-        {/* Toggle Foil */}
         {isWishlist && !readOnly && onToggleAttribute && (
             <button 
                 onClick={() => onToggleAttribute('isFoil', !!isFoil)}
@@ -118,7 +126,6 @@ export default function MagicCard(props: MagicCardProps) {
                 ✨
             </button>
         )}
-        {/* Toggle Specific */}
         {isWishlist && !readOnly && onToggleAttribute && (
             <button 
                 onClick={() => onToggleAttribute('isSpecificVersion', !!isSpecificVersion)}
@@ -130,7 +137,7 @@ export default function MagicCard(props: MagicCardProps) {
         )}
       </div>
 
-      {/* --- BOUTONS D'ACTION (Top) --- */}
+      {/* --- BOUTONS D'ACTION --- */}
       {!readOnly && (
         <div className="absolute top-2 left-2 right-2 flex justify-between z-20 pointer-events-none">
             {isWishlist && onMove && (
@@ -170,7 +177,6 @@ export default function MagicCard(props: MagicCardProps) {
         
         <div className="flex items-center gap-2 mb-2">
             <p className="text-xs text-blue-600 dark:text-blue-400 truncate font-medium max-w-[70%]">{setName}</p>
-            {/* Indicateurs passifs si ReadOnly */}
             {readOnly && isFoil && <span className="text-[10px] bg-purple-100 text-purple-700 px-1 rounded border border-purple-200">Foil</span>}
             {readOnly && isSpecificVersion && <span className="text-[10px] bg-gray-100 text-gray-700 px-1 rounded border border-gray-200">Exact</span>}
         </div>

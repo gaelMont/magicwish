@@ -14,7 +14,7 @@ const IncomingRequestCard = ({ trade }: { trade: TradeRequest }) => {
     const { acceptTrade, rejectTrade, isProcessing } = useTradeSystem();
     const [isOpen, setIsOpen] = useState(false);
 
-    // FIX 1 : Typage explicite de l'accumulateur et de l'item pour reduce
+    // FIX 1 : Typage explicite ajouté pour éviter l'erreur 'any'
     const valReceive = trade.itemsGiven.reduce((acc: number, c: CardType) => acc + (c.price || 0), 0); 
     const valGive = trade.itemsReceived.reduce((acc: number, c: CardType) => acc + (c.price || 0), 0);
 
@@ -55,7 +55,7 @@ const IncomingRequestCard = ({ trade }: { trade: TradeRequest }) => {
                     <div className="bg-green-50/50 p-3 rounded">
                         <p className="text-xs font-bold text-green-700 mb-2">⬇️ Tu vas recevoir :</p>
                         <div className="flex flex-wrap gap-2">
-                            {/* FIX 2 : Typage explicite pour map */}
+                            {/* FIX 2 : Typage explicite dans le map */}
                             {trade.itemsGiven.map((c: CardType) => (
                                 <div key={c.id} className="relative group w-12 h-16 bg-gray-200 rounded overflow-hidden">
                                      <img src={c.imageUrl} className="w-full h-full object-cover" alt="" title={c.name} />
@@ -67,7 +67,7 @@ const IncomingRequestCard = ({ trade }: { trade: TradeRequest }) => {
                     <div className="bg-red-50/50 p-3 rounded">
                         <p className="text-xs font-bold text-red-700 mb-2">⬆️ Tu vas donner :</p>
                          <div className="flex flex-wrap gap-2">
-                            {/* FIX 2 (bis) : Typage explicite pour map */}
+                            {/* FIX 3 : Typage explicite dans le map */}
                             {trade.itemsReceived.map((c: CardType) => (
                                 <div key={c.id} className="relative group w-12 h-16 bg-gray-200 rounded overflow-hidden">
                                      <img src={c.imageUrl} className="w-full h-full object-cover" alt="" title={c.name} />
@@ -120,7 +120,7 @@ const TradeRowProposal = ({ proposal, onProposalSent }: { proposal: TradeProposa
                     onClick={handlePropose}
                     className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg font-bold shadow-sm transition text-sm flex items-center gap-2"
                 >
-                    {/* FIX 3 : Apostrophe échappée */}
+                    {/* FIX 4 : Apostrophe échappée */}
                     📤 Proposer l&apos;échange
                 </button>
             </div>
@@ -175,7 +175,7 @@ export default function TradesPage() {
         {/* HEADER & TABS */}
         <div className="flex flex-col md:flex-row justify-between items-end mb-6 gap-4 border-b border-gray-200 dark:border-gray-700 pb-4">
             <div>
-                {/* FIX 3 : Apostrophe échappée */}
+                {/* FIX 5 : Apostrophe échappée */}
                 <h1 className="text-3xl font-bold text-purple-600 dark:text-purple-400">🤝 Centre d&apos;Échanges</h1>
             </div>
             <div className="flex gap-4">
@@ -209,7 +209,7 @@ export default function TradesPage() {
 
                 {proposals.length === 0 && !loading && (
                     <div className="text-center py-20 text-gray-400 border-2 border-dashed border-gray-200 dark:border-gray-700 rounded-xl">
-                        {/* FIX 3 : Apostrophe échappée */}
+                        {/* FIX 6 : Guillemets échappés */}
                         Lancez le scanner pour trouver des &quot;matchs&quot; avec vos amis.
                     </div>
                 )}
@@ -231,7 +231,7 @@ export default function TradesPage() {
                     <h2 className="font-bold text-gray-500 uppercase text-xs mb-4">À traiter ({incomingTrades.length})</h2>
                     {incomingTrades.length === 0 && <p className="text-gray-400 italic text-sm">Aucune demande en attente.</p>}
                     
-                    {/* Typage explicite (trade: TradeRequest) */}
+                    {/* FIX 7 : Typage explicite du trade */}
                     {incomingTrades.map((trade: TradeRequest) => (
                         <IncomingRequestCard key={trade.id} trade={trade} />
                     ))}
@@ -242,7 +242,7 @@ export default function TradesPage() {
                     <h2 className="font-bold text-gray-500 uppercase text-xs mb-4 pt-4 border-t dark:border-gray-700">En attente de réponse ({outgoingTrades.length})</h2>
                     {outgoingTrades.length === 0 && <p className="text-gray-400 italic text-sm">Aucune proposition en cours.</p>}
                     
-                    {/* Typage explicite (trade: TradeRequest) */}
+                    {/* FIX 8 : Typage explicite du trade */}
                     {outgoingTrades.map((trade: TradeRequest) => (
                          <div key={trade.id} className="flex justify-between items-center p-3 bg-gray-50 dark:bg-gray-800/50 rounded-lg border border-gray-100 dark:border-gray-700 mb-2">
                             <span className="text-sm text-gray-600 dark:text-gray-300">

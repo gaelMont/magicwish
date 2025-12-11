@@ -1,7 +1,7 @@
 // hooks/useTradeTransaction.ts
 import { useState } from 'react';
 import { db } from '@/lib/firebase';
-import { doc, runTransaction, serverTimestamp, increment, DocumentSnapshot, DocumentReference } from 'firebase/firestore';
+import { doc, runTransaction, serverTimestamp, increment } from 'firebase/firestore';
 import { useAuth } from '@/lib/AuthContext';
 import { CardType } from './useCardCollection';
 import toast from 'react-hot-toast';
@@ -38,7 +38,7 @@ export function useTradeTransaction() {
                 myGiveOps.push({ ref, snap, card });
             }
 
-            // --- B. MOI : Je reçois (Je dois vérifier si je l'ai déjà pour update ou set, et check wishlist) ---
+            // --- B. MOI : Je reçois ---
             const myReceiveOps = [];
             for (const card of cardsToReceive) {
                 const colRef = getRef(user.uid, 'collection', card.id);
@@ -51,14 +51,13 @@ export function useTradeTransaction() {
             }
 
             // --- C. PARTENAIRE (Si existe) ---
-            const partnerGiveOps = [];    // Ce qu'il me donne (donc il perd)
-            const partnerReceiveOps = []; // Ce que je lui donne (donc il gagne)
+            const partnerGiveOps = [];
+            const partnerReceiveOps = [];
 
             if (partnerUid) {
                 // Il perd ce qu'il me donne
                 for (const card of cardsToReceive) {
                     const ref = getRef(partnerUid, 'collection', card.id);
-                    // On lit pour être propre, même si on fait juste un increment négatif après
                     const snap = await transaction.get(ref); 
                     partnerGiveOps.push({ ref, snap, card });
                 }
@@ -67,10 +66,8 @@ export function useTradeTransaction() {
                 for (const card of myCardsToGive) {
                     const colRef = getRef(partnerUid, 'collection', card.id);
                     const wishRef = getRef(partnerUid, 'wishlist', card.id);
-
                     const colSnap = await transaction.get(colRef);
                     const wishSnap = await transaction.get(wishRef);
-
                     partnerReceiveOps.push({ colRef, wishRef, colSnap, wishSnap, card });
                 }
             }
@@ -91,7 +88,6 @@ export function useTradeTransaction() {
 
             // --- B. MOI : Je gagne ---
             for (const { colRef, wishRef, colSnap, wishSnap, card } of myReceiveOps) {
-                // Ajout Collection
                 if (colSnap.exists()) {
                     transaction.update(colRef, { quantity: increment(card.quantity) });
                 } else {
@@ -107,7 +103,6 @@ export function useTradeTransaction() {
                         addedAt: serverTimestamp()
                     });
                 }
-                // Nettoyage Wishlist
                 if (wishSnap.exists()) {
                     transaction.delete(wishRef);
                 }
@@ -117,13 +112,8 @@ export function useTradeTransaction() {
             if (partnerUid) {
                 // Il perd
                 for (const { ref, card } of partnerGiveOps) {
-                    // On décrémente aveuglément (on assume qu'il les a car on a checké au début)
-                    // Note: Idéalement on check snap.exists() mais on veut éviter de bloquer l'échange sur un bug mineur
                     transaction.update(ref, { quantity: increment(-card.quantity) });
-                    // TODO: Pour faire très propre, on pourrait vérifier si qty tombe à 0 pour delete, 
-                    // mais update est plus safe sans re-calculer logic.
                 }
-
                 // Il gagne
                 for (const { colRef, wishRef, colSnap, wishSnap, card } of partnerReceiveOps) {
                      if (colSnap.exists()) {
@@ -146,9 +136,10 @@ export function useTradeTransaction() {
         toast.success("Échange validé et collections mises à jour !", { id: toastId });
         return true;
 
-    } catch (error: any) {
+    } catch (error: unknown) {
         console.error(error);
-        toast.error(`Erreur: ${error.message}`, { id: toastId });
+        const errMsg = error instanceof Error ? error.message : "Erreur inconnue";
+        toast.error(`Erreur: ${errMsg}`, { id: toastId });
         return false;
     } finally {
         setIsProcessing(false);

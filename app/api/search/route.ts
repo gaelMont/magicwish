@@ -12,9 +12,9 @@ export async function GET(request: Request) {
     );
   }
 
-  // --- MODIFICATION ICI : Ajout des guillemets "${query}" ---
-  // Cela force la recherche exacte de l'expression
-  const scryfallUrl = `https://api.scryfall.com/cards/search?q="${query}"&unique=prints`;
+  // --- CORRECTION : Suppression des guillemets pour permettre la recherche partielle ---
+  // On utilise encodeURIComponent pour gérer proprement les espaces et caractères spéciaux
+  const scryfallUrl = `https://api.scryfall.com/cards/search?q=${encodeURIComponent(query)}&unique=prints`;
 
   try {
     const scryfallResponse = await fetch(scryfallUrl);

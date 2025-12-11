@@ -53,6 +53,7 @@ app/trades/manual/page.tsx
 app/trades/page.tsx
 app/user/[uid]/page.tsx
 app/wishlist/page.tsx
+components/CardVersionPickerModal.tsx
 components/ConfirmModal.tsx
 components/DeleteAllButton.tsx
 components/Header.tsx
@@ -65,6 +66,7 @@ eslint.config.mjs
 hooks/useCardCollection.ts
 hooks/useFriends.ts
 hooks/useTradeMatcher.ts
+hooks/useTradeSystem.ts
 hooks/useTradeTransaction.ts
 hooks/useWishlists.ts
 lib/AuthContext.tsx
@@ -84,6 +86,349 @@ tsconfig.json
 
 <files>
 This section contains the contents of the repository's files.
+
+<file path="components/CardVersionPickerModal.tsx">
+'use client';
+
+import { useState, useEffect, useMemo } from 'react';
+import { CardType } from '@/hooks/useCardCollection';
+import toast from 'react-hot-toast';
+
+// 1. Définition précise du type Scryfall pour éviter les erreurs "Unexpected any"
+export type ScryfallCardRaw = {
+  id: string;
+  oracle_id: string;
+  name: string;
+  set: string;
+  set_name: string;
+  collector_number: string;
+  released_at: string;
+  image_uris?: { normal: string; small?: string };
+  card_faces?: Array<{ image_uris?: { normal: string } }>;
+  prices?: { eur?: string; eur_foil?: string };
+  finishes?: string[]; // Important pour savoir si la carte existe en foil
+};
+
+type Props = {
+  isOpen: boolean;
+  onClose: () => void;
+  baseCard: ScryfallCardRaw | null; // On utilise le bon type ici
+  onConfirm: (card: CardType) => void;
+};
+
+export default function CardVersionPickerModal({ isOpen, onClose, baseCard, onConfirm }: Props) {
+  const [versions, setVersions] = useState<ScryfallCardRaw[]>([]);
+  const [loading, setLoading] = useState(false);
+  
+  // États de sélection
+  const [selectedVersionId, setSelectedVersionId] = useState<string>('');
+  const [isFoil, setIsFoil] = useState(false);
+  const [quantity, setQuantity] = useState(1);
+
+  // 2. useEffect corrigé : fetchVersions est défini DEDANS
+  useEffect(() => {
+    // Fonction définie localement pour éviter les soucis de dépendances
+    const fetchVersions = async (oracleId: string) => {
+        setLoading(true);
+        try {
+          const res = await fetch(`https://api.scryfall.com/cards/search?q=oracle_id:${oracleId}&unique=prints&order=released`);
+          const data = await res.json();
+          
+          if (data.data && data.data.length > 0) {
+            setVersions(data.data as ScryfallCardRaw[]); // Casting explicite
+            
+            // Par défaut, on sélectionne la version sur laquelle on a cliqué ou la plus récente
+            const defaultVer = data.data.find((c: ScryfallCardRaw) => c.id === baseCard?.id) || data.data[0];
+            setSelectedVersionId(defaultVer.id);
+          }
+        } catch (e) {
+          console.error(e);
+          toast.error("Impossible de charger les versions");
+        } finally {
+          setLoading(false);
+        }
+    };
+
+    if (isOpen && baseCard?.oracle_id) {
+      fetchVersions(baseCard.oracle_id);
+    }
+
+    // Reset des états à l'ouverture
+    setQuantity(1);
+    setIsFoil(false);
+  }, [isOpen, baseCard]); // fetchVersions n'est plus requis ici
+
+  // La version actuellement affichée
+  const currentCard = useMemo(() => {
+    return versions.find(v => v.id === selectedVersionId) || baseCard;
+  }, [versions, selectedVersionId, baseCard]);
+
+  // Si on n'a pas de carte (ex: modale fermée ou chargement initial), on ne rend rien
+  if (!isOpen || !currentCard) return null;
+
+  // Gestion des images (Recto/Verso)
+  const imageUrl = currentCard.image_uris?.normal || currentCard.card_faces?.[0]?.image_uris?.normal || "https://cards.scryfall.io/large/front/a/6/a6984342-f723-4e80-8e69-902d287a915f.jpg";
+  
+  // Gestion des prix (Normal vs Foil)
+  const priceNormal = parseFloat(currentCard.prices?.eur || "0");
+  const priceFoil = parseFloat(currentCard.prices?.eur_foil || "0");
+  
+  const currentPrice = isFoil ? (priceFoil || priceNormal) : (priceNormal || priceFoil);
+  
+  // Vérification des finitions disponibles
+  const hasFoilVersion = currentCard.finishes?.includes('foil') || !!currentCard.prices?.eur_foil;
+  const hasNonFoilVersion = currentCard.finishes?.includes('nonfoil') || !!currentCard.prices?.eur;
+
+  const handleConfirm = () => {
+    const finalCard: CardType = {
+        id: currentCard.id,
+        name: currentCard.name,
+        imageUrl: imageUrl,
+        quantity: quantity,
+        price: currentPrice,
+        setName: currentCard.set_name,
+        setCode: currentCard.set,
+        isFoil: isFoil,
+        isSpecificVersion: true // Puisqu'on a choisi manuellement le set
+    };
+    onConfirm(finalCard);
+    onClose();
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 backdrop-blur-sm animate-in fade-in duration-200">
+      <div className="bg-gray-900 w-full max-w-md rounded-2xl overflow-hidden shadow-2xl border border-gray-700 flex flex-col max-h-[90vh]">
+        
+        {/* HEADER */}
+        <div className="p-4 flex justify-between items-center border-b border-gray-800">
+            <h3 className="text-white font-bold truncate pr-4">{currentCard.name}</h3>
+            <button onClick={onClose} className="text-gray-400 hover:text-white px-2 text-xl">✕</button>
+        </div>
+
+        {/* CONTENU SCROLLABLE */}
+        <div className="overflow-y-auto p-6 flex flex-col items-center space-y-6 custom-scrollbar">
+            
+            {/* 1. IMAGE DISPLAY */}
+            <div className="relative w-64 aspect-[2.5/3.5] rounded-xl overflow-hidden shadow-lg ring-1 ring-white/10 group">
+                {loading ? (
+                    <div className="w-full h-full bg-gray-800 animate-pulse flex items-center justify-center text-gray-500">Chargement...</div>
+                ) : (
+                    <img src={imageUrl} alt="" className="w-full h-full object-cover" />
+                )}
+                {isFoil && <div className="absolute inset-0 bg-gradient-to-tr from-purple-500/30 to-transparent mix-blend-overlay pointer-events-none" />}
+            </div>
+
+            {/* 2. SÉLECTEUR D'ÉDITION */}
+            <div className="w-full space-y-2">
+                <label className="text-xs text-gray-400 uppercase font-bold tracking-wider">Édition / Set</label>
+                <div className="relative">
+                    <select 
+                        className="w-full bg-gray-800 text-white border border-gray-700 rounded-xl p-3 appearance-none focus:ring-2 focus:ring-blue-500 outline-none text-sm"
+                        value={selectedVersionId}
+                        onChange={(e) => {
+                            setSelectedVersionId(e.target.value);
+                            // On remet non-foil par défaut quand on change d'édition pour éviter les conflits
+                            setIsFoil(false); 
+                        }}
+                    >
+                        {versions.map((v) => (
+                            <option key={v.id} value={v.id}>
+                                {v.set_name} ({v.set.toUpperCase()}) #{v.collector_number}
+                            </option>
+                        ))}
+                    </select>
+                    <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-gray-400">▼</div>
+                </div>
+            </div>
+
+            {/* 3. CONTROLES (Foil & Quantité) */}
+            <div className="grid grid-cols-2 gap-4 w-full">
+                
+                {/* Toggle Foil */}
+                <div className="bg-gray-800 rounded-xl p-3 flex flex-col items-center justify-center gap-2 border border-gray-700">
+                    <span className="text-xs text-gray-400 font-bold">FINITION</span>
+                    <div className="flex bg-gray-900 rounded-lg p-1 w-full">
+                        <button 
+                            onClick={() => setIsFoil(false)}
+                            disabled={!hasNonFoilVersion}
+                            className={`flex-1 text-xs py-1.5 rounded-md transition ${!isFoil ? 'bg-gray-700 text-white font-bold' : 'text-gray-500 hover:text-gray-300'} ${!hasNonFoilVersion && 'opacity-30 cursor-not-allowed'}`}
+                        >
+                            Normal
+                        </button>
+                        <button 
+                            onClick={() => setIsFoil(true)}
+                            disabled={!hasFoilVersion}
+                            className={`flex-1 text-xs py-1.5 rounded-md transition ${isFoil ? 'bg-purple-600 text-white font-bold' : 'text-gray-500 hover:text-purple-400'} ${!hasFoilVersion && 'opacity-30 cursor-not-allowed'}`}
+                        >
+                            Foil
+                        </button>
+                    </div>
+                </div>
+
+                {/* Compteur Quantité */}
+                <div className="bg-gray-800 rounded-xl p-3 flex flex-col items-center justify-center gap-2 border border-gray-700">
+                     <span className="text-xs text-gray-400 font-bold">QUANTITÉ</span>
+                     <div className="flex items-center gap-3">
+                        <button onClick={() => setQuantity(Math.max(1, quantity - 1))} className="w-8 h-8 rounded-full bg-gray-700 text-white hover:bg-gray-600 font-bold">-</button>
+                        <span className="text-xl font-bold text-white w-6 text-center">{quantity}</span>
+                        <button onClick={() => setQuantity(quantity + 1)} className="w-8 h-8 rounded-full bg-blue-600 text-white hover:bg-blue-500 font-bold">+</button>
+                     </div>
+                </div>
+            </div>
+        </div>
+
+        {/* FOOTER - PRIX & VALIDATION */}
+        <div className="p-4 bg-gray-800 border-t border-gray-700">
+            <div className="flex justify-between items-center mb-4">
+                 <div className="text-gray-400 text-sm">Prix unitaire</div>
+                 <div className="text-2xl font-bold text-white">
+                    {currentPrice > 0 ? `${currentPrice.toFixed(2)} €` : <span className="text-gray-500 text-lg">N/A</span>}
+                 </div>
+            </div>
+            
+            <button 
+                onClick={handleConfirm}
+                className="w-full bg-amber-500 hover:bg-amber-400 text-black font-bold py-4 rounded-xl text-lg transition shadow-lg transform active:scale-95 flex justify-center items-center gap-2"
+            >
+                <span>+ Ajouter</span>
+                {quantity > 1 && <span className="bg-black/20 px-2 py-0.5 rounded text-sm">{quantity}</span>}
+            </button>
+        </div>
+
+      </div>
+    </div>
+  );
+}
+</file>
+
+<file path="hooks/useTradeSystem.ts">
+// hooks/useTradeSystem.ts
+import { useState, useEffect } from 'react';
+import { db } from '@/lib/firebase';
+import { 
+  collection, addDoc, query, where, onSnapshot, 
+  doc, updateDoc, serverTimestamp, orderBy, 
+  Timestamp
+} from 'firebase/firestore';
+import { useAuth } from '@/lib/AuthContext';
+import { CardType } from './useCardCollection';
+import { useTradeTransaction } from './useTradeTransaction';
+import toast from 'react-hot-toast';
+
+export type TradeStatus = 'pending' | 'completed' | 'rejected' | 'cancelled';
+
+export type TradeRequest = {
+  id: string;
+  senderUid: string;
+  senderName: string;
+  receiverUid: string;
+  receiverName: string;
+  itemsGiven: CardType[];
+  itemsReceived: CardType[];
+  status: TradeStatus;
+  createdAt: Timestamp;
+};
+
+export function useTradeSystem() {
+  const { user, username } = useAuth();
+  // Renommage pour éviter conflit de nom
+  const { executeTrade, isProcessing: isTransactionProcessing } = useTradeTransaction();
+  
+  const [incomingTrades, setIncomingTrades] = useState<TradeRequest[]>([]);
+  const [outgoingTrades, setOutgoingTrades] = useState<TradeRequest[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  // 1. Écouter les échanges
+  useEffect(() => {
+    if (!user) return;
+
+    const qIn = query(
+      collection(db, 'trades'),
+      where('receiverUid', '==', user.uid),
+      where('status', '==', 'pending'),
+      orderBy('createdAt', 'desc')
+    );
+
+    const qOut = query(
+      collection(db, 'trades'),
+      where('senderUid', '==', user.uid),
+      where('status', '==', 'pending'),
+      orderBy('createdAt', 'desc')
+    );
+
+    const unsubIn = onSnapshot(qIn, (snap) => {
+      setIncomingTrades(snap.docs.map(d => ({ id: d.id, ...d.data() } as TradeRequest)));
+    });
+
+    const unsubOut = onSnapshot(qOut, (snap) => {
+      setOutgoingTrades(snap.docs.map(d => ({ id: d.id, ...d.data() } as TradeRequest)));
+      setLoading(false);
+    });
+
+    return () => { unsubIn(); unsubOut(); };
+  }, [user]);
+
+  // 2. Proposer
+  const proposeTrade = async (receiverUid: string, receiverName: string, toGive: CardType[], toReceive: CardType[]) => {
+    if (!user) return;
+    const toastId = toast.loading("Envoi de la proposition...");
+
+    try {
+      await addDoc(collection(db, 'trades'), {
+        senderUid: user.uid,
+        senderName: username || user.displayName || 'Inconnu',
+        receiverUid,
+        receiverName,
+        itemsGiven: toGive,
+        itemsReceived: toReceive,
+        status: 'pending',
+        createdAt: serverTimestamp()
+      });
+      toast.success("Proposition envoyée !", { id: toastId });
+      return true;
+    } catch (e) {
+      console.error(e);
+      toast.error("Erreur envoi", { id: toastId });
+      return false;
+    }
+  };
+
+  // 3. Accepter
+  const acceptTrade = async (trade: TradeRequest) => {
+    if (!user) return;
+    
+    // Inversion Sender/Receiver pour l'exécution
+    const success = await executeTrade(
+        trade.itemsReceived, 
+        trade.itemsGiven,    
+        trade.senderUid      
+    );
+
+    if (success) {
+      await updateDoc(doc(db, 'trades', trade.id), { status: 'completed' });
+    }
+  };
+
+  // 4. Refuser / Annuler
+  const rejectTrade = async (tradeId: string) => {
+    if(!confirm("Refuser cet échange ?")) return;
+    await updateDoc(doc(db, 'trades', tradeId), { status: 'rejected' });
+    toast.success("Échange refusé");
+  };
+
+  const cancelTrade = async (tradeId: string) => {
+    if(!confirm("Annuler cette proposition ?")) return;
+    await updateDoc(doc(db, 'trades', tradeId), { status: 'cancelled' });
+    toast.success("Proposition annulée");
+  };
+
+  return { 
+    incomingTrades, outgoingTrades, loading, 
+    proposeTrade, acceptTrade, rejectTrade, cancelTrade,
+    isProcessing: isTransactionProcessing 
+  };
+}
+</file>
 
 <file path=".gitignore">
 # See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
@@ -213,31 +558,34 @@ import { useCardCollection, CardType } from '@/hooks/useCardCollection';
 import { useTradeTransaction } from '@/hooks/useTradeTransaction';
 import MagicCard from '@/components/MagicCard';
 import toast from 'react-hot-toast';
+// 1. IMPORT DU NOUVEAU COMPOSANT
+import CardVersionPickerModal, { ScryfallCardRaw } from '@/components/CardVersionPickerModal';
 
 export default function ManualTradePage() {
   const { user } = useAuth();
-  const { cards: myCollection, loading } = useCardCollection('collection'); // Chargement de TOUTE ma collection
+  const { cards: myCollection, loading } = useCardCollection('collection'); 
   const { executeTrade, isProcessing } = useTradeTransaction();
 
   // --- ÉTATS ---
   const [toGive, setToGive] = useState<CardType[]>([]);
   const [toReceive, setToReceive] = useState<CardType[]>([]);
   
-  // Recherche Locale (Pour trouver mes cartes à donner)
   const [localSearch, setLocalSearch] = useState('');
   
-  // Recherche Scryfall (Pour trouver ce que je reçois)
   const [remoteSearch, setRemoteSearch] = useState('');
-  const [searchResults, setSearchResults] = useState<any[]>([]);
+  const [searchResults, setSearchResults] = useState<ScryfallCardRaw[]>([]);
   const [isSearching, setIsSearching] = useState(false);
+
+  // 2. ÉTAT POUR LA MODALE DE SÉLECTION
+  const [cardToPick, setCardToPick] = useState<ScryfallCardRaw | null>(null);
 
   // --- LOGIQUE AJOUT / RETRAIT ---
   
   const handleAddToGive = (card: CardType) => {
-      // On vérifie si déjà ajouté
+      // (Code existant inchangé pour "Je donne")
       const existing = toGive.find(c => c.id === card.id);
       if (existing) {
-          if (existing.quantity < card.quantity) { // Max ce que je possède
+          if (existing.quantity < card.quantity) { 
               setToGive(prev => prev.map(c => c.id === card.id ? { ...c, quantity: c.quantity + 1 } : c));
           } else {
               toast.error("Max quantité atteinte");
@@ -252,43 +600,48 @@ export default function ManualTradePage() {
       if (!remoteSearch.trim()) return;
       setIsSearching(true);
       try {
-          const res = await fetch(`/api/search?q=${remoteSearch}`);
+          // On ajoute &unique=prints pour avoir moins de doublons visuels dans la recherche initiale
+          const res = await fetch(`/api/search?q=${remoteSearch}`); 
           const data = await res.json();
           setSearchResults(data.data || []);
       } catch (e) { toast.error("Erreur recherche"); }
       finally { setIsSearching(false); }
   };
 
-  const handleAddToReceive = (scryfallCard: any) => {
-      // Conversion Scryfall -> CardType simplifié
-      const newCard: CardType = {
-          id: scryfallCard.id,
-          name: scryfallCard.name,
-          imageUrl: scryfallCard.image_uris?.normal || "",
-          quantity: 1,
-          price: parseFloat(scryfallCard.prices?.eur || "0"),
-          setName: scryfallCard.set_name,
-          isFoil: false
-      };
+  // 3. FONCTION DÉCLENCHEUR (Click sur résultat recherche)
+  const handleSearchResultClick = (scryfallCard: ScryfallCardRaw) => {
+    // Au lieu d'ajouter direct, on ouvre la modale
+    setCardToPick(scryfallCard);
+  };
+
+  // 4. FONCTION DE CONFIRMATION (Retour de la modale)
+  const handleConfirmReceive = (card: CardType) => {
+      const existing = toReceive.find(c => c.id === card.id && c.isFoil === card.isFoil); // On distingue les foils
       
-      const existing = toReceive.find(c => c.id === newCard.id);
       if (existing) {
-          setToReceive(prev => prev.map(c => c.id === newCard.id ? { ...c, quantity: c.quantity + 1 } : c));
+          setToReceive(prev => prev.map(c => 
+              (c.id === card.id && c.isFoil === card.isFoil) 
+              ? { ...c, quantity: c.quantity + card.quantity } 
+              : c
+          ));
       } else {
-          setToReceive(prev => [...prev, newCard]);
+          setToReceive(prev => [...prev, card]);
       }
-      setSearchResults([]); // On vide les résultats après choix
+      
+      // On ferme la recherche pour plus de clarté
+      setSearchResults([]); 
       setRemoteSearch("");
+      toast.success(`Ajouté : ${card.name}`);
   };
 
   // --- VALIDATION ---
   const handleValidate = async () => {
+      // (Code existant inchangé)
       if (toGive.length === 0 && toReceive.length === 0) return;
       if (!confirm("Confirmer cet échange ? Vos cartes données seront retirées de votre collection.")) return;
 
-      const success = await executeTrade(toGive, toReceive, null); // null = pas d'ami, juste moi
+      const success = await executeTrade(toGive, toReceive, null);
       if (success) {
-          // Reset total
           setToGive([]);
           setToReceive([]);
           setLocalSearch("");
@@ -296,7 +649,8 @@ export default function ManualTradePage() {
   };
 
   // --- CALCULS ---
-  const valGive = toGive.reduce((acc, c) => acc + (c.price || 0) * c.quantity, 0);
+  // On prend en compte le customPrice s'il existe (non pertinent pour l'externe mais bon pour la structure)
+  const valGive = toGive.reduce((acc, c) => acc + (c.customPrice ?? c.price ?? 0) * c.quantity, 0);
   const valReceive = toReceive.reduce((acc, c) => acc + (c.price || 0) * c.quantity, 0);
 
   if (!user) return <div className="p-10 text-center">Connectez-vous.</div>;
@@ -309,41 +663,36 @@ export default function ManualTradePage() {
 
         <div className="grid lg:grid-cols-2 gap-8 h-[calc(100vh-200px)]">
             
-            {/* --- COLONNE GAUCHE : JE DONNE (Ma Collection) --- */}
+            {/* --- COLONNE GAUCHE (Inchinchangé) --- */}
             <div className="flex flex-col bg-red-50/50 dark:bg-red-900/10 rounded-xl border border-red-100 dark:border-red-900 p-4">
                 <h2 className="font-bold text-red-600 mb-2">📤 Je donne (De ma collection)</h2>
-                
-                {/* 1. Liste des cartes sélectionnées */}
-                <div className="flex-none mb-4 space-y-2 min-h-[100px] bg-white dark:bg-gray-800 p-2 rounded border border-gray-200 dark:border-gray-700 overflow-y-auto max-h-[30vh]">
+                {/* ... (Reste du code de la colonne gauche inchangé) ... */}
+                 <div className="flex-none mb-4 space-y-2 min-h-[100px] bg-white dark:bg-gray-800 p-2 rounded border border-gray-200 dark:border-gray-700 overflow-y-auto max-h-[30vh]">
                     {toGive.length === 0 && <p className="text-xs text-gray-400 italic text-center py-4">Aucune carte sélectionnée</p>}
                     {toGive.map(card => (
-                        <div key={card.id} className="flex justify-between items-center text-sm p-1 border-b">
+                        <div key={card.id} className="flex justify-between items-center text-sm p-1 border-b dark:border-gray-700">
                             <span>{card.quantity}x {card.name}</span>
                             <button onClick={() => setToGive(p => p.filter(c => c.id !== card.id))} className="text-red-500">✕</button>
                         </div>
                     ))}
                 </div>
-
-                {/* 2. Moteur de recherche local */}
                 <input 
                     type="text" 
                     placeholder="Chercher dans ma collection..." 
-                    className="w-full p-2 mb-2 rounded border dark:bg-gray-800"
+                    className="w-full p-2 mb-2 rounded border dark:bg-gray-800 dark:text-white"
                     value={localSearch}
                     onChange={e => setLocalSearch(e.target.value)}
                 />
-                
-                {/* 3. Résultats locaux */}
                 <div className="flex-grow overflow-y-auto custom-scrollbar space-y-2 pr-1">
                     {loading ? <p>Chargement...</p> : 
                         myCollection
                             .filter(c => c.name.toLowerCase().includes(localSearch.toLowerCase()))
-                            .slice(0, 20) // Limite affichage
+                            .slice(0, 20)
                             .map(card => (
-                                <div key={card.id} onClick={() => handleAddToGive(card)} className="cursor-pointer hover:bg-red-100 p-2 rounded flex items-center gap-2 border border-transparent hover:border-red-200 transition">
+                                <div key={card.id} onClick={() => handleAddToGive(card)} className="cursor-pointer hover:bg-red-100 dark:hover:bg-red-900/30 p-2 rounded flex items-center gap-2 border border-transparent hover:border-red-200 transition">
                                     <img src={card.imageUrl} className="w-8 h-11 rounded object-cover bg-gray-200" alt="" />
                                     <div className="flex-grow min-w-0">
-                                        <p className="font-bold text-xs truncate">{card.name}</p>
+                                        <p className="font-bold text-xs truncate dark:text-gray-200">{card.name}</p>
                                         <p className="text-[10px] text-gray-500">{card.setName} - En stock: {card.quantity}</p>
                                     </div>
                                     <span className="text-xs font-bold text-gray-400">+</span>
@@ -353,17 +702,25 @@ export default function ManualTradePage() {
                 </div>
             </div>
 
-            {/* --- COLONNE DROITE : JE REÇOIS (Recherche Scryfall) --- */}
+            {/* --- COLONNE DROITE : JE REÇOIS (Modifiée) --- */}
             <div className="flex flex-col bg-green-50/50 dark:bg-green-900/10 rounded-xl border border-green-100 dark:border-green-900 p-4">
                 <h2 className="font-bold text-green-600 mb-2">📥 Je reçois (Ajout libre)</h2>
 
                 {/* 1. Liste des cartes reçues */}
                  <div className="flex-none mb-4 space-y-2 min-h-[100px] bg-white dark:bg-gray-800 p-2 rounded border border-gray-200 dark:border-gray-700 overflow-y-auto max-h-[30vh]">
                     {toReceive.length === 0 && <p className="text-xs text-gray-400 italic text-center py-4">Aucune carte ajoutée</p>}
-                    {toReceive.map(card => (
-                        <div key={card.id} className="flex justify-between items-center text-sm p-1 border-b">
-                            <span>{card.quantity}x {card.name}</span>
-                            <button onClick={() => setToReceive(p => p.filter(c => c.id !== card.id))} className="text-red-500">✕</button>
+                    {toReceive.map((card, idx) => (
+                        <div key={`${card.id}-${idx}`} className="flex justify-between items-center text-sm p-1 border-b dark:border-gray-700">
+                            <div className="flex items-center gap-2">
+                                <span className="font-bold">{card.quantity}x</span>
+                                <div className="flex flex-col">
+                                    <span className="dark:text-gray-200">{card.name}</span>
+                                    <span className="text-[10px] text-gray-500">
+                                        {card.setName} {card.isFoil && '✨ Foil'} - {(card.price || 0).toFixed(2)}€
+                                    </span>
+                                </div>
+                            </div>
+                            <button onClick={() => setToReceive(p => p.filter((_, i) => i !== idx))} className="text-red-500">✕</button>
                         </div>
                     ))}
                 </div>
@@ -373,26 +730,26 @@ export default function ManualTradePage() {
                     <input 
                         type="text" 
                         placeholder="Rechercher carte à recevoir..." 
-                        className="flex-grow p-2 rounded border dark:bg-gray-800"
+                        className="flex-grow p-2 rounded border dark:bg-gray-800 dark:text-white"
                         value={remoteSearch}
                         onChange={e => setRemoteSearch(e.target.value)}
                     />
                     <button type="submit" className="bg-green-600 text-white px-3 rounded">🔍</button>
                 </form>
 
-                {/* 3. Résultats Scryfall */}
+                {/* 3. Résultats Scryfall (Click ouvre la modale) */}
                  <div className="flex-grow overflow-y-auto custom-scrollbar space-y-2 pr-1">
                     {isSearching && <p className="text-xs">Recherche...</p>}
                     {searchResults.map(card => (
-                        <div key={card.id} onClick={() => handleAddToReceive(card)} className="cursor-pointer hover:bg-green-100 p-2 rounded flex items-center gap-2 border border-transparent hover:border-green-200 transition">
+                        <div key={card.id} onClick={() => handleSearchResultClick(card)} className="cursor-pointer hover:bg-green-100 dark:hover:bg-green-900/30 p-2 rounded flex items-center gap-2 border border-transparent hover:border-green-200 transition">
                              <div className="w-8 h-11 bg-gray-200 rounded overflow-hidden">
                                 {card.image_uris?.small && <img src={card.image_uris.small} className="w-full h-full object-cover" alt="" />}
                              </div>
                              <div className="flex-grow min-w-0">
-                                <p className="font-bold text-xs truncate">{card.name}</p>
+                                <p className="font-bold text-xs truncate dark:text-gray-200">{card.name}</p>
                                 <p className="text-[10px] text-gray-500">{card.set_name}</p>
                              </div>
-                             <span className="text-xs font-bold text-gray-400">+</span>
+                             <span className="text-xs font-bold text-gray-400">Choisir ›</span>
                         </div>
                     ))}
                 </div>
@@ -400,7 +757,7 @@ export default function ManualTradePage() {
         </div>
 
         {/* --- FOOTER DE VALIDATION --- */}
-        <div className="fixed bottom-0 left-0 right-0 p-4 bg-white dark:bg-gray-900 border-t dark:border-gray-800 flex justify-between items-center z-50 shadow-2xl">
+        <div className="fixed bottom-0 left-0 right-0 p-4 bg-white dark:bg-gray-900 border-t dark:border-gray-800 flex justify-between items-center z-40 shadow-2xl">
             <div className="flex gap-4 text-sm">
                 <div>Donne: <span className="font-bold">{valGive.toFixed(2)}€</span></div>
                 <div>Reçoit: <span className="font-bold">{valReceive.toFixed(2)}€</span></div>
@@ -410,9 +767,18 @@ export default function ManualTradePage() {
                 disabled={isProcessing || (toGive.length === 0 && toReceive.length === 0)}
                 className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-3 rounded-xl font-bold disabled:opacity-50 transition"
             >
-                {isProcessing ? 'Validation...' : '✅ Valider et Mettre à jour ma collection'}
+                {isProcessing ? 'Validation...' : '✅ Valider l\'échange'}
             </button>
         </div>
+
+        {/* 5. INTÉGRATION DE LA MODALE */}
+        <CardVersionPickerModal 
+            isOpen={!!cardToPick}
+            baseCard={cardToPick}
+            onClose={() => setCardToPick(null)}
+            onConfirm={handleConfirmReceive}
+        />
+
     </div>
   );
 }
@@ -936,146 +1302,6 @@ const eslintConfig = defineConfig([
 ]);
 
 export default eslintConfig;
-</file>
-
-<file path="hooks/useTradeTransaction.ts">
-// hooks/useTradeTransaction.ts
-import { useState } from 'react';
-import { db } from '@/lib/firebase';
-import { doc, runTransaction, serverTimestamp, increment } from 'firebase/firestore';
-import { useAuth } from '@/lib/AuthContext';
-import { CardType } from './useCardCollection';
-import toast from 'react-hot-toast';
-
-type TradeSide = {
-    uid: string; // L'ID de l'utilisateur (Moi ou l'Ami)
-    losing: CardType[];
-    gaining: CardType[];
-};
-
-export function useTradeTransaction() {
-  const { user } = useAuth();
-  const [isProcessing, setIsProcessing] = useState(false);
-
-  // Fonction utilitaire pour préparer les références
-  const getRef = (uid: string, collection: 'collection' | 'wishlist', cardId: string) => {
-      return doc(db, 'users', uid, collection, cardId);
-  };
-
-  /**
-   * Exécute l'échange.
-   * Si partnerUid est null, c'est un échange manuel (on update juste mon côté).
-   */
-  const executeTrade = async (
-      myCardsToGive: CardType[], 
-      cardsToReceive: CardType[], 
-      partnerUid: string | null = null
-  ) => {
-    if (!user) return;
-    setIsProcessing(true);
-    const toastId = toast.loading("Validation de l'échange...");
-
-    try {
-        await runTransaction(db, async (transaction) => {
-            // --- 1. GESTION DE MON CÔTÉ (Moi) ---
-            
-            // A. Je perds des cartes (Ma Collection)
-            for (const card of myCardsToGive) {
-                const docRef = getRef(user.uid, 'collection', card.id);
-                const docSnap = await transaction.get(docRef);
-                
-                if (!docSnap.exists()) throw new Error(`Erreur: Vous n'avez plus ${card.name}`);
-                const currentQty = docSnap.data().quantity || 0;
-                
-                if (currentQty <= card.quantity) {
-                    transaction.delete(docRef); // Plus d'exemplaire -> Suppression
-                } else {
-                    transaction.update(docRef, { quantity: increment(-card.quantity) });
-                }
-            }
-
-            // B. Je gagne des cartes (Ma Collection + Nettoyage Ma Wishlist)
-            for (const card of cardsToReceive) {
-                const colRef = getRef(user.uid, 'collection', card.id);
-                const wishRef = getRef(user.uid, 'wishlist', card.id); // On check la wishlist par défaut
-                
-                // Ajout Collection
-                const colSnap = await transaction.get(colRef);
-                if (colSnap.exists()) {
-                    transaction.update(colRef, { quantity: increment(card.quantity) });
-                } else {
-                    // Création propre de la carte
-                    transaction.set(colRef, {
-                        name: card.name,
-                        imageUrl: card.imageUrl,
-                        imageBackUrl: card.imageBackUrl || null,
-                        setName: card.setName || '',
-                        price: card.price || 0,
-                        quantity: card.quantity,
-                        isFoil: card.isFoil || false,
-                        isSpecificVersion: card.isSpecificVersion || false,
-                        addedAt: serverTimestamp()
-                    });
-                }
-
-                // Suppression Wishlist (Si je l'avais demandée)
-                const wishSnap = await transaction.get(wishRef);
-                if (wishSnap.exists()) {
-                    transaction.delete(wishRef);
-                }
-            }
-
-            // --- 2. GESTION DU PARTENAIRE (Si ce n'est pas un échange manuel) ---
-            if (partnerUid) {
-                // A. Il perd ce qu'il me donne (Sa Collection)
-                for (const card of cardsToReceive) {
-                    const docRef = getRef(partnerUid, 'collection', card.id);
-                    // Note: On ne lit pas le doc pour économiser, on utilise increment(-x). 
-                    // Risque mineur: si synchro décalée, il peut passer en négatif (rare).
-                    // Pour faire propre, on devrait lire, mais increment est atomique.
-                    transaction.update(docRef, { quantity: increment(-card.quantity) });
-                     // Idéalement : check si qty <= 0 pour delete, mais update est plus safe sans lecture
-                }
-
-                // B. Il gagne ce que je donne (Sa Collection + Nettoyage Sa Wishlist)
-                for (const card of myCardsToGive) {
-                     const colRef = getRef(partnerUid, 'collection', card.id);
-                     const wishRef = getRef(partnerUid, 'wishlist', card.id);
-
-                     const colSnap = await transaction.get(colRef);
-                     if (colSnap.exists()) {
-                         transaction.update(colRef, { quantity: increment(card.quantity) });
-                     } else {
-                         transaction.set(colRef, {
-                             ...card, // On copie les datas de ma carte
-                             quantity: card.quantity,
-                             addedAt: serverTimestamp(),
-                             wishlistId: null
-                         });
-                     }
-
-                     const wishSnap = await transaction.get(wishRef);
-                     if (wishSnap.exists()) {
-                         transaction.delete(wishRef);
-                     }
-                }
-            }
-        });
-
-        toast.success("Échange validé et collections mises à jour !", { id: toastId });
-        return true;
-
-    } catch (error: any) {
-        console.error(error);
-        toast.error(`Erreur: ${error.message}`, { id: toastId });
-        return false;
-    } finally {
-        setIsProcessing(false);
-    }
-  };
-
-  return { executeTrade, isProcessing };
-}
 </file>
 
 <file path="hooks/useWishlists.ts">
@@ -1649,8 +1875,8 @@ export function useFriends() {
 import { useState } from 'react';
 import { useAuth } from '@/lib/AuthContext';
 import { db } from '@/lib/firebase';
-import { collection, getDocs, doc, updateDoc } from 'firebase/firestore';
-import { useWishlists } from './useWishlists';
+import { collection, getDocs, doc, writeBatch } from 'firebase/firestore'; 
+import { useWishlists, WishlistMeta } from './useWishlists'; // <--- 1. Import WishlistMeta
 import { useFriends, FriendProfile } from './useFriends';
 import { CardType } from './useCardCollection';
 
@@ -1670,7 +1896,8 @@ export function useTradeMatcher() {
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("");
 
-  const fetchAllCards = async (uid: string, mode: 'collection' | 'wishlist', userLists: any[] = []) => {
+  // 2. Correction ici : Remplacement de any[] par WishlistMeta[]
+  const fetchAllCards = async (uid: string, mode: 'collection' | 'wishlist', userLists: WishlistMeta[] = []) => {
     const cardsMap = new Map<string, CardType>();
 
     if (mode === 'collection') {
@@ -1698,22 +1925,53 @@ export function useTradeMatcher() {
   };
 
   const refreshPrices = async (cardsToUpdate: CardType[], uid: string, collectionName: string) => {
-     for (const card of cardsToUpdate) {
+     if (cardsToUpdate.length === 0) return;
+
+     const chunks = [];
+     for (let i = 0; i < cardsToUpdate.length; i += 75) {
+         chunks.push(cardsToUpdate.slice(i, i + 75));
+     }
+
+     const batch = writeBatch(db); 
+     let hasUpdates = false;
+
+     for (const chunk of chunks) {
          try {
-             const res = await fetch(`https://api.scryfall.com/cards/${card.id}`);
-             if (res.ok) {
-                 const scryfallData = await res.json();
-                 const newPrice = parseFloat(scryfallData.prices?.eur || "0");
-                 
-                 if (newPrice !== card.price) {
+             const identifiers = chunk.map(c => ({ id: c.id }));
+             
+             const res = await fetch('https://api.scryfall.com/cards/collection', {
+                 method: 'POST',
+                 headers: { 'Content-Type': 'application/json' },
+                 body: JSON.stringify({ identifiers })
+             });
+
+             if (!res.ok) continue;
+
+             const data = await res.json();
+             
+             // 3. Correction ici : On utilise le commentaire spécial pour autoriser any juste ici
+             // eslint-disable-next-line @typescript-eslint/no-explicit-any
+             const foundCards: any[] = data.data || [];
+
+             foundCards.forEach(scryCard => {
+                 const newPrice = parseFloat(scryCard.prices?.eur || "0");
+                 const localCard = chunk.find(c => c.id === scryCard.id);
+
+                 if (localCard && localCard.price !== newPrice) {
+                     localCard.price = newPrice; 
+                     
                      if (collectionName === 'collection') {
-                        const ref = doc(db, 'users', uid, 'collection', card.id);
-                        updateDoc(ref, { price: newPrice });
+                         const ref = doc(db, 'users', uid, 'collection', localCard.id);
+                         batch.update(ref, { price: newPrice });
+                         hasUpdates = true;
                      }
-                     card.price = newPrice;
                  }
-             }
-         } catch (e) { console.error("Err price fetch", e); }
+             });
+         } catch (e) { console.error("Err price fetch batch", e); }
+     }
+
+     if (hasUpdates) {
+         await batch.commit();
      }
   };
 
@@ -1723,31 +1981,25 @@ export function useTradeMatcher() {
     setStatus("Chargement de vos données...");
 
     try {
-        // 1. CHARGER MES DONNÉES
         const myCollectionMap = await fetchAllCards(user.uid, 'collection');
         const myWishlistMap = await fetchAllCards(user.uid, 'wishlist', lists);
 
-        // --- PRÉPARATION DE MA WISHLIST (HYBRIDE) ---
-        const myWishlistNames = new Set<string>(); // Pour les cartes "N'importe quelle version"
-        const myWishlistIds = new Set<string>();   // Pour les cartes "Version Exacte"
+        const myWishlistNames = new Set<string>();
+        const myWishlistIds = new Set<string>();
 
         myWishlistMap.forEach(card => {
             if (card.isSpecificVersion) {
-                myWishlistIds.add(card.id); // ID Scryfall exact
+                myWishlistIds.add(card.id);
             } else {
-                myWishlistNames.add(card.name); // Nom uniquement
+                myWishlistNames.add(card.name);
             }
         });
 
-        // --- PRÉPARATION DE MA COLLECTION (POUR CE QUE JE DONNE) ---
-        // Ici, c'est plus simple : on propose ce qu'on a. C'est l'autre qui décide si ça lui va.
-        // Donc on garde Map et Noms pour matcher les désirs de l'autre.
         const myCollectionNames = new Set<string>();
         myCollectionMap.forEach(card => myCollectionNames.add(card.name));
 
         const newProposals: TradeProposal[] = [];
 
-        // 2. BOUCLE SUR AMIS
         let i = 0;
         for (const friend of friends) {
             i++;
@@ -1759,20 +2011,15 @@ export function useTradeMatcher() {
             const toReceive: CardType[] = [];
             const toGive: CardType[] = [];
 
-            // MATCH A : Ce qu'il a (sa Collection) que je veux (ma Wishlist)
             friendCollectionMap.forEach((card) => {
-                // 1. Est-ce que cette carte précise est dans ma liste stricte ?
                 if (myWishlistIds.has(card.id)) {
                     toReceive.push(card);
                 } 
-                // 2. Sinon, est-ce que son NOM est dans ma liste générique ?
                 else if (myWishlistNames.has(card.name)) {
                     toReceive.push(card);
                 }
             });
 
-            // MATCH B : Ce que j'ai (ma Collection) qu'il veut (sa Wishlist)
-            // On doit analyser SA wishlist pour savoir s'il est strict ou pas
             const friendWishlistNames = new Set<string>();
             const friendWishlistIds = new Set<string>();
 
@@ -1782,7 +2029,6 @@ export function useTradeMatcher() {
             });
 
             myCollectionMap.forEach((card) => {
-                // Même logique : est-ce que ma carte matche ses critères ?
                 if (friendWishlistIds.has(card.id)) {
                     toGive.push(card);
                 }
@@ -1818,6 +2064,159 @@ export function useTradeMatcher() {
   };
 
   return { proposals, loading, status, runScan };
+}
+</file>
+
+<file path="hooks/useTradeTransaction.ts">
+// hooks/useTradeTransaction.ts
+import { useState } from 'react';
+import { db } from '@/lib/firebase';
+import { doc, runTransaction, serverTimestamp, increment } from 'firebase/firestore';
+import { useAuth } from '@/lib/AuthContext';
+import { CardType } from './useCardCollection';
+import toast from 'react-hot-toast';
+
+export function useTradeTransaction() {
+  const { user } = useAuth();
+  const [isProcessing, setIsProcessing] = useState(false);
+
+  const getRef = (uid: string, collection: 'collection' | 'wishlist', cardId: string) => {
+      return doc(db, 'users', uid, collection, cardId);
+  };
+
+  const executeTrade = async (
+      myCardsToGive: CardType[], 
+      cardsToReceive: CardType[], 
+      partnerUid: string | null = null
+  ) => {
+    if (!user) return;
+    setIsProcessing(true);
+    const toastId = toast.loading("Validation de l'échange...");
+
+    try {
+        await runTransaction(db, async (transaction) => {
+            // ============================================================
+            // 1. PHASE DE LECTURE (READS) - ON NE MODIFIE RIEN ICI
+            // ============================================================
+            
+            // --- A. MOI : Je donne (Je dois vérifier que j'ai toujours les cartes) ---
+            const myGiveOps = [];
+            for (const card of myCardsToGive) {
+                const ref = getRef(user.uid, 'collection', card.id);
+                const snap = await transaction.get(ref);
+                if (!snap.exists()) throw new Error(`Erreur : Vous n'avez plus la carte ${card.name}`);
+                myGiveOps.push({ ref, snap, card });
+            }
+
+            // --- B. MOI : Je reçois ---
+            const myReceiveOps = [];
+            for (const card of cardsToReceive) {
+                const colRef = getRef(user.uid, 'collection', card.id);
+                const wishRef = getRef(user.uid, 'wishlist', card.id);
+                
+                const colSnap = await transaction.get(colRef);
+                const wishSnap = await transaction.get(wishRef);
+                
+                myReceiveOps.push({ colRef, wishRef, colSnap, wishSnap, card });
+            }
+
+            // --- C. PARTENAIRE (Si existe) ---
+            const partnerGiveOps = [];
+            const partnerReceiveOps = [];
+
+            if (partnerUid) {
+                // Il perd ce qu'il me donne
+                for (const card of cardsToReceive) {
+                    const ref = getRef(partnerUid, 'collection', card.id);
+                    const snap = await transaction.get(ref); 
+                    partnerGiveOps.push({ ref, snap, card });
+                }
+
+                // Il gagne ce que je donne
+                for (const card of myCardsToGive) {
+                    const colRef = getRef(partnerUid, 'collection', card.id);
+                    const wishRef = getRef(partnerUid, 'wishlist', card.id);
+                    const colSnap = await transaction.get(colRef);
+                    const wishSnap = await transaction.get(wishRef);
+                    partnerReceiveOps.push({ colRef, wishRef, colSnap, wishSnap, card });
+                }
+            }
+
+            // ============================================================
+            // 2. PHASE D'ÉCRITURE (WRITES) - ON APPLIQUE TOUT MAINTENANT
+            // ============================================================
+
+            // --- A. MOI : Je perds ---
+            for (const { ref, snap, card } of myGiveOps) {
+                const currentQty = snap.data()?.quantity || 0;
+                if (currentQty <= card.quantity) {
+                    transaction.delete(ref);
+                } else {
+                    transaction.update(ref, { quantity: increment(-card.quantity) });
+                }
+            }
+
+            // --- B. MOI : Je gagne ---
+            for (const { colRef, wishRef, colSnap, wishSnap, card } of myReceiveOps) {
+                if (colSnap.exists()) {
+                    transaction.update(colRef, { quantity: increment(card.quantity) });
+                } else {
+                    transaction.set(colRef, {
+                        name: card.name,
+                        imageUrl: card.imageUrl,
+                        imageBackUrl: card.imageBackUrl || null,
+                        setName: card.setName || '',
+                        price: card.price || 0,
+                        quantity: card.quantity,
+                        isFoil: card.isFoil || false,
+                        isSpecificVersion: card.isSpecificVersion || false,
+                        addedAt: serverTimestamp()
+                    });
+                }
+                if (wishSnap.exists()) {
+                    transaction.delete(wishRef);
+                }
+            }
+
+            // --- C. PARTENAIRE ---
+            if (partnerUid) {
+                // Il perd
+                for (const { ref, card } of partnerGiveOps) {
+                    transaction.update(ref, { quantity: increment(-card.quantity) });
+                }
+                // Il gagne
+                for (const { colRef, wishRef, colSnap, wishSnap, card } of partnerReceiveOps) {
+                     if (colSnap.exists()) {
+                         transaction.update(colRef, { quantity: increment(card.quantity) });
+                     } else {
+                         transaction.set(colRef, {
+                             ...card, 
+                             quantity: card.quantity,
+                             addedAt: serverTimestamp(),
+                             wishlistId: null
+                         });
+                     }
+                     if (wishSnap.exists()) {
+                         transaction.delete(wishRef);
+                     }
+                }
+            }
+        });
+
+        toast.success("Échange validé et collections mises à jour !", { id: toastId });
+        return true;
+
+    } catch (error: unknown) {
+        console.error(error);
+        const errMsg = error instanceof Error ? error.message : "Erreur inconnue";
+        toast.error(`Erreur: ${errMsg}`, { id: toastId });
+        return false;
+    } finally {
+        setIsProcessing(false);
+    }
+  };
+
+  return { executeTrade, isProcessing };
 }
 </file>
 
@@ -1935,9 +2334,9 @@ export async function GET(request: Request) {
     );
   }
 
-  // --- MODIFICATION ICI : Ajout des guillemets "${query}" ---
-  // Cela force la recherche exacte de l'expression
-  const scryfallUrl = `https://api.scryfall.com/cards/search?q="${query}"&unique=prints`;
+  // --- CORRECTION : Suppression des guillemets pour permettre la recherche partielle ---
+  // On utilise encodeURIComponent pour gérer proprement les espaces et caractères spéciaux
+  const scryfallUrl = `https://api.scryfall.com/cards/search?q=${encodeURIComponent(query)}&unique=prints`;
 
   try {
     const scryfallResponse = await fetch(scryfallUrl);
@@ -1964,158 +2363,11 @@ export async function GET(request: Request) {
 }
 </file>
 
-<file path="app/trades/page.tsx">
-// app/trades/page.tsx
-'use client';
-
-import { useAuth } from '@/lib/AuthContext';
-import { useTradeMatcher, TradeProposal } from '@/hooks/useTradeMatcher';
-import { useTradeTransaction } from '@/hooks/useTradeTransaction'; // <--- IMPORT
-import Link from 'next/link';
-import { useCardCollection } from '@/hooks/useCardCollection'; 
-import MagicCard from '@/components/MagicCard'; 
-
-const TradeRow = ({ proposal, onTradeSuccess }: { proposal: TradeProposal, onTradeSuccess: () => void }) => {
-    const { setCustomPrice } = useCardCollection('collection');
-    
-    // <--- NOUVEAU : Hook de transaction
-    const { executeTrade, isProcessing } = useTradeTransaction(); 
-
-    const totalGive = proposal.toGive.reduce((acc, c) => acc + (c.customPrice ?? c.price ?? 0), 0);
-    const totalReceive = proposal.toReceive.reduce((acc, c) => acc + (c.customPrice ?? c.price ?? 0), 0);
-    const delta = totalGive - totalReceive;
-
-    // Fonction de validation
-    const handleConfirmTrade = async () => {
-        const confirmMsg = `Valider cet échange avec ${proposal.friend.displayName} ?\n\n` +
-                           `⚠ VOS CARTES SERONT RETIRÉES DE VOTRE COLLECTION.\n` +
-                           `⚠ SES CARTES SERONT AJOUTÉES À LA VÔTRE.`;
-        
-        if (!confirm(confirmMsg)) return;
-
-        const success = await executeTrade(proposal.toGive, proposal.toReceive, proposal.friend.uid);
-        if (success) {
-            onTradeSuccess(); // On demande au parent de rafraîchir ou retirer la ligne
-        }
-    };
-
-    return (
-        <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden mb-8">
-            <div className="bg-gray-50 dark:bg-gray-900/50 p-4 border-b border-gray-100 dark:border-gray-700 flex flex-col sm:flex-row justify-between items-center gap-4">
-                <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-white font-bold overflow-hidden">
-                        {proposal.friend.photoURL ? <img src={proposal.friend.photoURL} alt="" className="w-full h-full object-cover"/> : proposal.friend.username[0].toUpperCase()}
-                    </div>
-                    <div>
-                        <h2 className="text-xl font-bold text-gray-900 dark:text-white">Échange avec {proposal.friend.displayName}</h2>
-                        <Link href={`/user/${proposal.friend.uid}`} className="text-sm text-blue-600 hover:underline">Voir profil</Link>
-                    </div>
-                </div>
-
-                {/* --- BOUTON DE VALIDATION AUTOMATIQUE --- */}
-                <button
-                    onClick={handleConfirmTrade}
-                    disabled={isProcessing}
-                    className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg font-bold shadow-sm transition disabled:opacity-50 text-sm flex items-center gap-2"
-                >
-                    {isProcessing ? 'Traitement...' : '✅ Valider l\'échange'}
-                </button>
-            </div>
-
-            <div className="grid md:grid-cols-2 divide-y md:divide-y-0 md:divide-x border-gray-100 dark:border-gray-700">
-                <div className="p-4 bg-red-50/30 dark:bg-red-900/10">
-                    <h3 className="font-bold text-red-600 dark:text-red-400 mb-4 flex justify-between">
-                        📤 Je donne ({proposal.toGive.length})
-                        <span className="text-sm bg-white dark:bg-gray-800 px-2 py-1 rounded shadow-sm">{totalGive.toFixed(2)} €</span>
-                    </h3>
-                    <div className="space-y-3">
-                        {proposal.toGive.map(card => (
-                            <MagicCard 
-                                key={card.id} {...card} isTradeView={true} allowPriceEdit={true}
-                                onEditPrice={(newPrice) => setCustomPrice(card.id, newPrice)}
-                            />
-                        ))}
-                    </div>
-                </div>
-
-                <div className="p-4 bg-green-50/30 dark:bg-green-900/10">
-                    <h3 className="font-bold text-green-600 dark:text-green-400 mb-4 flex justify-between">
-                        📥 Je reçois ({proposal.toReceive.length})
-                        <span className="text-sm bg-white dark:bg-gray-800 px-2 py-1 rounded shadow-sm">{totalReceive.toFixed(2)} €</span>
-                    </h3>
-                    <div className="space-y-3">
-                         {proposal.toReceive.map(card => (
-                            <MagicCard key={card.id} {...card} isTradeView={true} allowPriceEdit={false} />
-                        ))}
-                    </div>
-                </div>
-            </div>
-
-            <div className="p-4 border-t border-gray-100 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 flex justify-between items-center">
-                <span className="text-sm text-gray-500">Balance :</span>
-                <div className={`font-bold ${delta > 0 ? 'text-green-600' : 'text-red-600'}`}>
-                    {Math.abs(delta) < 1 ? "Équitable" : delta > 0 ? `+${delta.toFixed(2)}€ pour toi` : `${delta.toFixed(2)}€`}
-                </div>
-            </div>
-        </div>
-    );
-};
-
-export default function TradesPage() {
-  const { user } = useAuth();
-  const { proposals, loading, status, runScan } = useTradeMatcher();
-
-  if (!user) return <div className="p-10 text-center">Connectez-vous.</div>;
-
-  return (
-    <main className="container mx-auto p-4 max-w-5xl min-h-[80vh]">
-        <div className="flex flex-col md:flex-row justify-between items-center mb-8 gap-4">
-            <div>
-                <h1 className="text-3xl font-bold text-purple-600 dark:text-purple-400">🤝 Échanges</h1>
-                <p className="text-gray-500 text-sm">Automatique ou Manuel</p>
-            </div>
-            
-            <div className="flex gap-2">
-                {/* --- LIEN VERS LE MODE MANUEL --- */}
-                <Link href="/trades/manual" className="bg-gray-100 hover:bg-gray-200 text-gray-800 px-4 py-3 rounded-xl font-bold transition border border-gray-300">
-                    🖐️ Mode Manuel
-                </Link>
-
-                <button 
-                    onClick={runScan}
-                    disabled={loading}
-                    className="bg-purple-600 hover:bg-purple-700 text-white px-6 py-3 rounded-xl font-bold shadow-lg transition disabled:opacity-50"
-                >
-                    {loading ? <span className="animate-pulse">{status}</span> : "🚀 Scanner Amis"}
-                </button>
-            </div>
-        </div>
-
-        {proposals.length === 0 && !loading && (
-            <div className="text-center py-20 text-gray-400 border-2 border-dashed border-gray-200 dark:border-gray-700 rounded-xl">
-                Cliquez sur &quot;Scanner&quot; pour les amis, ou utilisez le <Link href="/trades/manual" className="text-blue-500 underline">Mode Manuel</Link>.
-            </div>
-        )}
-
-        <div className="space-y-8">
-            {proposals.map(proposal => (
-                <TradeRow 
-                    key={proposal.friend.uid} 
-                    proposal={proposal} 
-                    onTradeSuccess={runScan} // On relance le scan après succès pour mettre à jour la liste
-                />
-            ))}
-        </div>
-    </main>
-  );
-}
-</file>
-
 <file path="components/MagicCard.tsx">
 // components/MagicCard.tsx
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react'; // <--- useEffect ajouté
 
 type MagicCardProps = {
   id?: string;
@@ -2127,7 +2379,6 @@ type MagicCardProps = {
   customPrice?: number; 
   setName?: string;
   
-  // NOUVELLES PROPS
   isFoil?: boolean;
   isSpecificVersion?: boolean;
   
@@ -2136,7 +2387,6 @@ type MagicCardProps = {
   onDecrement?: () => void;
   onMove?: () => void;
   
-  // Fonctions d'édition passées par le parent (Optimisation)
   onEditPrice?: (newPrice: number) => void;
   onToggleAttribute?: (field: 'isFoil' | 'isSpecificVersion', currentValue: boolean) => void;
   
@@ -2152,7 +2402,7 @@ export default function MagicCard(props: MagicCardProps) {
   const { 
       id, name, imageUrl, imageBackUrl, quantity = 1, 
       price, customPrice, setName, 
-      isFoil, isSpecificVersion, // Récupération
+      isFoil, isSpecificVersion, 
       isTradeView, allowPriceEdit, 
       onEditPrice, onToggleAttribute, 
       readOnly, isWishlist,
@@ -2161,7 +2411,19 @@ export default function MagicCard(props: MagicCardProps) {
   
   const [isFlipped, setIsFlipped] = useState(false);
   const [isEditingPrice, setIsEditingPrice] = useState(false);
+  
+  // Initialisation
   const [tempPrice, setTempPrice] = useState(customPrice?.toString() || price?.toString() || "0");
+
+  // --- CORRECTION : Synchronisation ---
+  // Si le parent met à jour customPrice, on met à jour l'input local
+ useEffect(() => {
+    if (!isEditingPrice) {
+        const newVal = customPrice?.toString() || price?.toString() || "0";
+        // eslint-disable-next-line react-hooks/set-state-in-effect
+        setTempPrice(newVal);
+    }
+  }, [customPrice, price, isEditingPrice]);
 
   const effectivePrice = customPrice !== undefined ? customPrice : (price || 0);
 
@@ -2180,7 +2442,6 @@ export default function MagicCard(props: MagicCardProps) {
         <div className="flex items-center gap-3 bg-white dark:bg-gray-800 p-2 rounded-lg border border-gray-100 dark:border-gray-700">
             <div className="w-10 h-14 bg-gray-200 rounded overflow-hidden flex-shrink-0 relative group cursor-pointer" onClick={() => setIsFlipped(!isFlipped)}>
                  <img src={currentImage} className="w-full h-full object-cover" alt={name} />
-                 {/* Badges Miniatures */}
                  {isFoil && <div className="absolute top-0 right-0 bg-purple-600/80 text-white text-[8px] px-1 font-bold">✨</div>}
             </div>
             
@@ -2220,9 +2481,8 @@ export default function MagicCard(props: MagicCardProps) {
   return (
     <div className={`relative group flex flex-col bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden p-3 gap-3 border transition-colors h-full ${isFoil ? 'border-purple-300 dark:border-purple-800 shadow-purple-100 dark:shadow-none' : 'border-gray-100 dark:border-gray-700 hover:border-blue-300 dark:hover:border-blue-500'}`}>
       
-      {/* --- BADGES ET TOGGLES (Sur l'image) --- */}
+      {/* --- BADGES ET TOGGLES --- */}
       <div className="absolute top-14 left-4 z-10 flex flex-col gap-1">
-        {/* Toggle Foil */}
         {isWishlist && !readOnly && onToggleAttribute && (
             <button 
                 onClick={() => onToggleAttribute('isFoil', !!isFoil)}
@@ -2232,7 +2492,6 @@ export default function MagicCard(props: MagicCardProps) {
                 ✨
             </button>
         )}
-        {/* Toggle Specific */}
         {isWishlist && !readOnly && onToggleAttribute && (
             <button 
                 onClick={() => onToggleAttribute('isSpecificVersion', !!isSpecificVersion)}
@@ -2244,7 +2503,7 @@ export default function MagicCard(props: MagicCardProps) {
         )}
       </div>
 
-      {/* --- BOUTONS D'ACTION (Top) --- */}
+      {/* --- BOUTONS D'ACTION --- */}
       {!readOnly && (
         <div className="absolute top-2 left-2 right-2 flex justify-between z-20 pointer-events-none">
             {isWishlist && onMove && (
@@ -2284,7 +2543,6 @@ export default function MagicCard(props: MagicCardProps) {
         
         <div className="flex items-center gap-2 mb-2">
             <p className="text-xs text-blue-600 dark:text-blue-400 truncate font-medium max-w-[70%]">{setName}</p>
-            {/* Indicateurs passifs si ReadOnly */}
             {readOnly && isFoil && <span className="text-[10px] bg-purple-100 text-purple-700 px-1 rounded border border-purple-200">Foil</span>}
             {readOnly && isSpecificVersion && <span className="text-[10px] bg-gray-100 text-gray-700 px-1 rounded border border-gray-200">Exact</span>}
         </div>
@@ -2306,6 +2564,270 @@ export default function MagicCard(props: MagicCardProps) {
         </div>
       </div>
     </div>
+  );
+}
+</file>
+
+<file path="app/trades/page.tsx">
+// app/trades/page.tsx
+'use client';
+
+import { useState } from 'react';
+import { useAuth } from '@/lib/AuthContext';
+import { useTradeMatcher, TradeProposal } from '@/hooks/useTradeMatcher';
+import { useTradeSystem, TradeRequest } from '@/hooks/useTradeSystem';
+import Link from 'next/link';
+import { useCardCollection, CardType } from '@/hooks/useCardCollection'; 
+import MagicCard from '@/components/MagicCard'; 
+
+// --- COMPOSANT : CARTE DE DEMANDE REÇUE (INBOX) ---
+const IncomingRequestCard = ({ trade }: { trade: TradeRequest }) => {
+    const { acceptTrade, rejectTrade, isProcessing } = useTradeSystem();
+    const [isOpen, setIsOpen] = useState(false);
+
+    // FIX 1 : Typage explicite ajouté pour éviter l'erreur 'any'
+    const valReceive = trade.itemsGiven.reduce((acc: number, c: CardType) => acc + (c.price || 0), 0); 
+    const valGive = trade.itemsReceived.reduce((acc: number, c: CardType) => acc + (c.price || 0), 0);
+
+    return (
+        <div className="bg-white dark:bg-gray-800 rounded-xl border-l-4 border-blue-500 shadow-sm p-4 mb-4">
+            <div className="flex justify-between items-center">
+                <div>
+                    <h3 className="font-bold text-gray-900 dark:text-white">Proposition de {trade.senderName}</h3>
+                    <p className="text-sm text-gray-500">
+                        Tu reçois <span className="text-green-600 font-bold">{trade.itemsGiven.length} cartes</span> (~{valReceive.toFixed(0)}€) 
+                        contre <span className="text-red-600 font-bold">{trade.itemsReceived.length} cartes</span> (~{valGive.toFixed(0)}€)
+                    </p>
+                </div>
+                <div className="flex gap-2">
+                    <button onClick={() => setIsOpen(!isOpen)} className="text-sm text-gray-500 underline mr-2">
+                        {isOpen ? 'Masquer' : 'Détails'}
+                    </button>
+                    <button 
+                        onClick={() => rejectTrade(trade.id)}
+                        disabled={isProcessing}
+                        className="px-3 py-1.5 bg-gray-200 hover:bg-red-100 text-red-700 rounded-lg text-sm font-medium transition"
+                    >
+                        Refuser
+                    </button>
+                    <button 
+                        onClick={() => acceptTrade(trade)}
+                        disabled={isProcessing}
+                        className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition shadow-sm"
+                    >
+                        {isProcessing ? '...' : 'Accepter & Échanger'}
+                    </button>
+                </div>
+            </div>
+
+            {/* DÉTAILS DÉPLIABLES */}
+            {isOpen && (
+                <div className="mt-4 pt-4 border-t border-gray-100 dark:border-gray-700 grid md:grid-cols-2 gap-4">
+                    <div className="bg-green-50/50 p-3 rounded">
+                        <p className="text-xs font-bold text-green-700 mb-2">⬇️ Tu vas recevoir :</p>
+                        <div className="flex flex-wrap gap-2">
+                            {/* FIX 2 : Typage explicite dans le map */}
+                            {trade.itemsGiven.map((c: CardType) => (
+                                <div key={c.id} className="relative group w-12 h-16 bg-gray-200 rounded overflow-hidden">
+                                     <img src={c.imageUrl} className="w-full h-full object-cover" alt="" title={c.name} />
+                                     <div className="absolute bottom-0 right-0 bg-black/50 text-white text-[8px] px-1">{c.quantity}x</div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                    <div className="bg-red-50/50 p-3 rounded">
+                        <p className="text-xs font-bold text-red-700 mb-2">⬆️ Tu vas donner :</p>
+                         <div className="flex flex-wrap gap-2">
+                            {/* FIX 3 : Typage explicite dans le map */}
+                            {trade.itemsReceived.map((c: CardType) => (
+                                <div key={c.id} className="relative group w-12 h-16 bg-gray-200 rounded overflow-hidden">
+                                     <img src={c.imageUrl} className="w-full h-full object-cover" alt="" title={c.name} />
+                                     <div className="absolute bottom-0 right-0 bg-black/50 text-white text-[8px] px-1">{c.quantity}x</div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+};
+
+// --- COMPOSANT : LIGNE DE SCANNER (PROPOSITION) ---
+const TradeRowProposal = ({ proposal, onProposalSent }: { proposal: TradeProposal, onProposalSent: () => void }) => {
+    const { setCustomPrice } = useCardCollection('collection');
+    const { proposeTrade } = useTradeSystem(); 
+
+    const totalGive = proposal.toGive.reduce((acc, c) => acc + (c.customPrice ?? c.price ?? 0), 0);
+    const totalReceive = proposal.toReceive.reduce((acc, c) => acc + (c.customPrice ?? c.price ?? 0), 0);
+    const delta = totalGive - totalReceive;
+
+    const handlePropose = async () => {
+        const success = await proposeTrade(
+            proposal.friend.uid,
+            proposal.friend.displayName,
+            proposal.toGive,
+            proposal.toReceive 
+        );
+        if (success) {
+            onProposalSent();
+        }
+    };
+
+    return (
+        <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden mb-8">
+            <div className="bg-gray-50 dark:bg-gray-900/50 p-4 border-b border-gray-100 dark:border-gray-700 flex flex-col sm:flex-row justify-between items-center gap-4">
+                <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-white font-bold overflow-hidden">
+                        {proposal.friend.photoURL ? <img src={proposal.friend.photoURL} alt="" className="w-full h-full object-cover"/> : proposal.friend.username[0].toUpperCase()}
+                    </div>
+                    <div>
+                        <h2 className="text-xl font-bold text-gray-900 dark:text-white">Potentiel avec {proposal.friend.displayName}</h2>
+                        <Link href={`/user/${proposal.friend.uid}`} className="text-sm text-blue-600 hover:underline">Voir profil</Link>
+                    </div>
+                </div>
+
+                <button
+                    onClick={handlePropose}
+                    className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg font-bold shadow-sm transition text-sm flex items-center gap-2"
+                >
+                    {/* FIX 4 : Apostrophe échappée */}
+                    📤 Proposer l&apos;échange
+                </button>
+            </div>
+
+            <div className="grid md:grid-cols-2 divide-y md:divide-y-0 md:divide-x border-gray-100 dark:border-gray-700">
+                <div className="p-4 bg-red-50/30 dark:bg-red-900/10">
+                    <h3 className="font-bold text-red-600 dark:text-red-400 mb-4 flex justify-between">
+                        Tu donnerais ({proposal.toGive.length})
+                        <span className="text-sm bg-white dark:bg-gray-800 px-2 py-1 rounded shadow-sm">{totalGive.toFixed(2)} €</span>
+                    </h3>
+                    <div className="space-y-3">
+                        {proposal.toGive.map(card => (
+                            <MagicCard 
+                                key={card.id} {...card} isTradeView={true} allowPriceEdit={true}
+                                onEditPrice={(newPrice) => setCustomPrice(card.id, newPrice)}
+                            />
+                        ))}
+                    </div>
+                </div>
+
+                <div className="p-4 bg-green-50/30 dark:bg-green-900/10">
+                    <h3 className="font-bold text-green-600 dark:text-green-400 mb-4 flex justify-between">
+                        Tu recevrais ({proposal.toReceive.length})
+                        <span className="text-sm bg-white dark:bg-gray-800 px-2 py-1 rounded shadow-sm">{totalReceive.toFixed(2)} €</span>
+                    </h3>
+                    <div className="space-y-3">
+                         {proposal.toReceive.map(card => (
+                            <MagicCard key={card.id} {...card} isTradeView={true} allowPriceEdit={false} />
+                        ))}
+                    </div>
+                </div>
+            </div>
+            
+            <div className="p-2 text-center text-xs text-gray-400 border-t border-gray-100 dark:border-gray-700">
+                Balance : {delta.toFixed(2)} €
+            </div>
+        </div>
+    );
+};
+
+export default function TradesPage() {
+  const { user } = useAuth();
+  const { proposals, loading, status, runScan } = useTradeMatcher();
+  const { incomingTrades, outgoingTrades, cancelTrade } = useTradeSystem(); 
+  const [activeTab, setActiveTab] = useState<'scan' | 'requests'>('scan');
+
+  if (!user) return <div className="p-10 text-center">Connectez-vous.</div>;
+
+  return (
+    <main className="container mx-auto p-4 max-w-5xl min-h-[80vh]">
+        
+        {/* HEADER & TABS */}
+        <div className="flex flex-col md:flex-row justify-between items-end mb-6 gap-4 border-b border-gray-200 dark:border-gray-700 pb-4">
+            <div>
+                {/* FIX 5 : Apostrophe échappée */}
+                <h1 className="text-3xl font-bold text-purple-600 dark:text-purple-400">🤝 Centre d&apos;Échanges</h1>
+            </div>
+            <div className="flex gap-4">
+                <button 
+                    onClick={() => setActiveTab('scan')}
+                    className={`pb-2 px-2 font-bold transition ${activeTab === 'scan' ? 'text-purple-600 border-b-2 border-purple-600' : 'text-gray-500 hover:text-gray-700'}`}
+                >
+                    🔍 Scanner ({proposals.length})
+                </button>
+                <button 
+                    onClick={() => setActiveTab('requests')}
+                    className={`pb-2 px-2 font-bold transition relative ${activeTab === 'requests' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-500 hover:text-gray-700'}`}
+                >
+                    📬 Demandes 
+                    {incomingTrades.length > 0 && <span className="ml-2 bg-red-500 text-white text-[10px] px-1.5 rounded-full align-top">{incomingTrades.length}</span>}
+                </button>
+            </div>
+        </div>
+
+        {/* --- CONTENU TAB 1 : SCANNER --- */}
+        {activeTab === 'scan' && (
+            <div className="animate-in fade-in">
+                <div className="flex justify-end mb-4 gap-2">
+                     <Link href="/trades/manual" className="bg-gray-100 hover:bg-gray-200 text-gray-800 px-4 py-2 rounded-lg font-bold transition text-sm flex items-center">
+                        🖐️ Mode Manuel
+                    </Link>
+                    <button onClick={runScan} disabled={loading} className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg font-bold shadow transition text-sm disabled:opacity-50">
+                        {loading ? status : "🚀 Lancer le Scanner"}
+                    </button>
+                </div>
+
+                {proposals.length === 0 && !loading && (
+                    <div className="text-center py-20 text-gray-400 border-2 border-dashed border-gray-200 dark:border-gray-700 rounded-xl">
+                        {/* FIX 6 : Guillemets échappés */}
+                        Lancez le scanner pour trouver des &quot;matchs&quot; avec vos amis.
+                    </div>
+                )}
+
+                <div className="space-y-8">
+                    {proposals.map(proposal => (
+                        <TradeRowProposal key={proposal.friend.uid} proposal={proposal} onProposalSent={runScan} />
+                    ))}
+                </div>
+            </div>
+        )}
+
+        {/* --- CONTENU TAB 2 : DEMANDES (INBOX) --- */}
+        {activeTab === 'requests' && (
+            <div className="animate-in fade-in space-y-8">
+                
+                {/* 1. REÇUES */}
+                <div>
+                    <h2 className="font-bold text-gray-500 uppercase text-xs mb-4">À traiter ({incomingTrades.length})</h2>
+                    {incomingTrades.length === 0 && <p className="text-gray-400 italic text-sm">Aucune demande en attente.</p>}
+                    
+                    {/* FIX 7 : Typage explicite du trade */}
+                    {incomingTrades.map((trade: TradeRequest) => (
+                        <IncomingRequestCard key={trade.id} trade={trade} />
+                    ))}
+                </div>
+
+                {/* 2. ENVOYÉES */}
+                <div>
+                    <h2 className="font-bold text-gray-500 uppercase text-xs mb-4 pt-4 border-t dark:border-gray-700">En attente de réponse ({outgoingTrades.length})</h2>
+                    {outgoingTrades.length === 0 && <p className="text-gray-400 italic text-sm">Aucune proposition en cours.</p>}
+                    
+                    {/* FIX 8 : Typage explicite du trade */}
+                    {outgoingTrades.map((trade: TradeRequest) => (
+                         <div key={trade.id} className="flex justify-between items-center p-3 bg-gray-50 dark:bg-gray-800/50 rounded-lg border border-gray-100 dark:border-gray-700 mb-2">
+                            <span className="text-sm text-gray-600 dark:text-gray-300">
+                                Envoyée à <span className="font-bold">{trade.receiverName}</span> (le {new Date(trade.createdAt?.seconds * 1000).toLocaleDateString()})
+                            </span>
+                            <button onClick={() => cancelTrade(trade.id)} className="text-xs text-red-500 hover:underline">Annuler</button>
+                        </div>
+                    ))}
+                </div>
+
+            </div>
+        )}
+
+    </main>
   );
 }
 </file>

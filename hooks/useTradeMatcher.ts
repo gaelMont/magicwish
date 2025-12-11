@@ -2,8 +2,8 @@
 import { useState } from 'react';
 import { useAuth } from '@/lib/AuthContext';
 import { db } from '@/lib/firebase';
-import { collection, getDocs, doc, updateDoc } from 'firebase/firestore';
-import { useWishlists } from './useWishlists';
+import { collection, getDocs, doc, writeBatch } from 'firebase/firestore'; 
+import { useWishlists, WishlistMeta } from './useWishlists'; // <--- 1. Import WishlistMeta
 import { useFriends, FriendProfile } from './useFriends';
 import { CardType } from './useCardCollection';
 
@@ -23,7 +23,8 @@ export function useTradeMatcher() {
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("");
 
-  const fetchAllCards = async (uid: string, mode: 'collection' | 'wishlist', userLists: any[] = []) => {
+  // 2. Correction ici : Remplacement de any[] par WishlistMeta[]
+  const fetchAllCards = async (uid: string, mode: 'collection' | 'wishlist', userLists: WishlistMeta[] = []) => {
     const cardsMap = new Map<string, CardType>();
 
     if (mode === 'collection') {
@@ -51,22 +52,53 @@ export function useTradeMatcher() {
   };
 
   const refreshPrices = async (cardsToUpdate: CardType[], uid: string, collectionName: string) => {
-     for (const card of cardsToUpdate) {
+     if (cardsToUpdate.length === 0) return;
+
+     const chunks = [];
+     for (let i = 0; i < cardsToUpdate.length; i += 75) {
+         chunks.push(cardsToUpdate.slice(i, i + 75));
+     }
+
+     const batch = writeBatch(db); 
+     let hasUpdates = false;
+
+     for (const chunk of chunks) {
          try {
-             const res = await fetch(`https://api.scryfall.com/cards/${card.id}`);
-             if (res.ok) {
-                 const scryfallData = await res.json();
-                 const newPrice = parseFloat(scryfallData.prices?.eur || "0");
-                 
-                 if (newPrice !== card.price) {
+             const identifiers = chunk.map(c => ({ id: c.id }));
+             
+             const res = await fetch('https://api.scryfall.com/cards/collection', {
+                 method: 'POST',
+                 headers: { 'Content-Type': 'application/json' },
+                 body: JSON.stringify({ identifiers })
+             });
+
+             if (!res.ok) continue;
+
+             const data = await res.json();
+             
+             // 3. Correction ici : On utilise le commentaire spécial pour autoriser any juste ici
+             // eslint-disable-next-line @typescript-eslint/no-explicit-any
+             const foundCards: any[] = data.data || [];
+
+             foundCards.forEach(scryCard => {
+                 const newPrice = parseFloat(scryCard.prices?.eur || "0");
+                 const localCard = chunk.find(c => c.id === scryCard.id);
+
+                 if (localCard && localCard.price !== newPrice) {
+                     localCard.price = newPrice; 
+                     
                      if (collectionName === 'collection') {
-                        const ref = doc(db, 'users', uid, 'collection', card.id);
-                        updateDoc(ref, { price: newPrice });
+                         const ref = doc(db, 'users', uid, 'collection', localCard.id);
+                         batch.update(ref, { price: newPrice });
+                         hasUpdates = true;
                      }
-                     card.price = newPrice;
                  }
-             }
-         } catch (e) { console.error("Err price fetch", e); }
+             });
+         } catch (e) { console.error("Err price fetch batch", e); }
+     }
+
+     if (hasUpdates) {
+         await batch.commit();
      }
   };
 
@@ -76,31 +108,25 @@ export function useTradeMatcher() {
     setStatus("Chargement de vos données...");
 
     try {
-        // 1. CHARGER MES DONNÉES
         const myCollectionMap = await fetchAllCards(user.uid, 'collection');
         const myWishlistMap = await fetchAllCards(user.uid, 'wishlist', lists);
 
-        // --- PRÉPARATION DE MA WISHLIST (HYBRIDE) ---
-        const myWishlistNames = new Set<string>(); // Pour les cartes "N'importe quelle version"
-        const myWishlistIds = new Set<string>();   // Pour les cartes "Version Exacte"
+        const myWishlistNames = new Set<string>();
+        const myWishlistIds = new Set<string>();
 
         myWishlistMap.forEach(card => {
             if (card.isSpecificVersion) {
-                myWishlistIds.add(card.id); // ID Scryfall exact
+                myWishlistIds.add(card.id);
             } else {
-                myWishlistNames.add(card.name); // Nom uniquement
+                myWishlistNames.add(card.name);
             }
         });
 
-        // --- PRÉPARATION DE MA COLLECTION (POUR CE QUE JE DONNE) ---
-        // Ici, c'est plus simple : on propose ce qu'on a. C'est l'autre qui décide si ça lui va.
-        // Donc on garde Map et Noms pour matcher les désirs de l'autre.
         const myCollectionNames = new Set<string>();
         myCollectionMap.forEach(card => myCollectionNames.add(card.name));
 
         const newProposals: TradeProposal[] = [];
 
-        // 2. BOUCLE SUR AMIS
         let i = 0;
         for (const friend of friends) {
             i++;
@@ -112,20 +138,15 @@ export function useTradeMatcher() {
             const toReceive: CardType[] = [];
             const toGive: CardType[] = [];
 
-            // MATCH A : Ce qu'il a (sa Collection) que je veux (ma Wishlist)
             friendCollectionMap.forEach((card) => {
-                // 1. Est-ce que cette carte précise est dans ma liste stricte ?
                 if (myWishlistIds.has(card.id)) {
                     toReceive.push(card);
                 } 
-                // 2. Sinon, est-ce que son NOM est dans ma liste générique ?
                 else if (myWishlistNames.has(card.name)) {
                     toReceive.push(card);
                 }
             });
 
-            // MATCH B : Ce que j'ai (ma Collection) qu'il veut (sa Wishlist)
-            // On doit analyser SA wishlist pour savoir s'il est strict ou pas
             const friendWishlistNames = new Set<string>();
             const friendWishlistIds = new Set<string>();
 
@@ -135,7 +156,6 @@ export function useTradeMatcher() {
             });
 
             myCollectionMap.forEach((card) => {
-                // Même logique : est-ce que ma carte matche ses critères ?
                 if (friendWishlistIds.has(card.id)) {
                     toGive.push(card);
                 }

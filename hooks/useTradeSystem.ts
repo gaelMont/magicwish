@@ -3,7 +3,8 @@ import { useState, useEffect } from 'react';
 import { db } from '@/lib/firebase';
 import { 
   collection, addDoc, query, where, onSnapshot, 
-  doc, updateDoc, serverTimestamp, orderBy 
+  doc, updateDoc, serverTimestamp, orderBy, 
+  Timestamp
 } from 'firebase/firestore';
 import { useAuth } from '@/lib/AuthContext';
 import { CardType } from './useCardCollection';
@@ -18,25 +19,25 @@ export type TradeRequest = {
   senderName: string;
   receiverUid: string;
   receiverName: string;
-  itemsGiven: CardType[];    // Ce que le sender DONNE
-  itemsReceived: CardType[]; // Ce que le sender REÇOIT
+  itemsGiven: CardType[];
+  itemsReceived: CardType[];
   status: TradeStatus;
-  createdAt: any;
+  createdAt: Timestamp;
 };
 
 export function useTradeSystem() {
   const { user, username } = useAuth();
-  const { executeTrade, isProcessing: isTransacting } = useTradeTransaction();
+  // Renommage pour éviter conflit de nom
+  const { executeTrade, isProcessing: isTransactionProcessing } = useTradeTransaction();
   
   const [incomingTrades, setIncomingTrades] = useState<TradeRequest[]>([]);
   const [outgoingTrades, setOutgoingTrades] = useState<TradeRequest[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // 1. Écouter les échanges (Entrants et Sortants)
+  // 1. Écouter les échanges
   useEffect(() => {
     if (!user) return;
 
-    // A. Échanges que je reçois (Je dois accepter/refuser)
     const qIn = query(
       collection(db, 'trades'),
       where('receiverUid', '==', user.uid),
@@ -44,7 +45,6 @@ export function useTradeSystem() {
       orderBy('createdAt', 'desc')
     );
 
-    // B. Échanges que j'ai envoyés (Je peux annuler)
     const qOut = query(
       collection(db, 'trades'),
       where('senderUid', '==', user.uid),
@@ -64,7 +64,7 @@ export function useTradeSystem() {
     return () => { unsubIn(); unsubOut(); };
   }, [user]);
 
-  // 2. Créer une proposition (Action du Sender)
+  // 2. Proposer
   const proposeTrade = async (receiverUid: string, receiverName: string, toGive: CardType[], toReceive: CardType[]) => {
     if (!user) return;
     const toastId = toast.loading("Envoi de la proposition...");
@@ -89,31 +89,23 @@ export function useTradeSystem() {
     }
   };
 
-  // 3. Accepter l'échange (Action du Receiver) - C'est ici que la transaction se fait !
+  // 3. Accepter
   const acceptTrade = async (trade: TradeRequest) => {
     if (!user) return;
-
-    // ATTENTION A L'INVERSION : 
-    // Pour le Sender (créateur), itemsGiven c'est ce qu'il donne.
-    // Pour Moi (Receiver), itemsGiven c'est ce que je REÇOIS.
     
-    // executeTrade(MesCartesADonner, CartesQueJeRecois, ID_Partenaire)
-    // MesCartesADonner = trade.itemsReceived (celles que le sender voulait recevoir de moi)
-    // CartesQueJeRecois = trade.itemsGiven (celles que le sender me donne)
-    
+    // Inversion Sender/Receiver pour l'exécution
     const success = await executeTrade(
-        trade.itemsReceived, // Je donne ce qu'il a demandé
-        trade.itemsGiven,    // Je reçois ce qu'il a proposé
-        trade.senderUid      // Le partenaire est l'envoyeur
+        trade.itemsReceived, 
+        trade.itemsGiven,    
+        trade.senderUid      
     );
 
     if (success) {
-      // Si la transaction DB a réussi, on marque l'échange comme terminé
       await updateDoc(doc(db, 'trades', trade.id), { status: 'completed' });
     }
   };
 
-  // 4. Refuser ou Annuler
+  // 4. Refuser / Annuler
   const rejectTrade = async (tradeId: string) => {
     if(!confirm("Refuser cet échange ?")) return;
     await updateDoc(doc(db, 'trades', tradeId), { status: 'rejected' });
@@ -129,6 +121,6 @@ export function useTradeSystem() {
   return { 
     incomingTrades, outgoingTrades, loading, 
     proposeTrade, acceptTrade, rejectTrade, cancelTrade,
-    isProcessing: isTransacting 
+    isProcessing: isTransactionProcessing 
   };
 }
