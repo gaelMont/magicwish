@@ -7,7 +7,7 @@ import { useAuth } from '@/lib/AuthContext';
 import { usePathname } from 'next/navigation';
 
 export default function Header() {
-  const { user, logOut } = useAuth();
+  const { user, logOut, friendRequestCount } = useAuth();
   const pathname = usePathname();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
 
@@ -36,12 +36,23 @@ export default function Header() {
             {user ? (
               <>
                 {/* NAVIGATION DESKTOP (Cachée sur mobile) */}
-                <nav className="hidden md:flex gap-6 mr-4">
+                <nav className="hidden md:flex gap-6 mr-4 items-center">
                   <Link href="/" className={linkClass('/')}>Recherche</Link>
                   <Link href="/wishlist" className={linkClass('/wishlist')}>Ma Wishlist</Link>
                   <Link href="/collection" className={linkClass('/collection')}>Ma Collection</Link>
-                  {/* AJOUT DU LIEN CONTACTS */}
-                  <Link href="/contacts" className={linkClass('/contacts')}>👥 Contacts</Link>
+                  
+                  {/* NOUVEAU LIEN ÉCHANGES */}
+                  <Link href="/trades" className={linkClass('/trades')}>🤝 Échanges</Link>
+
+                  {/* LIEN CONTACTS AVEC PASTILLE DE NOTIF */}
+                  <Link href="/contacts" className={`${linkClass('/contacts')} relative flex items-center gap-1`}>
+                    👥 Contacts
+                    {friendRequestCount > 0 && (
+                      <span className="absolute -top-2 -right-3 bg-red-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full animate-bounce">
+                        {friendRequestCount}
+                      </span>
+                    )}
+                  </Link>
                 </nav>
 
                 <div className="h-6 w-px bg-gray-300 dark:bg-gray-600 hidden md:block"></div>
@@ -107,10 +118,21 @@ export default function Header() {
                <Link href="/collection" className={linkClass('/collection')} onClick={() => setIsMenuOpen(false)}>
                  📚 Ma Collection
                </Link>
-               {/* AJOUT DU LIEN CONTACTS MOBILE */}
-               <Link href="/contacts" className={linkClass('/contacts')} onClick={() => setIsMenuOpen(false)}>
-                 👥 Mes Contacts
+               
+               {/* NOUVEAU LIEN MOBILE */}
+               <Link href="/trades" className={linkClass('/trades')} onClick={() => setIsMenuOpen(false)}>
+                 🤝 Centre d&apos;Échanges
                </Link>
+
+               <Link href="/contacts" className={`${linkClass('/contacts')} flex items-center justify-between`} onClick={() => setIsMenuOpen(false)}>
+                 <span>👥 Mes Contacts</span>
+                 {friendRequestCount > 0 && (
+                    <span className="bg-red-500 text-white text-xs font-bold px-2 py-0.5 rounded-full">
+                        {friendRequestCount}
+                    </span>
+                 )}
+               </Link>
+
                <button 
                  onClick={() => { logOut(); setIsMenuOpen(false); }}
                  className="text-left py-2 text-red-600 font-medium hover:bg-red-50 dark:hover:bg-red-900/10 rounded"
