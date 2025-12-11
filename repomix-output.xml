@@ -49,6 +49,7 @@ app/globals.css
 app/layout.tsx
 app/login/page.tsx
 app/page.tsx
+app/trades/manual/page.tsx
 app/trades/page.tsx
 app/user/[uid]/page.tsx
 app/wishlist/page.tsx
@@ -64,6 +65,7 @@ eslint.config.mjs
 hooks/useCardCollection.ts
 hooks/useFriends.ts
 hooks/useTradeMatcher.ts
+hooks/useTradeTransaction.ts
 hooks/useWishlists.ts
 lib/AuthContext.tsx
 lib/cardUtils.ts
@@ -201,140 +203,217 @@ export default function LoginPage() {
 }
 </file>
 
-<file path="app/trades/page.tsx">
-// app/trades/page.tsx
+<file path="app/trades/manual/page.tsx">
+// app/trades/manual/page.tsx
 'use client';
 
+import { useState } from 'react';
 import { useAuth } from '@/lib/AuthContext';
-import { useTradeMatcher, TradeProposal } from '@/hooks/useTradeMatcher';
-import Link from 'next/link';
-import { useCardCollection } from '@/hooks/useCardCollection'; 
-import MagicCard from '@/components/MagicCard'; 
+import { useCardCollection, CardType } from '@/hooks/useCardCollection';
+import { useTradeTransaction } from '@/hooks/useTradeTransaction';
+import MagicCard from '@/components/MagicCard';
+import toast from 'react-hot-toast';
 
-// Sous-composant pour afficher une ligne de proposition
-const TradeRow = ({ proposal }: { proposal: TradeProposal }) => {
-    // Calcul des totaux pour affichage
-    const totalGive = proposal.toGive.reduce((acc, c) => acc + (c.customPrice ?? c.price ?? 0), 0);
-    const totalReceive = proposal.toReceive.reduce((acc, c) => acc + (c.customPrice ?? c.price ?? 0), 0);
-    const delta = totalGive - totalReceive;
-
-    // IMPORTANT : On récupère setCustomPrice pour pouvoir éditer NOS cartes
-    const { setCustomPrice } = useCardCollection('collection');
-
-    return (
-        <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden mb-8 animate-in fade-in slide-in-from-bottom-4">
-            {/* Header : L'ami */}
-            <div className="bg-gray-50 dark:bg-gray-900/50 p-4 border-b border-gray-100 dark:border-gray-700 flex justify-between items-center">
-                <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-white font-bold overflow-hidden">
-                        {proposal.friend.photoURL ? <img src={proposal.friend.photoURL} alt="" className="w-full h-full object-cover"/> : proposal.friend.username[0].toUpperCase()}
-                    </div>
-                    <div>
-                        <h2 className="text-xl font-bold text-gray-900 dark:text-white">Échange avec {proposal.friend.displayName}</h2>
-                        <Link href={`/user/${proposal.friend.uid}`} className="text-sm text-blue-600 hover:underline">Voir son profil complet</Link>
-                    </div>
-                </div>
-            </div>
-
-            {/* Corps : Les 2 colonnes */}
-            <div className="grid md:grid-cols-2 divide-y md:divide-y-0 md:divide-x border-gray-100 dark:border-gray-700">
-                
-                {/* 1. CE QUE JE DONNE (Mes cartes) */}
-                <div className="p-4 bg-red-50/30 dark:bg-red-900/10">
-                    <h3 className="font-bold text-red-600 dark:text-red-400 mb-4 flex items-center justify-between">
-                        📤 Je donne ({proposal.toGive.length})
-                        <span className="text-sm bg-white dark:bg-gray-800 px-2 py-1 rounded shadow-sm">{totalGive.toFixed(2)} €</span>
-                    </h3>
-                    <div className="space-y-3">
-                        {proposal.toGive.length === 0 ? <p className="text-sm italic text-gray-400">Rien à donner...</p> : 
-                            proposal.toGive.map(card => (
-                                <MagicCard 
-                                    key={card.id} 
-                                    {...card} 
-                                    isTradeView={true} 
-                                    allowPriceEdit={true} // J'ai le droit d'éditer MES prix
-                                    // CONNEXION DU SETTER :
-                                    onEditPrice={(newPrice) => setCustomPrice(card.id, newPrice)}
-                                />
-                            ))
-                        }
-                    </div>
-                </div>
-
-                {/* 2. CE QUE JE REÇOIS (Ses cartes) */}
-                <div className="p-4 bg-green-50/30 dark:bg-green-900/10">
-                    <h3 className="font-bold text-green-600 dark:text-green-400 mb-4 flex items-center justify-between">
-                        📥 Je reçois ({proposal.toReceive.length})
-                        <span className="text-sm bg-white dark:bg-gray-800 px-2 py-1 rounded shadow-sm">{totalReceive.toFixed(2)} €</span>
-                    </h3>
-                    <div className="space-y-3">
-                         {proposal.toReceive.length === 0 ? <p className="text-sm italic text-gray-400">Rien à recevoir...</p> : 
-                            proposal.toReceive.map(card => (
-                                <MagicCard 
-                                    key={card.id} 
-                                    {...card} 
-                                    isTradeView={true} 
-                                    allowPriceEdit={false} // Je ne touche pas à SES prix
-                                />
-                            ))
-                        }
-                    </div>
-                </div>
-            </div>
-
-            {/* Footer : La Balance */}
-            <div className="p-4 border-t border-gray-100 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 flex justify-between items-center">
-                <span className="text-sm text-gray-500">Balance de l'échange :</span>
-                <div className={`text-xl font-bold px-4 py-2 rounded-lg ${
-                    Math.abs(delta) < 1 ? 'bg-gray-200 text-gray-700' : 
-                    delta > 0 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
-                }`}>
-                    {Math.abs(delta) < 1 
-                        ? "⚖️ Équitable" 
-                        : delta > 0 
-                            ? `Il te doit ${delta.toFixed(2)} €` 
-                            : `Tu dois ${Math.abs(delta).toFixed(2)} €`
-                    }
-                </div>
-            </div>
-        </div>
-    );
-};
-
-export default function TradesPage() {
+export default function ManualTradePage() {
   const { user } = useAuth();
-  const { proposals, loading, status, runScan } = useTradeMatcher();
+  const { cards: myCollection, loading } = useCardCollection('collection'); // Chargement de TOUTE ma collection
+  const { executeTrade, isProcessing } = useTradeTransaction();
+
+  // --- ÉTATS ---
+  const [toGive, setToGive] = useState<CardType[]>([]);
+  const [toReceive, setToReceive] = useState<CardType[]>([]);
+  
+  // Recherche Locale (Pour trouver mes cartes à donner)
+  const [localSearch, setLocalSearch] = useState('');
+  
+  // Recherche Scryfall (Pour trouver ce que je reçois)
+  const [remoteSearch, setRemoteSearch] = useState('');
+  const [searchResults, setSearchResults] = useState<any[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+
+  // --- LOGIQUE AJOUT / RETRAIT ---
+  
+  const handleAddToGive = (card: CardType) => {
+      // On vérifie si déjà ajouté
+      const existing = toGive.find(c => c.id === card.id);
+      if (existing) {
+          if (existing.quantity < card.quantity) { // Max ce que je possède
+              setToGive(prev => prev.map(c => c.id === card.id ? { ...c, quantity: c.quantity + 1 } : c));
+          } else {
+              toast.error("Max quantité atteinte");
+          }
+      } else {
+          setToGive(prev => [...prev, { ...card, quantity: 1 }]);
+      }
+  };
+
+  const handleSearchScryfall = async (e: React.FormEvent) => {
+      e.preventDefault();
+      if (!remoteSearch.trim()) return;
+      setIsSearching(true);
+      try {
+          const res = await fetch(`/api/search?q=${remoteSearch}`);
+          const data = await res.json();
+          setSearchResults(data.data || []);
+      } catch (e) { toast.error("Erreur recherche"); }
+      finally { setIsSearching(false); }
+  };
+
+  const handleAddToReceive = (scryfallCard: any) => {
+      // Conversion Scryfall -> CardType simplifié
+      const newCard: CardType = {
+          id: scryfallCard.id,
+          name: scryfallCard.name,
+          imageUrl: scryfallCard.image_uris?.normal || "",
+          quantity: 1,
+          price: parseFloat(scryfallCard.prices?.eur || "0"),
+          setName: scryfallCard.set_name,
+          isFoil: false
+      };
+      
+      const existing = toReceive.find(c => c.id === newCard.id);
+      if (existing) {
+          setToReceive(prev => prev.map(c => c.id === newCard.id ? { ...c, quantity: c.quantity + 1 } : c));
+      } else {
+          setToReceive(prev => [...prev, newCard]);
+      }
+      setSearchResults([]); // On vide les résultats après choix
+      setRemoteSearch("");
+  };
+
+  // --- VALIDATION ---
+  const handleValidate = async () => {
+      if (toGive.length === 0 && toReceive.length === 0) return;
+      if (!confirm("Confirmer cet échange ? Vos cartes données seront retirées de votre collection.")) return;
+
+      const success = await executeTrade(toGive, toReceive, null); // null = pas d'ami, juste moi
+      if (success) {
+          // Reset total
+          setToGive([]);
+          setToReceive([]);
+          setLocalSearch("");
+      }
+  };
+
+  // --- CALCULS ---
+  const valGive = toGive.reduce((acc, c) => acc + (c.price || 0) * c.quantity, 0);
+  const valReceive = toReceive.reduce((acc, c) => acc + (c.price || 0) * c.quantity, 0);
 
   if (!user) return <div className="p-10 text-center">Connectez-vous.</div>;
 
   return (
-    <main className="container mx-auto p-4 max-w-5xl min-h-[80vh]">
-        <div className="flex flex-col md:flex-row justify-between items-center mb-8 gap-4">
-            <div>
-                <h1 className="text-3xl font-bold text-purple-600 dark:text-purple-400">🤝 Proposition d'Échanges</h1>
-                <p className="text-gray-500 text-sm">Comparateur Réciproque : Wishlists vs Collections</p>
+    <div className="container mx-auto p-4 min-h-screen pb-20">
+        <h1 className="text-2xl font-bold mb-6 flex items-center gap-2">
+            🖐️ Échange Manuel / Externe
+        </h1>
+
+        <div className="grid lg:grid-cols-2 gap-8 h-[calc(100vh-200px)]">
+            
+            {/* --- COLONNE GAUCHE : JE DONNE (Ma Collection) --- */}
+            <div className="flex flex-col bg-red-50/50 dark:bg-red-900/10 rounded-xl border border-red-100 dark:border-red-900 p-4">
+                <h2 className="font-bold text-red-600 mb-2">📤 Je donne (De ma collection)</h2>
+                
+                {/* 1. Liste des cartes sélectionnées */}
+                <div className="flex-none mb-4 space-y-2 min-h-[100px] bg-white dark:bg-gray-800 p-2 rounded border border-gray-200 dark:border-gray-700 overflow-y-auto max-h-[30vh]">
+                    {toGive.length === 0 && <p className="text-xs text-gray-400 italic text-center py-4">Aucune carte sélectionnée</p>}
+                    {toGive.map(card => (
+                        <div key={card.id} className="flex justify-between items-center text-sm p-1 border-b">
+                            <span>{card.quantity}x {card.name}</span>
+                            <button onClick={() => setToGive(p => p.filter(c => c.id !== card.id))} className="text-red-500">✕</button>
+                        </div>
+                    ))}
+                </div>
+
+                {/* 2. Moteur de recherche local */}
+                <input 
+                    type="text" 
+                    placeholder="Chercher dans ma collection..." 
+                    className="w-full p-2 mb-2 rounded border dark:bg-gray-800"
+                    value={localSearch}
+                    onChange={e => setLocalSearch(e.target.value)}
+                />
+                
+                {/* 3. Résultats locaux */}
+                <div className="flex-grow overflow-y-auto custom-scrollbar space-y-2 pr-1">
+                    {loading ? <p>Chargement...</p> : 
+                        myCollection
+                            .filter(c => c.name.toLowerCase().includes(localSearch.toLowerCase()))
+                            .slice(0, 20) // Limite affichage
+                            .map(card => (
+                                <div key={card.id} onClick={() => handleAddToGive(card)} className="cursor-pointer hover:bg-red-100 p-2 rounded flex items-center gap-2 border border-transparent hover:border-red-200 transition">
+                                    <img src={card.imageUrl} className="w-8 h-11 rounded object-cover bg-gray-200" alt="" />
+                                    <div className="flex-grow min-w-0">
+                                        <p className="font-bold text-xs truncate">{card.name}</p>
+                                        <p className="text-[10px] text-gray-500">{card.setName} - En stock: {card.quantity}</p>
+                                    </div>
+                                    <span className="text-xs font-bold text-gray-400">+</span>
+                                </div>
+                            ))
+                    }
+                </div>
+            </div>
+
+            {/* --- COLONNE DROITE : JE REÇOIS (Recherche Scryfall) --- */}
+            <div className="flex flex-col bg-green-50/50 dark:bg-green-900/10 rounded-xl border border-green-100 dark:border-green-900 p-4">
+                <h2 className="font-bold text-green-600 mb-2">📥 Je reçois (Ajout libre)</h2>
+
+                {/* 1. Liste des cartes reçues */}
+                 <div className="flex-none mb-4 space-y-2 min-h-[100px] bg-white dark:bg-gray-800 p-2 rounded border border-gray-200 dark:border-gray-700 overflow-y-auto max-h-[30vh]">
+                    {toReceive.length === 0 && <p className="text-xs text-gray-400 italic text-center py-4">Aucune carte ajoutée</p>}
+                    {toReceive.map(card => (
+                        <div key={card.id} className="flex justify-between items-center text-sm p-1 border-b">
+                            <span>{card.quantity}x {card.name}</span>
+                            <button onClick={() => setToReceive(p => p.filter(c => c.id !== card.id))} className="text-red-500">✕</button>
+                        </div>
+                    ))}
+                </div>
+
+                {/* 2. Moteur Scryfall */}
+                <form onSubmit={handleSearchScryfall} className="flex gap-2 mb-2">
+                    <input 
+                        type="text" 
+                        placeholder="Rechercher carte à recevoir..." 
+                        className="flex-grow p-2 rounded border dark:bg-gray-800"
+                        value={remoteSearch}
+                        onChange={e => setRemoteSearch(e.target.value)}
+                    />
+                    <button type="submit" className="bg-green-600 text-white px-3 rounded">🔍</button>
+                </form>
+
+                {/* 3. Résultats Scryfall */}
+                 <div className="flex-grow overflow-y-auto custom-scrollbar space-y-2 pr-1">
+                    {isSearching && <p className="text-xs">Recherche...</p>}
+                    {searchResults.map(card => (
+                        <div key={card.id} onClick={() => handleAddToReceive(card)} className="cursor-pointer hover:bg-green-100 p-2 rounded flex items-center gap-2 border border-transparent hover:border-green-200 transition">
+                             <div className="w-8 h-11 bg-gray-200 rounded overflow-hidden">
+                                {card.image_uris?.small && <img src={card.image_uris.small} className="w-full h-full object-cover" alt="" />}
+                             </div>
+                             <div className="flex-grow min-w-0">
+                                <p className="font-bold text-xs truncate">{card.name}</p>
+                                <p className="text-[10px] text-gray-500">{card.set_name}</p>
+                             </div>
+                             <span className="text-xs font-bold text-gray-400">+</span>
+                        </div>
+                    ))}
+                </div>
+            </div>
+        </div>
+
+        {/* --- FOOTER DE VALIDATION --- */}
+        <div className="fixed bottom-0 left-0 right-0 p-4 bg-white dark:bg-gray-900 border-t dark:border-gray-800 flex justify-between items-center z-50 shadow-2xl">
+            <div className="flex gap-4 text-sm">
+                <div>Donne: <span className="font-bold">{valGive.toFixed(2)}€</span></div>
+                <div>Reçoit: <span className="font-bold">{valReceive.toFixed(2)}€</span></div>
             </div>
             <button 
-                onClick={runScan}
-                disabled={loading}
-                className="bg-purple-600 hover:bg-purple-700 text-white px-6 py-3 rounded-xl font-bold shadow-lg transition disabled:opacity-50"
+                onClick={handleValidate}
+                disabled={isProcessing || (toGive.length === 0 && toReceive.length === 0)}
+                className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-3 rounded-xl font-bold disabled:opacity-50 transition"
             >
-                {loading ? <span className="animate-pulse">{status}</span> : "🚀 Lancer le comparateur"}
+                {isProcessing ? 'Validation...' : '✅ Valider et Mettre à jour ma collection'}
             </button>
         </div>
-
-        {proposals.length === 0 && !loading && (
-            <div className="text-center py-20 text-gray-400 border-2 border-dashed border-gray-200 dark:border-gray-700 rounded-xl">
-                Cliquez sur &quot;Lancer&quot; pour trouver des opportunités d&apos;échange.
-            </div>
-        )}
-
-        <div className="space-y-8">
-            {proposals.map(proposal => (
-                <TradeRow key={proposal.friend.uid} proposal={proposal} />
-            ))}
-        </div>
-    </main>
+    </div>
   );
 }
 </file>
@@ -838,99 +917,6 @@ export default function GlobalWishlistView({ lists }: Props) {
 }
 </file>
 
-<file path="components/wishlist/SingleWishlistView.tsx">
-// components/wishlist/SingleWishlistView.tsx
-'use client';
-
-import { useAuth } from '@/lib/AuthContext';
-import { useCardCollection, CardType } from '@/hooks/useCardCollection';
-import MagicCard from '@/components/MagicCard';
-import { db } from '@/lib/firebase';
-import { doc, runTransaction, increment } from 'firebase/firestore';
-import toast from 'react-hot-toast';
-
-type Props = {
-    listId: string;
-    listName: string;
-};
-
-export default function SingleWishlistView({ listId, listName }: Props) {
-    // On récupère toggleAttribute ici
-    const { cards, loading, updateQuantity, removeCard, toggleAttribute, totalPrice } = useCardCollection('wishlist', listId);
-    const { user } = useAuth();
-    
-    const moveToCollection = async (card: CardType) => {
-        if (!user) return;
-        const toastId = toast.loading("Déplacement...");
-        try {
-            const sourcePath = listId === 'default' ? 'wishlist' : `wishlists_data/${listId}/cards`;
-            const wishlistRef = doc(db, 'users', user.uid, sourcePath, card.id);
-            const collectionRef = doc(db, 'users', user.uid, 'collection', card.id);
-
-            await runTransaction(db, async (transaction) => {
-                const colDoc = await transaction.get(collectionRef);
-                // On garde les propriétés Foil/Version lors du déplacement si la carte n'existe pas encore
-                // Sinon on incrémente juste.
-                if (colDoc.exists()) {
-                    transaction.update(collectionRef, { quantity: increment(card.quantity) });
-                } else {
-                    transaction.set(collectionRef, { 
-                        ...card, 
-                        wishlistId: null, 
-                        addedAt: new Date(),
-                        isFoil: card.isFoil || false // On garde l'info
-                    });
-                }
-                transaction.delete(wishlistRef);
-            });
-            toast.success("Ajoutée à la collection !", { id: toastId });
-        } catch (error) {
-            console.error(error);
-            toast.error("Erreur", { id: toastId });
-        }
-    };
-
-    if (loading) return <div className="p-10 text-center text-gray-500">Chargement des cartes...</div>;
-
-    return (
-        <div className="animate-in fade-in duration-300">
-            <div className="flex justify-between items-end mb-6 border-b pb-4 dark:border-gray-700">
-                <h2 className="text-2xl font-bold text-gray-800 dark:text-white">{listName}</h2>
-                <div className="text-right">
-                    <span className="text-xs text-gray-500 uppercase font-semibold">Total estimé</span>
-                    <p className="text-2xl font-bold text-green-600 dark:text-green-400">{totalPrice.toFixed(2)} €</p>
-                </div>
-            </div>
-
-            {cards.length === 0 ? (
-                <div className="text-center py-12 bg-gray-50 dark:bg-gray-800/50 rounded-xl border border-dashed border-gray-200 dark:border-gray-700">
-                    <p className="text-gray-500 italic">Cette liste est vide.</p>
-                </div>
-            ) : (
-                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-                    {cards.map(card => (
-                        <MagicCard 
-                            key={card.id} 
-                            {...card} 
-                            isWishlist={true}
-                            onIncrement={() => updateQuantity(card.id, 1, card.quantity)}
-                            onDecrement={() => {
-                                if(card.quantity === 1) { if(confirm("Supprimer ?")) removeCard(card.id); } 
-                                else { updateQuantity(card.id, -1, card.quantity); }
-                            }}
-                            onDelete={() => { if(confirm("Supprimer ?")) removeCard(card.id); }}
-                            onMove={() => moveToCollection(card)}
-                            // NOUVEAU : On passe la fonction de toggle
-                            onToggleAttribute={(field, val) => toggleAttribute(card.id, field, val)}
-                        />
-                    ))}
-                </div>
-            )}
-        </div>
-    );
-}
-</file>
-
 <file path="eslint.config.mjs">
 import { defineConfig, globalIgnores } from "eslint/config";
 import nextVitals from "eslint-config-next/core-web-vitals";
@@ -952,180 +938,143 @@ const eslintConfig = defineConfig([
 export default eslintConfig;
 </file>
 
-<file path="hooks/useTradeMatcher.ts">
-// hooks/useTradeMatcher.ts
+<file path="hooks/useTradeTransaction.ts">
+// hooks/useTradeTransaction.ts
 import { useState } from 'react';
-import { useAuth } from '@/lib/AuthContext';
 import { db } from '@/lib/firebase';
-import { collection, getDocs, doc, updateDoc } from 'firebase/firestore';
-import { useWishlists } from './useWishlists';
-import { useFriends, FriendProfile } from './useFriends';
+import { doc, runTransaction, serverTimestamp, increment } from 'firebase/firestore';
+import { useAuth } from '@/lib/AuthContext';
 import { CardType } from './useCardCollection';
+import toast from 'react-hot-toast';
 
-export type TradeProposal = {
-  friend: FriendProfile;
-  toReceive: CardType[]; 
-  toGive: CardType[];    
-  balance: number;       
+type TradeSide = {
+    uid: string; // L'ID de l'utilisateur (Moi ou l'Ami)
+    losing: CardType[];
+    gaining: CardType[];
 };
 
-export function useTradeMatcher() {
+export function useTradeTransaction() {
   const { user } = useAuth();
-  const { lists } = useWishlists();
-  const { friends } = useFriends();
-  
-  const [proposals, setProposals] = useState<TradeProposal[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [status, setStatus] = useState("");
+  const [isProcessing, setIsProcessing] = useState(false);
 
-  const fetchAllCards = async (uid: string, mode: 'collection' | 'wishlist', userLists: any[] = []) => {
-    const cardsMap = new Map<string, CardType>();
-
-    if (mode === 'collection') {
-        const snap = await getDocs(collection(db, 'users', uid, 'collection'));
-        snap.forEach(d => cardsMap.set(d.id, { id: d.id, ...d.data() } as CardType));
-    } else {
-        const defSnap = await getDocs(collection(db, 'users', uid, 'wishlist'));
-        defSnap.forEach(d => cardsMap.set(d.id, { id: d.id, ...d.data() } as CardType));
-        
-        if (userLists.length > 0) {
-            for (const list of userLists) {
-                 if (list.id === 'default') continue;
-                 const snap = await getDocs(collection(db, 'users', uid, 'wishlists_data', list.id, 'cards'));
-                 snap.forEach(d => cardsMap.set(d.id, { id: d.id, ...d.data() } as CardType));
-            }
-        } else {
-            const metaSnap = await getDocs(collection(db, 'users', uid, 'wishlists_meta'));
-            for (const meta of metaSnap.docs) {
-                const snap = await getDocs(collection(db, 'users', uid, 'wishlists_data', meta.id, 'cards'));
-                snap.forEach(d => cardsMap.set(d.id, { id: d.id, ...d.data() } as CardType));
-            }
-        }
-    }
-    return cardsMap;
+  // Fonction utilitaire pour préparer les références
+  const getRef = (uid: string, collection: 'collection' | 'wishlist', cardId: string) => {
+      return doc(db, 'users', uid, collection, cardId);
   };
 
-  const refreshPrices = async (cardsToUpdate: CardType[], uid: string, collectionName: string) => {
-     for (const card of cardsToUpdate) {
-         try {
-             const res = await fetch(`https://api.scryfall.com/cards/${card.id}`);
-             if (res.ok) {
-                 const scryfallData = await res.json();
-                 const newPrice = parseFloat(scryfallData.prices?.eur || "0");
-                 
-                 if (newPrice !== card.price) {
-                     if (collectionName === 'collection') {
-                        const ref = doc(db, 'users', uid, 'collection', card.id);
-                        updateDoc(ref, { price: newPrice });
-                     }
-                     card.price = newPrice;
-                 }
-             }
-         } catch (e) { console.error("Err price fetch", e); }
-     }
-  };
-
-  const runScan = async () => {
-    if (!user || friends.length === 0) return;
-    setLoading(true);
-    setStatus("Chargement de vos données...");
+  /**
+   * Exécute l'échange.
+   * Si partnerUid est null, c'est un échange manuel (on update juste mon côté).
+   */
+  const executeTrade = async (
+      myCardsToGive: CardType[], 
+      cardsToReceive: CardType[], 
+      partnerUid: string | null = null
+  ) => {
+    if (!user) return;
+    setIsProcessing(true);
+    const toastId = toast.loading("Validation de l'échange...");
 
     try {
-        // 1. CHARGER MES DONNÉES
-        const myCollectionMap = await fetchAllCards(user.uid, 'collection');
-        const myWishlistMap = await fetchAllCards(user.uid, 'wishlist', lists);
+        await runTransaction(db, async (transaction) => {
+            // --- 1. GESTION DE MON CÔTÉ (Moi) ---
+            
+            // A. Je perds des cartes (Ma Collection)
+            for (const card of myCardsToGive) {
+                const docRef = getRef(user.uid, 'collection', card.id);
+                const docSnap = await transaction.get(docRef);
+                
+                if (!docSnap.exists()) throw new Error(`Erreur: Vous n'avez plus ${card.name}`);
+                const currentQty = docSnap.data().quantity || 0;
+                
+                if (currentQty <= card.quantity) {
+                    transaction.delete(docRef); // Plus d'exemplaire -> Suppression
+                } else {
+                    transaction.update(docRef, { quantity: increment(-card.quantity) });
+                }
+            }
 
-        // --- PRÉPARATION DE MA WISHLIST (HYBRIDE) ---
-        const myWishlistNames = new Set<string>(); // Pour les cartes "N'importe quelle version"
-        const myWishlistIds = new Set<string>();   // Pour les cartes "Version Exacte"
+            // B. Je gagne des cartes (Ma Collection + Nettoyage Ma Wishlist)
+            for (const card of cardsToReceive) {
+                const colRef = getRef(user.uid, 'collection', card.id);
+                const wishRef = getRef(user.uid, 'wishlist', card.id); // On check la wishlist par défaut
+                
+                // Ajout Collection
+                const colSnap = await transaction.get(colRef);
+                if (colSnap.exists()) {
+                    transaction.update(colRef, { quantity: increment(card.quantity) });
+                } else {
+                    // Création propre de la carte
+                    transaction.set(colRef, {
+                        name: card.name,
+                        imageUrl: card.imageUrl,
+                        imageBackUrl: card.imageBackUrl || null,
+                        setName: card.setName || '',
+                        price: card.price || 0,
+                        quantity: card.quantity,
+                        isFoil: card.isFoil || false,
+                        isSpecificVersion: card.isSpecificVersion || false,
+                        addedAt: serverTimestamp()
+                    });
+                }
 
-        myWishlistMap.forEach(card => {
-            if (card.isSpecificVersion) {
-                myWishlistIds.add(card.id); // ID Scryfall exact
-            } else {
-                myWishlistNames.add(card.name); // Nom uniquement
+                // Suppression Wishlist (Si je l'avais demandée)
+                const wishSnap = await transaction.get(wishRef);
+                if (wishSnap.exists()) {
+                    transaction.delete(wishRef);
+                }
+            }
+
+            // --- 2. GESTION DU PARTENAIRE (Si ce n'est pas un échange manuel) ---
+            if (partnerUid) {
+                // A. Il perd ce qu'il me donne (Sa Collection)
+                for (const card of cardsToReceive) {
+                    const docRef = getRef(partnerUid, 'collection', card.id);
+                    // Note: On ne lit pas le doc pour économiser, on utilise increment(-x). 
+                    // Risque mineur: si synchro décalée, il peut passer en négatif (rare).
+                    // Pour faire propre, on devrait lire, mais increment est atomique.
+                    transaction.update(docRef, { quantity: increment(-card.quantity) });
+                     // Idéalement : check si qty <= 0 pour delete, mais update est plus safe sans lecture
+                }
+
+                // B. Il gagne ce que je donne (Sa Collection + Nettoyage Sa Wishlist)
+                for (const card of myCardsToGive) {
+                     const colRef = getRef(partnerUid, 'collection', card.id);
+                     const wishRef = getRef(partnerUid, 'wishlist', card.id);
+
+                     const colSnap = await transaction.get(colRef);
+                     if (colSnap.exists()) {
+                         transaction.update(colRef, { quantity: increment(card.quantity) });
+                     } else {
+                         transaction.set(colRef, {
+                             ...card, // On copie les datas de ma carte
+                             quantity: card.quantity,
+                             addedAt: serverTimestamp(),
+                             wishlistId: null
+                         });
+                     }
+
+                     const wishSnap = await transaction.get(wishRef);
+                     if (wishSnap.exists()) {
+                         transaction.delete(wishRef);
+                     }
+                }
             }
         });
 
-        // --- PRÉPARATION DE MA COLLECTION (POUR CE QUE JE DONNE) ---
-        // Ici, c'est plus simple : on propose ce qu'on a. C'est l'autre qui décide si ça lui va.
-        // Donc on garde Map et Noms pour matcher les désirs de l'autre.
-        const myCollectionNames = new Set<string>();
-        myCollectionMap.forEach(card => myCollectionNames.add(card.name));
+        toast.success("Échange validé et collections mises à jour !", { id: toastId });
+        return true;
 
-        const newProposals: TradeProposal[] = [];
-
-        // 2. BOUCLE SUR AMIS
-        let i = 0;
-        for (const friend of friends) {
-            i++;
-            setStatus(`Analyse de ${friend.username} (${i}/${friends.length})...`);
-            
-            const friendCollectionMap = await fetchAllCards(friend.uid, 'collection');
-            const friendWishlistMap = await fetchAllCards(friend.uid, 'wishlist');
-
-            const toReceive: CardType[] = [];
-            const toGive: CardType[] = [];
-
-            // MATCH A : Ce qu'il a (sa Collection) que je veux (ma Wishlist)
-            friendCollectionMap.forEach((card) => {
-                // 1. Est-ce que cette carte précise est dans ma liste stricte ?
-                if (myWishlistIds.has(card.id)) {
-                    toReceive.push(card);
-                } 
-                // 2. Sinon, est-ce que son NOM est dans ma liste générique ?
-                else if (myWishlistNames.has(card.name)) {
-                    toReceive.push(card);
-                }
-            });
-
-            // MATCH B : Ce que j'ai (ma Collection) qu'il veut (sa Wishlist)
-            // On doit analyser SA wishlist pour savoir s'il est strict ou pas
-            const friendWishlistNames = new Set<string>();
-            const friendWishlistIds = new Set<string>();
-
-            friendWishlistMap.forEach(c => {
-                if (c.isSpecificVersion) friendWishlistIds.add(c.id);
-                else friendWishlistNames.add(c.name);
-            });
-
-            myCollectionMap.forEach((card) => {
-                // Même logique : est-ce que ma carte matche ses critères ?
-                if (friendWishlistIds.has(card.id)) {
-                    toGive.push(card);
-                }
-                else if (friendWishlistNames.has(card.name)) {
-                    toGive.push(card);
-                }
-            });
-
-            if (toReceive.length > 0 || toGive.length > 0) {
-                await refreshPrices(toReceive, friend.uid, 'collection');
-                await refreshPrices(toGive, user.uid, 'collection');
-
-                const valueReceive = toReceive.reduce((sum, c) => sum + (c.customPrice ?? c.price ?? 0), 0);
-                const valueGive = toGive.reduce((sum, c) => sum + (c.customPrice ?? c.price ?? 0), 0);
-
-                newProposals.push({
-                    friend,
-                    toReceive,
-                    toGive,
-                    balance: valueGive - valueReceive
-                });
-            }
-        }
-
-        setProposals(newProposals);
-
-    } catch (error) {
-        console.error("Erreur scan", error);
+    } catch (error: any) {
+        console.error(error);
+        toast.error(`Erreur: ${error.message}`, { id: toastId });
+        return false;
     } finally {
-        setLoading(false);
-        setStatus("");
+        setIsProcessing(false);
     }
   };
 
-  return { proposals, loading, status, runScan };
+  return { executeTrade, isProcessing };
 }
 </file>
 
@@ -1421,6 +1370,747 @@ export default function RootLayout({
 }
 </file>
 
+<file path="components/wishlist/SingleWishlistView.tsx">
+// components/wishlist/SingleWishlistView.tsx
+'use client';
+
+import { useAuth } from '@/lib/AuthContext';
+import { useCardCollection, CardType } from '@/hooks/useCardCollection';
+import MagicCard from '@/components/MagicCard';
+import { db } from '@/lib/firebase';
+import { doc, runTransaction, increment } from 'firebase/firestore';
+import toast from 'react-hot-toast';
+
+type Props = {
+    listId: string;
+    listName: string;
+};
+
+export default function SingleWishlistView({ listId, listName }: Props) {
+    // On récupère toggleAttribute ici
+    const { cards, loading, updateQuantity, removeCard, toggleAttribute, totalPrice } = useCardCollection('wishlist', listId);
+    const { user } = useAuth();
+    
+    const moveToCollection = async (card: CardType) => {
+        if (!user) return;
+        const toastId = toast.loading("Déplacement...");
+        try {
+            const sourcePath = listId === 'default' ? 'wishlist' : `wishlists_data/${listId}/cards`;
+            const wishlistRef = doc(db, 'users', user.uid, sourcePath, card.id);
+            const collectionRef = doc(db, 'users', user.uid, 'collection', card.id);
+
+            await runTransaction(db, async (transaction) => {
+                const colDoc = await transaction.get(collectionRef);
+                // On garde les propriétés Foil/Version lors du déplacement si la carte n'existe pas encore
+                // Sinon on incrémente juste.
+                if (colDoc.exists()) {
+                    transaction.update(collectionRef, { quantity: increment(card.quantity) });
+                } else {
+                    transaction.set(collectionRef, { 
+                        ...card, 
+                        wishlistId: null, 
+                        addedAt: new Date(),
+                        isFoil: card.isFoil || false // On garde l'info
+                    });
+                }
+                transaction.delete(wishlistRef);
+            });
+            toast.success("Ajoutée à la collection !", { id: toastId });
+        } catch (error) {
+            console.error(error);
+            toast.error("Erreur", { id: toastId });
+        }
+    };
+
+    if (loading) return <div className="p-10 text-center text-gray-500">Chargement des cartes...</div>;
+
+    return (
+        <div className="animate-in fade-in duration-300">
+            <div className="flex justify-between items-end mb-6 border-b pb-4 dark:border-gray-700">
+                <h2 className="text-2xl font-bold text-gray-800 dark:text-white">{listName}</h2>
+                <div className="text-right">
+                    <span className="text-xs text-gray-500 uppercase font-semibold">Total estimé</span>
+                    <p className="text-2xl font-bold text-green-600 dark:text-green-400">{totalPrice.toFixed(2)} €</p>
+                </div>
+            </div>
+
+            {cards.length === 0 ? (
+                <div className="text-center py-12 bg-gray-50 dark:bg-gray-800/50 rounded-xl border border-dashed border-gray-200 dark:border-gray-700">
+                    <p className="text-gray-500 italic">Cette liste est vide.</p>
+                </div>
+            ) : (
+                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                    {cards.map(card => (
+                        <MagicCard 
+                            key={card.id} 
+                            {...card} 
+                            isWishlist={true}
+                            onIncrement={() => updateQuantity(card.id, 1, card.quantity)}
+                            onDecrement={() => {
+                                if(card.quantity === 1) { if(confirm("Supprimer ?")) removeCard(card.id); } 
+                                else { updateQuantity(card.id, -1, card.quantity); }
+                            }}
+                            onDelete={() => { if(confirm("Supprimer ?")) removeCard(card.id); }}
+                            onMove={() => moveToCollection(card)}
+                            // NOUVEAU : On passe la fonction de toggle
+                            onToggleAttribute={(field, val) => toggleAttribute(card.id, field, val)}
+                        />
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+}
+</file>
+
+<file path="hooks/useFriends.ts">
+// hooks/useFriends.ts
+import { useState, useEffect } from 'react';
+import { db } from '@/lib/firebase';
+import { useAuth } from '@/lib/AuthContext';
+import { 
+  doc, setDoc, deleteDoc, 
+  collection, onSnapshot, serverTimestamp, writeBatch,
+  query, collectionGroup, where, getDocs, limit 
+} from 'firebase/firestore';
+import toast from 'react-hot-toast';
+
+export type FriendProfile = {
+  uid: string;
+  username: string;
+  displayName: string;
+  photoURL?: string;
+};
+
+export function useFriends() {
+  const { user, username } = useAuth();
+  
+  const [friends, setFriends] = useState<FriendProfile[]>([]);
+  const [requestsReceived, setRequestsReceived] = useState<FriendProfile[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  // Écouter les amis et les demandes en temps réel
+  useEffect(() => {
+    if (!user) {
+      setFriends([]);
+      setRequestsReceived([]);
+      setLoading(false);
+      return;
+    }
+
+    // 1. Écoute Mes Amis
+    const friendsRef = collection(db, 'users', user.uid, 'friends');
+    const unsubFriends = onSnapshot(friendsRef, (snap) => {
+      const list = snap.docs.map(d => d.data() as FriendProfile);
+      setFriends(list);
+    });
+
+    // 2. Écoute Demandes Reçues
+    const reqRef = collection(db, 'users', user.uid, 'friend_requests_received');
+    const unsubReq = onSnapshot(reqRef, (snap) => {
+      const list = snap.docs.map(d => ({ uid: d.id, ...d.data() } as FriendProfile));
+      setRequestsReceived(list);
+    });
+
+    setLoading(false);
+
+    return () => {
+      unsubFriends();
+      unsubReq();
+    };
+  }, [user]);
+
+  // --- ACTIONS ---
+
+  // 1. Rechercher des utilisateurs (Partiel : "Commence par...")
+  const searchUsers = async (searchTerm: string) => {
+    const term = searchTerm.trim().toLowerCase();
+    if (term.length < 2) return [];
+
+    // Technique Firestore pour "Starts With"
+    const usersQuery = query(
+      collectionGroup(db, 'public_profile'), // Cherche dans TOUS les profils publics
+      where('username', '>=', term),
+      where('username', '<=', term + '\uf8ff'),
+      limit(5)
+    );
+
+    const snapshot = await getDocs(usersQuery);
+    
+    const results: FriendProfile[] = [];
+    snapshot.forEach(doc => {
+      const data = doc.data();
+      // Retrouver l'UID parent (users/{uid}/public_profile/info)
+      const foundUid = doc.ref.parent.parent?.id;
+
+      if (foundUid && foundUid !== user?.uid) {
+        results.push({
+            uid: foundUid,
+            username: data.username,
+            displayName: data.displayName,
+            photoURL: data.photoURL
+        });
+      }
+    });
+
+    return results;
+  };
+
+  // 2. Envoyer une demande
+  const sendFriendRequest = async (targetUser: FriendProfile) => {
+    if (!user || !username) return;
+
+    // Check si déjà ami
+    if (friends.some(f => f.uid === targetUser.uid)) {
+      toast.error("Vous êtes déjà amis !");
+      return;
+    }
+
+    try {
+      // On écrit dans SA collection 'friend_requests_received'
+      await setDoc(doc(db, 'users', targetUser.uid, 'friend_requests_received', user.uid), {
+        uid: user.uid,
+        username: username,
+        displayName: user.displayName,
+        photoURL: user.photoURL,
+        sentAt: serverTimestamp()
+      });
+      
+      toast.success(`Demande envoyée à @${targetUser.username}`);
+    } catch (error) {
+      console.error(error);
+      toast.error("Erreur lors de l'envoi.");
+    }
+  };
+
+  // 3. Accepter une demande (Transaction Batch)
+  const acceptRequest = async (sender: FriendProfile) => {
+    if (!user || !username) return;
+
+    try {
+      const batch = writeBatch(db);
+
+      // A. Ajouter dans MES amis
+      const myFriendRef = doc(db, 'users', user.uid, 'friends', sender.uid);
+      batch.set(myFriendRef, sender);
+
+      // B. Ajouter MOI dans SES amis
+      const hisFriendRef = doc(db, 'users', sender.uid, 'friends', user.uid);
+      batch.set(hisFriendRef, {
+        uid: user.uid,
+        username: username,
+        displayName: user.displayName,
+        photoURL: user.photoURL
+      });
+
+      // C. Supprimer la demande reçue
+      const reqRef = doc(db, 'users', user.uid, 'friend_requests_received', sender.uid);
+      batch.delete(reqRef);
+
+      await batch.commit();
+      toast.success(`Ami ajouté : @${sender.username}`);
+    } catch (err) {
+      console.error(err);
+      toast.error("Erreur validation");
+    }
+  };
+
+  // 4. Refuser
+  const declineRequest = async (senderUid: string) => {
+    if (!user) return;
+    await deleteDoc(doc(db, 'users', user.uid, 'friend_requests_received', senderUid));
+    toast.success("Demande supprimée");
+  };
+  
+  // 5. Supprimer ami
+  const removeFriend = async (friendUid: string) => {
+      if(!user) return;
+      if(!confirm("Retirer cet ami ?")) return;
+      
+      await deleteDoc(doc(db, 'users', user.uid, 'friends', friendUid));
+      toast.success("Ami retiré");
+  };
+
+  return { 
+    friends, 
+    requestsReceived, 
+    loading, 
+    searchUsers, 
+    sendFriendRequest, 
+    acceptRequest, 
+    declineRequest,
+    removeFriend
+  };
+}
+</file>
+
+<file path="hooks/useTradeMatcher.ts">
+// hooks/useTradeMatcher.ts
+import { useState } from 'react';
+import { useAuth } from '@/lib/AuthContext';
+import { db } from '@/lib/firebase';
+import { collection, getDocs, doc, updateDoc } from 'firebase/firestore';
+import { useWishlists } from './useWishlists';
+import { useFriends, FriendProfile } from './useFriends';
+import { CardType } from './useCardCollection';
+
+export type TradeProposal = {
+  friend: FriendProfile;
+  toReceive: CardType[]; 
+  toGive: CardType[];    
+  balance: number;       
+};
+
+export function useTradeMatcher() {
+  const { user } = useAuth();
+  const { lists } = useWishlists();
+  const { friends } = useFriends();
+  
+  const [proposals, setProposals] = useState<TradeProposal[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [status, setStatus] = useState("");
+
+  const fetchAllCards = async (uid: string, mode: 'collection' | 'wishlist', userLists: any[] = []) => {
+    const cardsMap = new Map<string, CardType>();
+
+    if (mode === 'collection') {
+        const snap = await getDocs(collection(db, 'users', uid, 'collection'));
+        snap.forEach(d => cardsMap.set(d.id, { id: d.id, ...d.data() } as CardType));
+    } else {
+        const defSnap = await getDocs(collection(db, 'users', uid, 'wishlist'));
+        defSnap.forEach(d => cardsMap.set(d.id, { id: d.id, ...d.data() } as CardType));
+        
+        if (userLists.length > 0) {
+            for (const list of userLists) {
+                 if (list.id === 'default') continue;
+                 const snap = await getDocs(collection(db, 'users', uid, 'wishlists_data', list.id, 'cards'));
+                 snap.forEach(d => cardsMap.set(d.id, { id: d.id, ...d.data() } as CardType));
+            }
+        } else {
+            const metaSnap = await getDocs(collection(db, 'users', uid, 'wishlists_meta'));
+            for (const meta of metaSnap.docs) {
+                const snap = await getDocs(collection(db, 'users', uid, 'wishlists_data', meta.id, 'cards'));
+                snap.forEach(d => cardsMap.set(d.id, { id: d.id, ...d.data() } as CardType));
+            }
+        }
+    }
+    return cardsMap;
+  };
+
+  const refreshPrices = async (cardsToUpdate: CardType[], uid: string, collectionName: string) => {
+     for (const card of cardsToUpdate) {
+         try {
+             const res = await fetch(`https://api.scryfall.com/cards/${card.id}`);
+             if (res.ok) {
+                 const scryfallData = await res.json();
+                 const newPrice = parseFloat(scryfallData.prices?.eur || "0");
+                 
+                 if (newPrice !== card.price) {
+                     if (collectionName === 'collection') {
+                        const ref = doc(db, 'users', uid, 'collection', card.id);
+                        updateDoc(ref, { price: newPrice });
+                     }
+                     card.price = newPrice;
+                 }
+             }
+         } catch (e) { console.error("Err price fetch", e); }
+     }
+  };
+
+  const runScan = async () => {
+    if (!user || friends.length === 0) return;
+    setLoading(true);
+    setStatus("Chargement de vos données...");
+
+    try {
+        // 1. CHARGER MES DONNÉES
+        const myCollectionMap = await fetchAllCards(user.uid, 'collection');
+        const myWishlistMap = await fetchAllCards(user.uid, 'wishlist', lists);
+
+        // --- PRÉPARATION DE MA WISHLIST (HYBRIDE) ---
+        const myWishlistNames = new Set<string>(); // Pour les cartes "N'importe quelle version"
+        const myWishlistIds = new Set<string>();   // Pour les cartes "Version Exacte"
+
+        myWishlistMap.forEach(card => {
+            if (card.isSpecificVersion) {
+                myWishlistIds.add(card.id); // ID Scryfall exact
+            } else {
+                myWishlistNames.add(card.name); // Nom uniquement
+            }
+        });
+
+        // --- PRÉPARATION DE MA COLLECTION (POUR CE QUE JE DONNE) ---
+        // Ici, c'est plus simple : on propose ce qu'on a. C'est l'autre qui décide si ça lui va.
+        // Donc on garde Map et Noms pour matcher les désirs de l'autre.
+        const myCollectionNames = new Set<string>();
+        myCollectionMap.forEach(card => myCollectionNames.add(card.name));
+
+        const newProposals: TradeProposal[] = [];
+
+        // 2. BOUCLE SUR AMIS
+        let i = 0;
+        for (const friend of friends) {
+            i++;
+            setStatus(`Analyse de ${friend.username} (${i}/${friends.length})...`);
+            
+            const friendCollectionMap = await fetchAllCards(friend.uid, 'collection');
+            const friendWishlistMap = await fetchAllCards(friend.uid, 'wishlist');
+
+            const toReceive: CardType[] = [];
+            const toGive: CardType[] = [];
+
+            // MATCH A : Ce qu'il a (sa Collection) que je veux (ma Wishlist)
+            friendCollectionMap.forEach((card) => {
+                // 1. Est-ce que cette carte précise est dans ma liste stricte ?
+                if (myWishlistIds.has(card.id)) {
+                    toReceive.push(card);
+                } 
+                // 2. Sinon, est-ce que son NOM est dans ma liste générique ?
+                else if (myWishlistNames.has(card.name)) {
+                    toReceive.push(card);
+                }
+            });
+
+            // MATCH B : Ce que j'ai (ma Collection) qu'il veut (sa Wishlist)
+            // On doit analyser SA wishlist pour savoir s'il est strict ou pas
+            const friendWishlistNames = new Set<string>();
+            const friendWishlistIds = new Set<string>();
+
+            friendWishlistMap.forEach(c => {
+                if (c.isSpecificVersion) friendWishlistIds.add(c.id);
+                else friendWishlistNames.add(c.name);
+            });
+
+            myCollectionMap.forEach((card) => {
+                // Même logique : est-ce que ma carte matche ses critères ?
+                if (friendWishlistIds.has(card.id)) {
+                    toGive.push(card);
+                }
+                else if (friendWishlistNames.has(card.name)) {
+                    toGive.push(card);
+                }
+            });
+
+            if (toReceive.length > 0 || toGive.length > 0) {
+                await refreshPrices(toReceive, friend.uid, 'collection');
+                await refreshPrices(toGive, user.uid, 'collection');
+
+                const valueReceive = toReceive.reduce((sum, c) => sum + (c.customPrice ?? c.price ?? 0), 0);
+                const valueGive = toGive.reduce((sum, c) => sum + (c.customPrice ?? c.price ?? 0), 0);
+
+                newProposals.push({
+                    friend,
+                    toReceive,
+                    toGive,
+                    balance: valueGive - valueReceive
+                });
+            }
+        }
+
+        setProposals(newProposals);
+
+    } catch (error) {
+        console.error("Erreur scan", error);
+    } finally {
+        setLoading(false);
+        setStatus("");
+    }
+  };
+
+  return { proposals, loading, status, runScan };
+}
+</file>
+
+<file path="lib/firebase.ts">
+import { initializeApp, getApps, getApp } from 'firebase/app';
+import { getAuth } from 'firebase/auth';
+import { getFirestore } from 'firebase/firestore';
+
+const firebaseConfig = {
+  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
+  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
+  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
+  storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
+  appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
+};
+
+// Initialisation unique (évite les erreurs de re-init en dev)
+const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
+
+export const auth = getAuth(app);
+export const db = getFirestore(app);
+</file>
+
+<file path="next.config.ts">
+import type { NextConfig } from 'next';
+
+const nextConfig: NextConfig = {
+  // Mode strict pour détecter les bugs en dev
+  reactStrictMode: true,
+
+  // Optimisation des images
+  images: {
+    formats: ['image/avif', 'image/webp'],
+    remotePatterns: [
+      {
+        protocol: 'https',
+        hostname: 'cards.scryfall.io', // Indispensable pour tes cartes
+        port: '',
+        pathname: '/**',
+      },
+      {
+        protocol: 'https',
+        hostname: '*.googleusercontent.com', // Indispensable pour les avatars Google Auth
+        port: '',
+        pathname: '/**',
+      },
+    ],
+  },
+
+  // Sécurité (Headers HTTP)
+  async headers() {
+    return [
+      {
+        source: '/(.*)',
+        headers: [
+          { key: 'X-Content-Type-Options', value: 'nosniff' },
+          { key: 'X-Frame-Options', value: 'DENY' },
+          { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
+        ],
+      },
+    ];
+  },
+};
+
+export default nextConfig;
+</file>
+
+<file path="package.json">
+{
+  "name": "magicwish",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint"
+  },
+  "dependencies": {
+    "@types/papaparse": "^5.5.1",
+    "firebase": "^12.5.0",
+    "next": "^16.0.8",
+    "papaparse": "^5.5.3",
+    "react": "^19.2.1",
+    "react-dom": "^19.2.1",
+    "react-hot-toast": "^2.6.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "babel-plugin-react-compiler": "1.0.0",
+    "eslint": "^9",
+    "eslint-config-next": "16.0.3",
+    "tailwindcss": "^4",
+    "typescript": "^5"
+  }
+}
+</file>
+
+<file path="app/api/search/route.ts">
+// app/api/search/route.ts
+import { NextResponse } from 'next/server';
+
+export async function GET(request: Request) {
+  const { searchParams } = new URL(request.url);
+  const query = searchParams.get('q'); 
+
+  if (!query) {
+    return NextResponse.json(
+      { error: 'Aucun terme de recherche fourni.' }, 
+      { status: 400 } 
+    );
+  }
+
+  // --- MODIFICATION ICI : Ajout des guillemets "${query}" ---
+  // Cela force la recherche exacte de l'expression
+  const scryfallUrl = `https://api.scryfall.com/cards/search?q="${query}"&unique=prints`;
+
+  try {
+    const scryfallResponse = await fetch(scryfallUrl);
+
+    if (!scryfallResponse.ok) {
+      const errorData = await scryfallResponse.json();
+      console.error('Erreur Scryfall:', errorData);
+      return NextResponse.json(
+        { error: errorData.details || 'Carte non trouvée' }, 
+        { status: scryfallResponse.status }
+      );
+    }
+
+    const data = await scryfallResponse.json();
+    return NextResponse.json(data);
+
+  } catch (error) {
+    console.error('Erreur interne du serveur:', error);
+    return NextResponse.json(
+      { error: 'Une erreur est survenue sur le serveur.' }, 
+      { status: 500 }
+    );
+  }
+}
+</file>
+
+<file path="app/trades/page.tsx">
+// app/trades/page.tsx
+'use client';
+
+import { useAuth } from '@/lib/AuthContext';
+import { useTradeMatcher, TradeProposal } from '@/hooks/useTradeMatcher';
+import { useTradeTransaction } from '@/hooks/useTradeTransaction'; // <--- IMPORT
+import Link from 'next/link';
+import { useCardCollection } from '@/hooks/useCardCollection'; 
+import MagicCard from '@/components/MagicCard'; 
+
+const TradeRow = ({ proposal, onTradeSuccess }: { proposal: TradeProposal, onTradeSuccess: () => void }) => {
+    const { setCustomPrice } = useCardCollection('collection');
+    
+    // <--- NOUVEAU : Hook de transaction
+    const { executeTrade, isProcessing } = useTradeTransaction(); 
+
+    const totalGive = proposal.toGive.reduce((acc, c) => acc + (c.customPrice ?? c.price ?? 0), 0);
+    const totalReceive = proposal.toReceive.reduce((acc, c) => acc + (c.customPrice ?? c.price ?? 0), 0);
+    const delta = totalGive - totalReceive;
+
+    // Fonction de validation
+    const handleConfirmTrade = async () => {
+        const confirmMsg = `Valider cet échange avec ${proposal.friend.displayName} ?\n\n` +
+                           `⚠ VOS CARTES SERONT RETIRÉES DE VOTRE COLLECTION.\n` +
+                           `⚠ SES CARTES SERONT AJOUTÉES À LA VÔTRE.`;
+        
+        if (!confirm(confirmMsg)) return;
+
+        const success = await executeTrade(proposal.toGive, proposal.toReceive, proposal.friend.uid);
+        if (success) {
+            onTradeSuccess(); // On demande au parent de rafraîchir ou retirer la ligne
+        }
+    };
+
+    return (
+        <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden mb-8">
+            <div className="bg-gray-50 dark:bg-gray-900/50 p-4 border-b border-gray-100 dark:border-gray-700 flex flex-col sm:flex-row justify-between items-center gap-4">
+                <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-white font-bold overflow-hidden">
+                        {proposal.friend.photoURL ? <img src={proposal.friend.photoURL} alt="" className="w-full h-full object-cover"/> : proposal.friend.username[0].toUpperCase()}
+                    </div>
+                    <div>
+                        <h2 className="text-xl font-bold text-gray-900 dark:text-white">Échange avec {proposal.friend.displayName}</h2>
+                        <Link href={`/user/${proposal.friend.uid}`} className="text-sm text-blue-600 hover:underline">Voir profil</Link>
+                    </div>
+                </div>
+
+                {/* --- BOUTON DE VALIDATION AUTOMATIQUE --- */}
+                <button
+                    onClick={handleConfirmTrade}
+                    disabled={isProcessing}
+                    className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg font-bold shadow-sm transition disabled:opacity-50 text-sm flex items-center gap-2"
+                >
+                    {isProcessing ? 'Traitement...' : '✅ Valider l\'échange'}
+                </button>
+            </div>
+
+            <div className="grid md:grid-cols-2 divide-y md:divide-y-0 md:divide-x border-gray-100 dark:border-gray-700">
+                <div className="p-4 bg-red-50/30 dark:bg-red-900/10">
+                    <h3 className="font-bold text-red-600 dark:text-red-400 mb-4 flex justify-between">
+                        📤 Je donne ({proposal.toGive.length})
+                        <span className="text-sm bg-white dark:bg-gray-800 px-2 py-1 rounded shadow-sm">{totalGive.toFixed(2)} €</span>
+                    </h3>
+                    <div className="space-y-3">
+                        {proposal.toGive.map(card => (
+                            <MagicCard 
+                                key={card.id} {...card} isTradeView={true} allowPriceEdit={true}
+                                onEditPrice={(newPrice) => setCustomPrice(card.id, newPrice)}
+                            />
+                        ))}
+                    </div>
+                </div>
+
+                <div className="p-4 bg-green-50/30 dark:bg-green-900/10">
+                    <h3 className="font-bold text-green-600 dark:text-green-400 mb-4 flex justify-between">
+                        📥 Je reçois ({proposal.toReceive.length})
+                        <span className="text-sm bg-white dark:bg-gray-800 px-2 py-1 rounded shadow-sm">{totalReceive.toFixed(2)} €</span>
+                    </h3>
+                    <div className="space-y-3">
+                         {proposal.toReceive.map(card => (
+                            <MagicCard key={card.id} {...card} isTradeView={true} allowPriceEdit={false} />
+                        ))}
+                    </div>
+                </div>
+            </div>
+
+            <div className="p-4 border-t border-gray-100 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 flex justify-between items-center">
+                <span className="text-sm text-gray-500">Balance :</span>
+                <div className={`font-bold ${delta > 0 ? 'text-green-600' : 'text-red-600'}`}>
+                    {Math.abs(delta) < 1 ? "Équitable" : delta > 0 ? `+${delta.toFixed(2)}€ pour toi` : `${delta.toFixed(2)}€`}
+                </div>
+            </div>
+        </div>
+    );
+};
+
+export default function TradesPage() {
+  const { user } = useAuth();
+  const { proposals, loading, status, runScan } = useTradeMatcher();
+
+  if (!user) return <div className="p-10 text-center">Connectez-vous.</div>;
+
+  return (
+    <main className="container mx-auto p-4 max-w-5xl min-h-[80vh]">
+        <div className="flex flex-col md:flex-row justify-between items-center mb-8 gap-4">
+            <div>
+                <h1 className="text-3xl font-bold text-purple-600 dark:text-purple-400">🤝 Échanges</h1>
+                <p className="text-gray-500 text-sm">Automatique ou Manuel</p>
+            </div>
+            
+            <div className="flex gap-2">
+                {/* --- LIEN VERS LE MODE MANUEL --- */}
+                <Link href="/trades/manual" className="bg-gray-100 hover:bg-gray-200 text-gray-800 px-4 py-3 rounded-xl font-bold transition border border-gray-300">
+                    🖐️ Mode Manuel
+                </Link>
+
+                <button 
+                    onClick={runScan}
+                    disabled={loading}
+                    className="bg-purple-600 hover:bg-purple-700 text-white px-6 py-3 rounded-xl font-bold shadow-lg transition disabled:opacity-50"
+                >
+                    {loading ? <span className="animate-pulse">{status}</span> : "🚀 Scanner Amis"}
+                </button>
+            </div>
+        </div>
+
+        {proposals.length === 0 && !loading && (
+            <div className="text-center py-20 text-gray-400 border-2 border-dashed border-gray-200 dark:border-gray-700 rounded-xl">
+                Cliquez sur &quot;Scanner&quot; pour les amis, ou utilisez le <Link href="/trades/manual" className="text-blue-500 underline">Mode Manuel</Link>.
+            </div>
+        )}
+
+        <div className="space-y-8">
+            {proposals.map(proposal => (
+                <TradeRow 
+                    key={proposal.friend.uid} 
+                    proposal={proposal} 
+                    onTradeSuccess={runScan} // On relance le scan après succès pour mettre à jour la liste
+                />
+            ))}
+        </div>
+    </main>
+  );
+}
+</file>
+
 <file path="components/MagicCard.tsx">
 // components/MagicCard.tsx
 'use client';
@@ -1617,330 +2307,6 @@ export default function MagicCard(props: MagicCardProps) {
       </div>
     </div>
   );
-}
-</file>
-
-<file path="hooks/useFriends.ts">
-// hooks/useFriends.ts
-import { useState, useEffect } from 'react';
-import { db } from '@/lib/firebase';
-import { useAuth } from '@/lib/AuthContext';
-import { 
-  doc, setDoc, deleteDoc, 
-  collection, onSnapshot, serverTimestamp, writeBatch,
-  query, collectionGroup, where, getDocs, limit 
-} from 'firebase/firestore';
-import toast from 'react-hot-toast';
-
-export type FriendProfile = {
-  uid: string;
-  username: string;
-  displayName: string;
-  photoURL?: string;
-};
-
-export function useFriends() {
-  const { user, username } = useAuth();
-  
-  const [friends, setFriends] = useState<FriendProfile[]>([]);
-  const [requestsReceived, setRequestsReceived] = useState<FriendProfile[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  // Écouter les amis et les demandes en temps réel
-  useEffect(() => {
-    if (!user) {
-      setFriends([]);
-      setRequestsReceived([]);
-      setLoading(false);
-      return;
-    }
-
-    // 1. Écoute Mes Amis
-    const friendsRef = collection(db, 'users', user.uid, 'friends');
-    const unsubFriends = onSnapshot(friendsRef, (snap) => {
-      const list = snap.docs.map(d => d.data() as FriendProfile);
-      setFriends(list);
-    });
-
-    // 2. Écoute Demandes Reçues
-    const reqRef = collection(db, 'users', user.uid, 'friend_requests_received');
-    const unsubReq = onSnapshot(reqRef, (snap) => {
-      const list = snap.docs.map(d => ({ uid: d.id, ...d.data() } as FriendProfile));
-      setRequestsReceived(list);
-    });
-
-    setLoading(false);
-
-    return () => {
-      unsubFriends();
-      unsubReq();
-    };
-  }, [user]);
-
-  // --- ACTIONS ---
-
-  // 1. Rechercher des utilisateurs (Partiel : "Commence par...")
-  const searchUsers = async (searchTerm: string) => {
-    const term = searchTerm.trim().toLowerCase();
-    if (term.length < 2) return [];
-
-    // Technique Firestore pour "Starts With"
-    const usersQuery = query(
-      collectionGroup(db, 'public_profile'), // Cherche dans TOUS les profils publics
-      where('username', '>=', term),
-      where('username', '<=', term + '\uf8ff'),
-      limit(5)
-    );
-
-    const snapshot = await getDocs(usersQuery);
-    
-    const results: FriendProfile[] = [];
-    snapshot.forEach(doc => {
-      const data = doc.data();
-      // Retrouver l'UID parent (users/{uid}/public_profile/info)
-      const foundUid = doc.ref.parent.parent?.id;
-
-      if (foundUid && foundUid !== user?.uid) {
-        results.push({
-            uid: foundUid,
-            username: data.username,
-            displayName: data.displayName,
-            photoURL: data.photoURL
-        });
-      }
-    });
-
-    return results;
-  };
-
-  // 2. Envoyer une demande
-  const sendFriendRequest = async (targetUser: FriendProfile) => {
-    if (!user || !username) return;
-
-    // Check si déjà ami
-    if (friends.some(f => f.uid === targetUser.uid)) {
-      toast.error("Vous êtes déjà amis !");
-      return;
-    }
-
-    try {
-      // On écrit dans SA collection 'friend_requests_received'
-      await setDoc(doc(db, 'users', targetUser.uid, 'friend_requests_received', user.uid), {
-        uid: user.uid,
-        username: username,
-        displayName: user.displayName,
-        photoURL: user.photoURL,
-        sentAt: serverTimestamp()
-      });
-      
-      toast.success(`Demande envoyée à @${targetUser.username}`);
-    } catch (error) {
-      console.error(error);
-      toast.error("Erreur lors de l'envoi.");
-    }
-  };
-
-  // 3. Accepter une demande (Transaction Batch)
-  const acceptRequest = async (sender: FriendProfile) => {
-    if (!user || !username) return;
-
-    try {
-      const batch = writeBatch(db);
-
-      // A. Ajouter dans MES amis
-      const myFriendRef = doc(db, 'users', user.uid, 'friends', sender.uid);
-      batch.set(myFriendRef, sender);
-
-      // B. Ajouter MOI dans SES amis
-      const hisFriendRef = doc(db, 'users', sender.uid, 'friends', user.uid);
-      batch.set(hisFriendRef, {
-        uid: user.uid,
-        username: username,
-        displayName: user.displayName,
-        photoURL: user.photoURL
-      });
-
-      // C. Supprimer la demande reçue
-      const reqRef = doc(db, 'users', user.uid, 'friend_requests_received', sender.uid);
-      batch.delete(reqRef);
-
-      await batch.commit();
-      toast.success(`Ami ajouté : @${sender.username}`);
-    } catch (err) {
-      console.error(err);
-      toast.error("Erreur validation");
-    }
-  };
-
-  // 4. Refuser
-  const declineRequest = async (senderUid: string) => {
-    if (!user) return;
-    await deleteDoc(doc(db, 'users', user.uid, 'friend_requests_received', senderUid));
-    toast.success("Demande supprimée");
-  };
-  
-  // 5. Supprimer ami
-  const removeFriend = async (friendUid: string) => {
-      if(!user) return;
-      if(!confirm("Retirer cet ami ?")) return;
-      
-      await deleteDoc(doc(db, 'users', user.uid, 'friends', friendUid));
-      toast.success("Ami retiré");
-  };
-
-  return { 
-    friends, 
-    requestsReceived, 
-    loading, 
-    searchUsers, 
-    sendFriendRequest, 
-    acceptRequest, 
-    declineRequest,
-    removeFriend
-  };
-}
-</file>
-
-<file path="lib/firebase.ts">
-import { initializeApp, getApps, getApp } from 'firebase/app';
-import { getAuth } from 'firebase/auth';
-import { getFirestore } from 'firebase/firestore';
-
-const firebaseConfig = {
-  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
-  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
-  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
-  storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
-  appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
-};
-
-// Initialisation unique (évite les erreurs de re-init en dev)
-const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
-
-export const auth = getAuth(app);
-export const db = getFirestore(app);
-</file>
-
-<file path="next.config.ts">
-import type { NextConfig } from 'next';
-
-const nextConfig: NextConfig = {
-  // Mode strict pour détecter les bugs en dev
-  reactStrictMode: true,
-
-  // Optimisation des images
-  images: {
-    formats: ['image/avif', 'image/webp'],
-    remotePatterns: [
-      {
-        protocol: 'https',
-        hostname: 'cards.scryfall.io', // Indispensable pour tes cartes
-        port: '',
-        pathname: '/**',
-      },
-      {
-        protocol: 'https',
-        hostname: '*.googleusercontent.com', // Indispensable pour les avatars Google Auth
-        port: '',
-        pathname: '/**',
-      },
-    ],
-  },
-
-  // Sécurité (Headers HTTP)
-  async headers() {
-    return [
-      {
-        source: '/(.*)',
-        headers: [
-          { key: 'X-Content-Type-Options', value: 'nosniff' },
-          { key: 'X-Frame-Options', value: 'DENY' },
-          { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
-        ],
-      },
-    ];
-  },
-};
-
-export default nextConfig;
-</file>
-
-<file path="package.json">
-{
-  "name": "magicwish",
-  "version": "0.1.0",
-  "private": true,
-  "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
-    "lint": "eslint"
-  },
-  "dependencies": {
-    "@types/papaparse": "^5.5.1",
-    "firebase": "^12.5.0",
-    "next": "^16.0.8",
-    "papaparse": "^5.5.3",
-    "react": "^19.2.1",
-    "react-dom": "^19.2.1",
-    "react-hot-toast": "^2.6.0"
-  },
-  "devDependencies": {
-    "@tailwindcss/postcss": "^4",
-    "@types/node": "^20",
-    "@types/react": "^19",
-    "@types/react-dom": "^19",
-    "babel-plugin-react-compiler": "1.0.0",
-    "eslint": "^9",
-    "eslint-config-next": "16.0.3",
-    "tailwindcss": "^4",
-    "typescript": "^5"
-  }
-}
-</file>
-
-<file path="app/api/search/route.ts">
-// app/api/search/route.ts
-import { NextResponse } from 'next/server';
-
-export async function GET(request: Request) {
-  const { searchParams } = new URL(request.url);
-  const query = searchParams.get('q'); 
-
-  if (!query) {
-    return NextResponse.json(
-      { error: 'Aucun terme de recherche fourni.' }, 
-      { status: 400 } 
-    );
-  }
-
-  // --- MODIFICATION ICI : Ajout des guillemets "${query}" ---
-  // Cela force la recherche exacte de l'expression
-  const scryfallUrl = `https://api.scryfall.com/cards/search?q="${query}"&unique=prints`;
-
-  try {
-    const scryfallResponse = await fetch(scryfallUrl);
-
-    if (!scryfallResponse.ok) {
-      const errorData = await scryfallResponse.json();
-      console.error('Erreur Scryfall:', errorData);
-      return NextResponse.json(
-        { error: errorData.details || 'Carte non trouvée' }, 
-        { status: scryfallResponse.status }
-      );
-    }
-
-    const data = await scryfallResponse.json();
-    return NextResponse.json(data);
-
-  } catch (error) {
-    console.error('Erreur interne du serveur:', error);
-    return NextResponse.json(
-      { error: 'Une erreur est survenue sur le serveur.' }, 
-      { status: 500 }
-    );
-  }
 }
 </file>
 
@@ -2185,106 +2551,6 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     </AuthContext.Provider>
   );
 };
-</file>
-
-<file path="app/collection/page.tsx">
-// app/collection/page.tsx
-'use client';
-
-import { useState } from 'react';
-import { useAuth } from '@/lib/AuthContext';
-import { useCardCollection } from '@/hooks/useCardCollection'; 
-import MagicCard from '@/components/MagicCard';
-import ImportModal from '@/components/ImportModal';
-import ConfirmModal from '@/components/ConfirmModal';
-import DeleteAllButton from '@/components/DeleteAllButton';
-
-export default function CollectionPage() {
-  const { user } = useAuth();
-  
-  // 1. On récupère setCustomPrice et toggleAttribute ici
-  const { 
-    cards, loading, updateQuantity, removeCard, 
-    setCustomPrice, toggleAttribute, // <--- Important
-    totalPrice 
-  } = useCardCollection('collection');
-
-  const [isImportOpen, setIsImportOpen] = useState(false);
-  const [cardToDelete, setCardToDelete] = useState<string | null>(null);
-
-  const handleDecrement = async (cardId: string, currentQty: number) => {
-    const result = await updateQuantity(cardId, -1, currentQty);
-    if (result === 'shouldDelete') {
-      setCardToDelete(cardId);
-    }
-  };
-
-  if (loading) return <p className="text-center p-10 text-gray-500">Chargement de votre collection...</p>;
-  if (!user) return <p className="text-center p-10">Veuillez vous connecter.</p>;
-
-  return (
-    <main className="container mx-auto p-4 pb-20">
-      {/* HEADER */}
-      <div className="flex flex-col md:flex-row justify-between items-center mb-8 gap-4">
-        <div className="flex items-center gap-4">
-          <h1 className="text-3xl font-bold text-blue-700 dark:text-blue-400">
-            Ma Collection <span className="ml-3 text-lg font-normal text-gray-500">({cards.reduce((acc, c) => acc + c.quantity, 0)})</span>
-          </h1>
-          <button 
-            onClick={() => setIsImportOpen(true)} 
-            className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition flex items-center gap-2 shadow-sm"
-          >
-            📂 Importer CSV
-          </button>
-        </div>
-        
-        <div className="flex items-center gap-4">
-           <DeleteAllButton targetCollection="collection" />
-           <div className="bg-blue-50 dark:bg-blue-900/30 text-blue-800 dark:text-blue-100 px-6 py-3 rounded-xl shadow-sm border border-blue-200 dark:border-blue-700">
-             <span className="text-sm uppercase tracking-wide opacity-80">Valeur</span>
-             <div className="text-2xl font-bold">{totalPrice.toFixed(2)} €</div>
-           </div>
-        </div>
-      </div>
-
-      {/* LISTE DES CARTES */}
-      {cards.length === 0 ? (
-        <div className="text-center py-20 bg-gray-50 dark:bg-gray-800/50 rounded-xl border-2 border-dashed border-gray-200 dark:border-gray-700">
-          <p className="text-xl text-gray-500 mb-4">Votre collection est vide.</p>
-        </div>
-      ) : (
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-          {cards.map((card) => (
-            <MagicCard 
-              key={card.id}
-              {...card}
-              // Actions de base
-              onIncrement={() => updateQuantity(card.id, 1, card.quantity)}
-              onDecrement={() => handleDecrement(card.id, card.quantity)}
-              onDelete={() => setCardToDelete(card.id)}
-              
-              // C'EST ICI QUE LA MAGIE OPÈRE (Optimisation) :
-              // On connecte les fonctions du hook parent aux props de l'enfant
-              onEditPrice={(newPrice) => setCustomPrice(card.id, newPrice)}
-              onToggleAttribute={(field, val) => toggleAttribute(card.id, field, val)}
-            />
-          ))}
-        </div>
-      )}
-
-      {/* MODALES */}
-      <ImportModal isOpen={isImportOpen} onClose={() => setIsImportOpen(false)} targetCollection="collection" />
-      
-      <ConfirmModal 
-        isOpen={!!cardToDelete} 
-        onClose={() => setCardToDelete(null)} 
-        onConfirm={() => { if(cardToDelete) removeCard(cardToDelete); }} 
-        title="Retirer ?" 
-        message="Cette carte sera retirée de votre collection."
-      />
-    </main>
-  );
-}
 </file>
 
 <file path="app/contacts/page.tsx">
@@ -2651,6 +2917,106 @@ export default function Header() {
         )}
       </div>
     </header>
+  );
+}
+</file>
+
+<file path="app/collection/page.tsx">
+// app/collection/page.tsx
+'use client';
+
+import { useState } from 'react';
+import { useAuth } from '@/lib/AuthContext';
+import { useCardCollection } from '@/hooks/useCardCollection'; 
+import MagicCard from '@/components/MagicCard';
+import ImportModal from '@/components/ImportModal';
+import ConfirmModal from '@/components/ConfirmModal';
+import DeleteAllButton from '@/components/DeleteAllButton';
+
+export default function CollectionPage() {
+  const { user } = useAuth();
+  
+  // 1. On récupère setCustomPrice et toggleAttribute ici
+  const { 
+    cards, loading, updateQuantity, removeCard, 
+    setCustomPrice, toggleAttribute, // <--- Important
+    totalPrice 
+  } = useCardCollection('collection');
+
+  const [isImportOpen, setIsImportOpen] = useState(false);
+  const [cardToDelete, setCardToDelete] = useState<string | null>(null);
+
+  const handleDecrement = async (cardId: string, currentQty: number) => {
+    const result = await updateQuantity(cardId, -1, currentQty);
+    if (result === 'shouldDelete') {
+      setCardToDelete(cardId);
+    }
+  };
+
+  if (loading) return <p className="text-center p-10 text-gray-500">Chargement de votre collection...</p>;
+  if (!user) return <p className="text-center p-10">Veuillez vous connecter.</p>;
+
+  return (
+    <main className="container mx-auto p-4 pb-20">
+      {/* HEADER */}
+      <div className="flex flex-col md:flex-row justify-between items-center mb-8 gap-4">
+        <div className="flex items-center gap-4">
+          <h1 className="text-3xl font-bold text-blue-700 dark:text-blue-400">
+            Ma Collection <span className="ml-3 text-lg font-normal text-gray-500">({cards.reduce((acc, c) => acc + c.quantity, 0)})</span>
+          </h1>
+          <button 
+            onClick={() => setIsImportOpen(true)} 
+            className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition flex items-center gap-2 shadow-sm"
+          >
+            📂 Importer CSV
+          </button>
+        </div>
+        
+        <div className="flex items-center gap-4">
+           <DeleteAllButton targetCollection="collection" />
+           <div className="bg-blue-50 dark:bg-blue-900/30 text-blue-800 dark:text-blue-100 px-6 py-3 rounded-xl shadow-sm border border-blue-200 dark:border-blue-700">
+             <span className="text-sm uppercase tracking-wide opacity-80">Valeur</span>
+             <div className="text-2xl font-bold">{totalPrice.toFixed(2)} €</div>
+           </div>
+        </div>
+      </div>
+
+      {/* LISTE DES CARTES */}
+      {cards.length === 0 ? (
+        <div className="text-center py-20 bg-gray-50 dark:bg-gray-800/50 rounded-xl border-2 border-dashed border-gray-200 dark:border-gray-700">
+          <p className="text-xl text-gray-500 mb-4">Votre collection est vide.</p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+          {cards.map((card) => (
+            <MagicCard 
+              key={card.id}
+              {...card}
+              // Actions de base
+              onIncrement={() => updateQuantity(card.id, 1, card.quantity)}
+              onDecrement={() => handleDecrement(card.id, card.quantity)}
+              onDelete={() => setCardToDelete(card.id)}
+              
+              // C'EST ICI QUE LA MAGIE OPÈRE (Optimisation) :
+              // On connecte les fonctions du hook parent aux props de l'enfant
+              onEditPrice={(newPrice) => setCustomPrice(card.id, newPrice)}
+              onToggleAttribute={(field, val) => toggleAttribute(card.id, field, val)}
+            />
+          ))}
+        </div>
+      )}
+
+      {/* MODALES */}
+      <ImportModal isOpen={isImportOpen} onClose={() => setIsImportOpen(false)} targetCollection="collection" />
+      
+      <ConfirmModal 
+        isOpen={!!cardToDelete} 
+        onClose={() => setCardToDelete(null)} 
+        onConfirm={() => { if(cardToDelete) removeCard(cardToDelete); }} 
+        title="Retirer ?" 
+        message="Cette carte sera retirée de votre collection."
+      />
+    </main>
   );
 }
 </file>

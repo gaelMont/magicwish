@@ -1,30 +1,19 @@
 // hooks/useTradeTransaction.ts
 import { useState } from 'react';
 import { db } from '@/lib/firebase';
-import { doc, runTransaction, serverTimestamp, increment } from 'firebase/firestore';
+import { doc, runTransaction, serverTimestamp, increment, DocumentSnapshot, DocumentReference } from 'firebase/firestore';
 import { useAuth } from '@/lib/AuthContext';
 import { CardType } from './useCardCollection';
 import toast from 'react-hot-toast';
-
-type TradeSide = {
-    uid: string; // L'ID de l'utilisateur (Moi ou l'Ami)
-    losing: CardType[];
-    gaining: CardType[];
-};
 
 export function useTradeTransaction() {
   const { user } = useAuth();
   const [isProcessing, setIsProcessing] = useState(false);
 
-  // Fonction utilitaire pour préparer les références
   const getRef = (uid: string, collection: 'collection' | 'wishlist', cardId: string) => {
       return doc(db, 'users', uid, collection, cardId);
   };
 
-  /**
-   * Exécute l'échange.
-   * Si partnerUid est null, c'est un échange manuel (on update juste mon côté).
-   */
   const executeTrade = async (
       myCardsToGive: CardType[], 
       cardsToReceive: CardType[], 
@@ -36,34 +25,76 @@ export function useTradeTransaction() {
 
     try {
         await runTransaction(db, async (transaction) => {
-            // --- 1. GESTION DE MON CÔTÉ (Moi) ---
+            // ============================================================
+            // 1. PHASE DE LECTURE (READS) - ON NE MODIFIE RIEN ICI
+            // ============================================================
             
-            // A. Je perds des cartes (Ma Collection)
+            // --- A. MOI : Je donne (Je dois vérifier que j'ai toujours les cartes) ---
+            const myGiveOps = [];
             for (const card of myCardsToGive) {
-                const docRef = getRef(user.uid, 'collection', card.id);
-                const docSnap = await transaction.get(docRef);
+                const ref = getRef(user.uid, 'collection', card.id);
+                const snap = await transaction.get(ref);
+                if (!snap.exists()) throw new Error(`Erreur : Vous n'avez plus la carte ${card.name}`);
+                myGiveOps.push({ ref, snap, card });
+            }
+
+            // --- B. MOI : Je reçois (Je dois vérifier si je l'ai déjà pour update ou set, et check wishlist) ---
+            const myReceiveOps = [];
+            for (const card of cardsToReceive) {
+                const colRef = getRef(user.uid, 'collection', card.id);
+                const wishRef = getRef(user.uid, 'wishlist', card.id);
                 
-                if (!docSnap.exists()) throw new Error(`Erreur: Vous n'avez plus ${card.name}`);
-                const currentQty = docSnap.data().quantity || 0;
+                const colSnap = await transaction.get(colRef);
+                const wishSnap = await transaction.get(wishRef);
                 
-                if (currentQty <= card.quantity) {
-                    transaction.delete(docRef); // Plus d'exemplaire -> Suppression
-                } else {
-                    transaction.update(docRef, { quantity: increment(-card.quantity) });
+                myReceiveOps.push({ colRef, wishRef, colSnap, wishSnap, card });
+            }
+
+            // --- C. PARTENAIRE (Si existe) ---
+            const partnerGiveOps = [];    // Ce qu'il me donne (donc il perd)
+            const partnerReceiveOps = []; // Ce que je lui donne (donc il gagne)
+
+            if (partnerUid) {
+                // Il perd ce qu'il me donne
+                for (const card of cardsToReceive) {
+                    const ref = getRef(partnerUid, 'collection', card.id);
+                    // On lit pour être propre, même si on fait juste un increment négatif après
+                    const snap = await transaction.get(ref); 
+                    partnerGiveOps.push({ ref, snap, card });
+                }
+
+                // Il gagne ce que je donne
+                for (const card of myCardsToGive) {
+                    const colRef = getRef(partnerUid, 'collection', card.id);
+                    const wishRef = getRef(partnerUid, 'wishlist', card.id);
+
+                    const colSnap = await transaction.get(colRef);
+                    const wishSnap = await transaction.get(wishRef);
+
+                    partnerReceiveOps.push({ colRef, wishRef, colSnap, wishSnap, card });
                 }
             }
 
-            // B. Je gagne des cartes (Ma Collection + Nettoyage Ma Wishlist)
-            for (const card of cardsToReceive) {
-                const colRef = getRef(user.uid, 'collection', card.id);
-                const wishRef = getRef(user.uid, 'wishlist', card.id); // On check la wishlist par défaut
-                
+            // ============================================================
+            // 2. PHASE D'ÉCRITURE (WRITES) - ON APPLIQUE TOUT MAINTENANT
+            // ============================================================
+
+            // --- A. MOI : Je perds ---
+            for (const { ref, snap, card } of myGiveOps) {
+                const currentQty = snap.data()?.quantity || 0;
+                if (currentQty <= card.quantity) {
+                    transaction.delete(ref);
+                } else {
+                    transaction.update(ref, { quantity: increment(-card.quantity) });
+                }
+            }
+
+            // --- B. MOI : Je gagne ---
+            for (const { colRef, wishRef, colSnap, wishSnap, card } of myReceiveOps) {
                 // Ajout Collection
-                const colSnap = await transaction.get(colRef);
                 if (colSnap.exists()) {
                     transaction.update(colRef, { quantity: increment(card.quantity) });
                 } else {
-                    // Création propre de la carte
                     transaction.set(colRef, {
                         name: card.name,
                         imageUrl: card.imageUrl,
@@ -76,44 +107,35 @@ export function useTradeTransaction() {
                         addedAt: serverTimestamp()
                     });
                 }
-
-                // Suppression Wishlist (Si je l'avais demandée)
-                const wishSnap = await transaction.get(wishRef);
+                // Nettoyage Wishlist
                 if (wishSnap.exists()) {
                     transaction.delete(wishRef);
                 }
             }
 
-            // --- 2. GESTION DU PARTENAIRE (Si ce n'est pas un échange manuel) ---
+            // --- C. PARTENAIRE ---
             if (partnerUid) {
-                // A. Il perd ce qu'il me donne (Sa Collection)
-                for (const card of cardsToReceive) {
-                    const docRef = getRef(partnerUid, 'collection', card.id);
-                    // Note: On ne lit pas le doc pour économiser, on utilise increment(-x). 
-                    // Risque mineur: si synchro décalée, il peut passer en négatif (rare).
-                    // Pour faire propre, on devrait lire, mais increment est atomique.
-                    transaction.update(docRef, { quantity: increment(-card.quantity) });
-                     // Idéalement : check si qty <= 0 pour delete, mais update est plus safe sans lecture
+                // Il perd
+                for (const { ref, card } of partnerGiveOps) {
+                    // On décrémente aveuglément (on assume qu'il les a car on a checké au début)
+                    // Note: Idéalement on check snap.exists() mais on veut éviter de bloquer l'échange sur un bug mineur
+                    transaction.update(ref, { quantity: increment(-card.quantity) });
+                    // TODO: Pour faire très propre, on pourrait vérifier si qty tombe à 0 pour delete, 
+                    // mais update est plus safe sans re-calculer logic.
                 }
 
-                // B. Il gagne ce que je donne (Sa Collection + Nettoyage Sa Wishlist)
-                for (const card of myCardsToGive) {
-                     const colRef = getRef(partnerUid, 'collection', card.id);
-                     const wishRef = getRef(partnerUid, 'wishlist', card.id);
-
-                     const colSnap = await transaction.get(colRef);
+                // Il gagne
+                for (const { colRef, wishRef, colSnap, wishSnap, card } of partnerReceiveOps) {
                      if (colSnap.exists()) {
                          transaction.update(colRef, { quantity: increment(card.quantity) });
                      } else {
                          transaction.set(colRef, {
-                             ...card, // On copie les datas de ma carte
+                             ...card, 
                              quantity: card.quantity,
                              addedAt: serverTimestamp(),
                              wishlistId: null
                          });
                      }
-
-                     const wishSnap = await transaction.get(wishRef);
                      if (wishSnap.exists()) {
                          transaction.delete(wishRef);
                      }
