@@ -5,6 +5,13 @@ import { collection, onSnapshot, doc, updateDoc, deleteDoc, increment, writeBatc
 import { useAuth } from '@/lib/AuthContext';
 import toast from 'react-hot-toast';
 
+// Definition d'un type partiel pour Scryfall
+type ScryfallDataRaw = {
+    id: string;
+    prices?: { eur?: string; usd?: string };
+    [key: string]: unknown; 
+};
+
 export type CardType = {
   id: string;
   name: string;
@@ -17,14 +24,11 @@ export type CardType = {
   setCode?: string;
   wishlistId?: string;
   
-  // --- OPTIONS ---
   isFoil?: boolean;             
   isSpecificVersion?: boolean;
   isForTrade?: boolean; 
   
-  // --- DONNÉES BRUTES SCRYFALL ---
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  scryfallData?: any;
+  scryfallData?: Record<string, unknown>;
 };
 
 export function useCardCollection(
@@ -116,22 +120,18 @@ export function useCardCollection(
     if(ref) { await deleteDoc(ref); toast.success('Carte retirée', { icon: '🗑️' }); }
   };
 
-  // --- NOUVEAU : MISE À JOUR GLOBALE DES PRIX ---
+  // --- MISE À JOUR GLOBALE DES PRIX ---
   const refreshCollectionPrices = async () => {
       if (!isOwner || cards.length === 0) return;
       const toastId = toast.loading(`Mise à jour de ${cards.length} cartes...`);
 
       try {
-          // 1. Découpage par lots de 75 (Limite API)
           const chunks = [];
           for (let i = 0; i < cards.length; i += 75) {
               chunks.push(cards.slice(i, i + 75));
           }
 
-          let updatedCount = 0;
-
           for (const chunk of chunks) {
-              // On utilise l'ID Scryfall (stocké dans .id pour les cartes Scryfall)
               const identifiers = chunk.map(c => ({ id: c.id }));
 
               const res = await fetch('https://api.scryfall.com/cards/collection', {
@@ -143,8 +143,7 @@ export function useCardCollection(
               if (!res.ok) continue;
 
               const data = await res.json();
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              const foundCards: any[] = data.data || [];
+              const foundCards = (data.data as ScryfallDataRaw[]) || [];
               
               const batch = writeBatch(db);
               let batchHasOps = false;
@@ -153,23 +152,19 @@ export function useCardCollection(
                   const localCard = chunk.find(c => c.id === scryCard.id);
                   const newPrice = parseFloat(scryCard.prices?.eur || "0");
 
-                  // On force la mise à jour pour rafraîchir scryfallData et le prix
                   if (localCard) {
                       const ref = getDocRef(localCard.id);
                       if (ref) {
                           batch.update(ref, { 
                               price: newPrice,
-                              scryfallData: scryCard // Sauvegarde des nouvelles données brutes
+                              scryfallData: scryCard as Record<string, unknown>
                           });
                           batchHasOps = true;
-                          updatedCount++;
                       }
                   }
               });
 
               if (batchHasOps) await batch.commit();
-              
-              // Petit délai pour l'API
               await new Promise(r => setTimeout(r, 100));
           }
 
@@ -178,6 +173,63 @@ export function useCardCollection(
       } catch (e) {
           console.error(e);
           toast.error("Erreur lors de la mise à jour", { id: toastId });
+      }
+  };
+
+  // --- GESTION DE MASSE DU CLASSEUR D'ÉCHANGE ---
+  const bulkSetTradeStatus = async (
+      action: 'excess' | 'all' | 'reset', 
+      threshold: number = 4
+  ) => {
+      if (!isOwner || cards.length === 0) return;
+      
+      const batch = writeBatch(db);
+      let opCount = 0;
+      let label = "";
+
+      cards.forEach(card => {
+          let shouldUpdate = false;
+          let newValue = false;
+
+          if (action === 'reset') {
+              // On retire tout du trade
+              if (card.isForTrade) {
+                  shouldUpdate = true;
+                  newValue = false;
+              }
+              label = "Remise à zéro";
+          } 
+          else if (action === 'all') {
+              // On met tout en trade
+              if (!card.isForTrade) {
+                  shouldUpdate = true;
+                  newValue = true;
+              }
+              label = "Tout ajouter";
+          } 
+          else if (action === 'excess') {
+              // Règle du Playset : Si j'ai plus que X cartes, je mets la pile en échange
+              // Note: on met TOUTE la pile en isForTrade (le modèle actuel ne sépare pas les piles)
+              if (card.quantity > threshold && !card.isForTrade) {
+                  shouldUpdate = true;
+                  newValue = true;
+              }
+          }
+
+          if (shouldUpdate) {
+              const ref = getDocRef(card.id);
+              if (ref) {
+                  batch.update(ref, { isForTrade: newValue });
+                  opCount++;
+              }
+          }
+      });
+
+      if (opCount > 0) {
+          await batch.commit();
+          toast.success(`${opCount} cartes mises à jour (${action === 'excess' ? `Quantité > ${threshold}` : label})`);
+      } else {
+          toast(`Aucune carte ne correspond aux critères.`);
       }
   };
 
@@ -191,6 +243,6 @@ export function useCardCollection(
   return { 
       cards, loading, isOwner, totalPrice,
       updateQuantity, removeCard, setCustomPrice, toggleAttribute,
-      refreshCollectionPrices // <--- Export de la fonction
+      refreshCollectionPrices, bulkSetTradeStatus 
   };
 }

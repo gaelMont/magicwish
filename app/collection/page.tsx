@@ -8,8 +8,8 @@ import MagicCard from '@/components/MagicCard';
 import ImportModal from '@/components/ImportModal';
 import ConfirmModal from '@/components/ConfirmModal';
 import DeleteAllButton from '@/components/DeleteAllButton';
+import CollectionToolsModal from '@/components/CollectionToolsModal';
 
-// 1. Définition stricte des options de tri
 type SortOption = 'name' | 'price_desc' | 'price_asc' | 'quantity' | 'date';
 
 export default function CollectionPage() {
@@ -17,16 +17,16 @@ export default function CollectionPage() {
   
   const { 
     cards, loading, updateQuantity, removeCard, 
-    setCustomPrice, toggleAttribute, refreshCollectionPrices,
+    setCustomPrice, toggleAttribute, refreshCollectionPrices, bulkSetTradeStatus,
     totalPrice 
   } = useCardCollection('collection');
 
   const [isImportOpen, setIsImportOpen] = useState(false);
+  const [isToolsOpen, setIsToolsOpen] = useState(false); // État pour le nouveau modal
   const [cardToDelete, setCardToDelete] = useState<string | null>(null);
 
   const [searchQuery, setSearchQuery] = useState('');
   
-  // 2. Utilisation du type strict
   const [sortBy, setSortBy] = useState<SortOption>('date');
   
   const [filterSet, setFilterSet] = useState<string>('all');
@@ -103,12 +103,13 @@ export default function CollectionPage() {
         </h1>
         
         <div className="flex items-center gap-2">
+           {/* BOUTON OUTILS (Remplace Actualiser simple) */}
            <button 
-             onClick={refreshCollectionPrices}
-             className="bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200 px-3 py-2 rounded-lg text-sm font-medium transition shadow-sm border border-gray-200 dark:border-gray-600"
-             title="Mettre à jour les prix depuis Scryfall"
+             onClick={() => setIsToolsOpen(true)}
+             className="bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200 px-3 py-2 rounded-lg text-sm font-medium transition shadow-sm border border-gray-200 dark:border-gray-600 flex items-center gap-2"
+             title="Gérer la collection (Prix, Échange auto...)"
            >
-             🔄 Actualiser
+             ⚙️ Gérer
            </button>
 
            <DeleteAllButton targetCollection="collection" />
@@ -158,7 +159,6 @@ export default function CollectionPage() {
               <label className="block text-xs font-bold text-gray-500 mb-1 uppercase">Trier par</label>
               <select 
                   value={sortBy} 
-                  // 3. Casting propre vers le type SortOption
                   onChange={(e) => setSortBy(e.target.value as SortOption)}
                   className="w-full p-2.5 rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-900 text-sm focus:ring-2 focus:ring-blue-500 outline-none cursor-pointer"
               >
@@ -222,6 +222,15 @@ export default function CollectionPage() {
       {/* MODALES */}
       <ImportModal isOpen={isImportOpen} onClose={() => setIsImportOpen(false)} targetCollection="collection" />
       
+      {/* NOUVEAU MODAL */}
+      <CollectionToolsModal 
+        isOpen={isToolsOpen}
+        onClose={() => setIsToolsOpen(false)}
+        totalCards={cards.length}
+        onRefreshPrices={refreshCollectionPrices}
+        onBulkTrade={bulkSetTradeStatus}
+      />
+
       <ConfirmModal 
         isOpen={!!cardToDelete} 
         onClose={() => setCardToDelete(null)} 
