@@ -25,21 +25,17 @@ export default function ImportModal({ isOpen, onClose }: ImportModalProps) {
     setFileName(file.name);
 
     Papa.parse(file, {
-      header: true,         // Transforme les lignes en objets
-      skipEmptyLines: true, // Ignore les lignes vides
-      delimiter: ",",       // <--- ON FORCE LA VIRGULE (C'est la clé !)
-      encoding: "UTF-8",    // Pour gérer les accents
+      header: true,
+      skipEmptyLines: true,
+      delimiter: ",",       // On garde la virgule forcée pour Manabox
+      encoding: "UTF-8",    
       complete: (results) => {
         console.log("Résultat brut PapaParse :", results);
-
-        // Si le parsing a échoué et n'a trouvé qu'une seule colonne, on tente un fallback
-        if (results.meta.fields && results.meta.fields.length === 1) {
-             console.warn("Attention : une seule colonne détectée. Tentative de détection auto...");
-             // Ici on pourrait relancer sans délimiteur si besoin, mais
-             // avec Manabox, forcer la virgule est normalement la bonne solution.
-        }
         
-        setColumns(results.meta.fields || []);
+        // Nettoyage des noms de colonnes (trim)
+        const cleanColumns = (results.meta.fields || []).map(col => col.trim());
+
+        setColumns(cleanColumns);
         setData(results.data as any[]);
       },
       error: (error) => {
@@ -82,11 +78,10 @@ export default function ImportModal({ isOpen, onClose }: ImportModalProps) {
               <p className="font-bold text-lg text-gray-700 dark:text-gray-200">
                 Déposer votre fichier Manabox ici
               </p>
-              <p className="text-sm text-gray-400 mt-2">Format .csv attendu</p>
             </div>
           )}
 
-          {/* Écran de résultat (Tableau) */}
+          {/* Écran de résultat (Tableau COMPLET) */}
           {data.length > 0 && (
             <div className="flex flex-col h-full overflow-hidden">
               <div className="flex justify-between items-center mb-3">
@@ -114,11 +109,11 @@ export default function ImportModal({ isOpen, onClose }: ImportModalProps) {
                     </tr>
                   </thead>
                   <tbody>
-                    {data.slice(0, 100).map((row, rowIndex) => (
+                    {/* MODIFICATION ICI : On mappe sur 'data' directement, sans slice */}
+                    {data.map((row, rowIndex) => (
                       <tr key={rowIndex} className="bg-white border-b dark:bg-gray-800 dark:border-gray-700 hover:bg-blue-50 dark:hover:bg-gray-700 transition-colors">
                         {columns.map((col, colIndex) => (
                           <td key={colIndex} className="px-4 py-2 border-r border-gray-100 dark:border-gray-700 whitespace-nowrap max-w-[250px] truncate last:border-r-0">
-                            {/* Affichage sécurisé */}
                             {row[col] !== undefined && row[col] !== null ? String(row[col]) : ''}
                           </td>
                         ))}
@@ -128,7 +123,7 @@ export default function ImportModal({ isOpen, onClose }: ImportModalProps) {
                 </table>
               </div>
               <p className="text-xs text-center text-gray-400 mt-2 italic">
-                Aperçu des 100 premières lignes. Les accents et symboles doivent être lisibles.
+                Affichage complet ({data.length} lignes).
               </p>
             </div>
           )}
