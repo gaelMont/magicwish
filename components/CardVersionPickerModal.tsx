@@ -1,4 +1,3 @@
-// components/CardVersionPickerModal.tsx
 'use client';
 
 import { useState, useEffect, useMemo } from 'react';
@@ -19,30 +18,35 @@ type Props = {
 export default function CardVersionPickerModal({ 
   isOpen, onClose, baseCard, onConfirm, destination, availableLists 
 }: Props) {
-  // ... (états inchangés : versions, loading, selectedVersionId, etc.) ...
   const [versions, setVersions] = useState<ScryfallRawData[]>([]);
   const [loading, setLoading] = useState(false);
+  
   const [selectedVersionId, setSelectedVersionId] = useState<string>('');
   const [isFoil, setIsFoil] = useState(false);
   const [quantity, setQuantity] = useState(1);
   const [isFlipped, setIsFlipped] = useState(false); 
   const [anyVersion, setAnyVersion] = useState(false);
+  
   const [selectedListId, setSelectedListId] = useState<string>('default');
 
-  // ... (useEffect de chargement inchangé) ...
   useEffect(() => {
     const fetchVersions = async (oracleId: string) => {
         setLoading(true);
         try {
           const res = await fetch(`https://api.scryfall.com/cards/search?q=oracle_id:${oracleId}&unique=prints&order=released`);
           const data = await res.json();
+          
           if (data.data && data.data.length > 0) {
             setVersions(data.data); 
             const defaultVer = data.data.find((c: ScryfallRawData) => c.id === baseCard?.id) || data.data[0];
             setSelectedVersionId(defaultVer.id);
           }
-        } catch (e) { console.error(e); toast.error("Erreur versions"); } 
-        finally { setLoading(false); }
+        } catch (e) {
+          console.error(e);
+          toast.error("Impossible de charger les versions");
+        } finally {
+          setLoading(false);
+        }
     };
 
     if (isOpen && baseCard?.oracle_id) {
@@ -56,7 +60,6 @@ export default function CardVersionPickerModal({
     setSelectedListId('default'); 
   }, [isOpen, baseCard]); 
 
-  // ... (currentCardRaw, currentPrice, etc. inchangés) ...
   const currentCardRaw = useMemo(() => {
     return versions.find(v => v.id === selectedVersionId) || baseCard;
   }, [versions, selectedVersionId, baseCard]);
@@ -72,7 +75,6 @@ export default function CardVersionPickerModal({
   const hasFoilVersion = currentCardRaw.finishes?.includes('foil') || !!currentCardRaw.prices?.eur_foil;
   const hasNonFoilVersion = currentCardRaw.finishes?.includes('nonfoil') || !!currentCardRaw.prices?.eur;
 
-  // --- CORRECTION ICI ---
   const handleConfirm = () => {
     const finalCard: CardType = {
         id: currentCardRaw.id,
@@ -84,15 +86,34 @@ export default function CardVersionPickerModal({
         setName: setName,
         setCode: setCode,
         isFoil: isFoil,
-        isSpecificVersion: !anyVersion, 
+        isSpecificVersion: !anyVersion, // Si AnyVersion est coché, Specific est false
         scryfallData: currentCardRaw,
-        // CORRECTION TYPE : undefined au lieu de null
         wishlistId: destination === 'wishlist' ? selectedListId : undefined 
     };
     
-    // On passe l'ID de la liste pour que SearchPage sache où écrire
     onConfirm(finalCard, selectedListId);
     onClose();
+  };
+
+  // --- LOGIQUE AJOUTÉE ICI : Sélection de la version la plus récente ---
+  const handleAnyVersionChange = (checked: boolean) => {
+      setAnyVersion(checked);
+      
+      if (checked && versions.length > 0) {
+          // On trie les versions par date de sortie (la plus récente en premier)
+          // Scryfall renvoie souvent déjà trié, mais on assure le coup avec un sort JS
+          const sorted = [...versions].sort((a, b) => 
+              (b.released_at || '').localeCompare(a.released_at || '')
+          );
+          
+          const newest = sorted[0];
+          if (newest) {
+              setSelectedVersionId(newest.id);
+              // On reset les options visuelles car on change de carte
+              setIsFoil(false);
+              setIsFlipped(false);
+          }
+      }
   };
 
   return (
@@ -123,7 +144,7 @@ export default function CardVersionPickerModal({
                 {isFoil && !anyVersion && <div className="absolute inset-0 bg-gradient-to-tr from-purple-500/30 to-transparent mix-blend-overlay pointer-events-none" />}
             </div>
 
-            {/* SÉLECTION WISHLIST (Seulement si mode wishlist) */}
+            {/* SÉLECTION WISHLIST */}
             {destination === 'wishlist' && availableLists && availableLists.length > 0 && (
                 <div className="w-full space-y-1 bg-purple-900/20 p-3 rounded-xl border border-purple-500/30">
                     <label className="text-xs text-purple-300 font-bold uppercase tracking-wider">Ajouter à la liste :</label>
@@ -139,7 +160,7 @@ export default function CardVersionPickerModal({
                 </div>
             )}
 
-            {/* ÉDITION (Masquée si Generic) */}
+            {/* ÉDITION */}
             <div className={`w-full space-y-2 transition-opacity ${anyVersion ? 'opacity-50 pointer-events-none' : 'opacity-100'}`}>
                 <label className="text-xs text-gray-400 uppercase font-bold tracking-wider">Édition / Set</label>
                 <div className="relative">
@@ -158,14 +179,19 @@ export default function CardVersionPickerModal({
 
             {/* OPTIONS */}
             <div className="w-full space-y-4">
-                {/* Switch Generic */}
+                {/* Switch Generic - MODIFIÉ */}
                 <label className="flex items-center justify-between bg-blue-900/20 p-3 rounded-xl border border-blue-900/50 cursor-pointer hover:bg-blue-900/30 transition">
                     <div className="flex flex-col">
                         <span className="text-sm font-bold text-blue-100">Peu importe l&apos;édition</span>
-                        <span className="text-[10px] text-blue-300">Le scanner cherchera juste le nom &quot;{name}&quot;</span>
+                        <span className="text-[10px] text-blue-300">Sélectionnera la version la plus récente</span>
                     </div>
                     <div className="relative inline-flex items-center cursor-pointer">
-                        <input type="checkbox" className="sr-only peer" checked={anyVersion} onChange={(e) => setAnyVersion(e.target.checked)} />
+                        <input 
+                            type="checkbox" 
+                            className="sr-only peer" 
+                            checked={anyVersion} 
+                            onChange={(e) => handleAnyVersionChange(e.target.checked)} 
+                        />
                         <div className="w-11 h-6 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
                     </div>
                 </label>
