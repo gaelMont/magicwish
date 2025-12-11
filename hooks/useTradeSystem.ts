@@ -25,9 +25,26 @@ export type TradeRequest = {
   createdAt: Timestamp;
 };
 
+// --- UTILITAIRE DE NETTOYAGE ---
+// Firestore déteste les valeurs "undefined". On les convertit en JSON "propre".
+const cleanCardsForFirestore = (cards: CardType[]) => {
+    return cards.map(card => {
+        // On crée une copie superficielle
+        const clean = { ...card };
+        // On parcourt toutes les clés
+        Object.keys(clean).forEach(key => {
+            const k = key as keyof CardType;
+            // Si une valeur est undefined, on supprime la clé
+            if (clean[k] === undefined) {
+                delete clean[k];
+            }
+        });
+        return clean;
+    });
+};
+
 export function useTradeSystem() {
   const { user, username } = useAuth();
-  // Renommage pour éviter conflit de nom
   const { executeTrade, isProcessing: isTransactionProcessing } = useTradeTransaction();
   
   const [incomingTrades, setIncomingTrades] = useState<TradeRequest[]>([]);
@@ -64,27 +81,31 @@ export function useTradeSystem() {
     return () => { unsubIn(); unsubOut(); };
   }, [user]);
 
-  // 2. Proposer
+  // 2. Proposer (CORRIGÉ)
   const proposeTrade = async (receiverUid: string, receiverName: string, toGive: CardType[], toReceive: CardType[]) => {
     if (!user) return;
     const toastId = toast.loading("Envoi de la proposition...");
 
     try {
+      // NETTOYAGE DES DONNÉES AVANT ENVOI
+      const cleanGiven = cleanCardsForFirestore(toGive);
+      const cleanReceived = cleanCardsForFirestore(toReceive);
+
       await addDoc(collection(db, 'trades'), {
         senderUid: user.uid,
         senderName: username || user.displayName || 'Inconnu',
         receiverUid,
         receiverName,
-        itemsGiven: toGive,
-        itemsReceived: toReceive,
+        itemsGiven: cleanGiven,    // <--- Utilisation des versions nettoyées
+        itemsReceived: cleanReceived, // <--- Utilisation des versions nettoyées
         status: 'pending',
         createdAt: serverTimestamp()
       });
       toast.success("Proposition envoyée !", { id: toastId });
       return true;
     } catch (e) {
-      console.error(e);
-      toast.error("Erreur envoi", { id: toastId });
+      console.error("Erreur Firestore:", e); // Ajout d'un log plus clair
+      toast.error("Erreur envoi (voir console)", { id: toastId });
       return false;
     }
   };
