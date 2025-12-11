@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { useAuth } from '@/lib/AuthContext';
 import { db } from '@/lib/firebase';
 import { collection, getDocs, doc, writeBatch } from 'firebase/firestore'; 
-import { useWishlists, WishlistMeta } from './useWishlists'; // <--- 1. Import WishlistMeta
+import { useWishlists, WishlistMeta } from './useWishlists'; 
 import { useFriends, FriendProfile } from './useFriends';
 import { CardType } from './useCardCollection';
 
@@ -23,7 +23,6 @@ export function useTradeMatcher() {
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("");
 
-  // 2. Correction ici : Remplacement de any[] par WishlistMeta[]
   const fetchAllCards = async (uid: string, mode: 'collection' | 'wishlist', userLists: WishlistMeta[] = []) => {
     const cardsMap = new Map<string, CardType>();
 
@@ -76,7 +75,6 @@ export function useTradeMatcher() {
 
              const data = await res.json();
              
-             // 3. Correction ici : On utilise le commentaire spécial pour autoriser any juste ici
              // eslint-disable-next-line @typescript-eslint/no-explicit-any
              const foundCards: any[] = data.data || [];
 
@@ -122,9 +120,6 @@ export function useTradeMatcher() {
             }
         });
 
-        const myCollectionNames = new Set<string>();
-        myCollectionMap.forEach(card => myCollectionNames.add(card.name));
-
         const newProposals: TradeProposal[] = [];
 
         let i = 0;
@@ -138,12 +133,16 @@ export function useTradeMatcher() {
             const toReceive: CardType[] = [];
             const toGive: CardType[] = [];
 
+            // 1. CE QUE JE PEUX RECEVOIR (CHECK AMI)
+            // On vérifie que l'ami a marqué la carte "isForTrade"
             friendCollectionMap.forEach((card) => {
-                if (myWishlistIds.has(card.id)) {
-                    toReceive.push(card);
-                } 
-                else if (myWishlistNames.has(card.name)) {
-                    toReceive.push(card);
+                if (card.isForTrade) { 
+                    if (myWishlistIds.has(card.id)) {
+                        toReceive.push(card);
+                    } 
+                    else if (myWishlistNames.has(card.name)) {
+                        toReceive.push(card);
+                    }
                 }
             });
 
@@ -155,16 +154,21 @@ export function useTradeMatcher() {
                 else friendWishlistNames.add(c.name);
             });
 
+            // 2. CE QUE JE PEUX DONNER (CHECK MOI)
+            // On vérifie que J'AI marqué la carte "isForTrade"
             myCollectionMap.forEach((card) => {
-                if (friendWishlistIds.has(card.id)) {
-                    toGive.push(card);
-                }
-                else if (friendWishlistNames.has(card.name)) {
-                    toGive.push(card);
+                if (card.isForTrade) {
+                    if (friendWishlistIds.has(card.id)) {
+                        toGive.push(card);
+                    }
+                    else if (friendWishlistNames.has(card.name)) {
+                        toGive.push(card);
+                    }
                 }
             });
 
             if (toReceive.length > 0 || toGive.length > 0) {
+                // On met à jour les prix pour avoir une balance précise
                 await refreshPrices(toReceive, friend.uid, 'collection');
                 await refreshPrices(toGive, user.uid, 'collection');
 

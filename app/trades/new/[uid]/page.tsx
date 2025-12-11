@@ -11,7 +11,6 @@ import { useRouter } from 'next/navigation';
 import toast from 'react-hot-toast';
 
 export default function DirectTradePage({ params }: { params: Promise<{ uid: string }> }) {
-  // Récupération des paramètres (Next.js 15)
   const unwrappedParams = use(params);
   const targetUid = unwrappedParams.uid;
 
@@ -20,23 +19,18 @@ export default function DirectTradePage({ params }: { params: Promise<{ uid: str
   const { proposeTrade } = useTradeSystem();
 
   // --- CHARGEMENT DES COLLECTIONS ---
-  // 1. Ma Collection
   const { cards: myCollection, loading: loadingMe } = useCardCollection('collection');
-  // 2. Collection de l'ami (on utilise le 3ème argument targetUid)
   const { cards: friendCollection, loading: loadingHim } = useCardCollection('collection', 'default', targetUid);
 
   // --- ÉTATS ---
   const [targetName, setTargetName] = useState('L\'ami');
   
-  // Cartes sélectionnées pour l'échange
   const [toGive, setToGive] = useState<CardType[]>([]);
   const [toReceive, setToReceive] = useState<CardType[]>([]);
 
-  // Filtres de recherche locaux
   const [searchMe, setSearchMe] = useState('');
   const [searchHim, setSearchHim] = useState('');
 
-  // Récupérer le nom de l'ami pour l'affichage propre
   useEffect(() => {
     const fetchName = async () => {
         try {
@@ -54,8 +48,6 @@ export default function DirectTradePage({ params }: { params: Promise<{ uid: str
     const setTarget = listType === 'give' ? setToGive : setToReceive;
 
     const existing = targetList.find(c => c.id === card.id);
-    
-    // On vérifie qu'on ne dépasse pas le stock disponible de la collection source
     const maxStock = card.quantity;
     const currentSelected = existing ? existing.quantity : 0;
 
@@ -79,14 +71,12 @@ export default function DirectTradePage({ params }: { params: Promise<{ uid: str
   const handlePropose = async () => {
     if (toGive.length === 0 && toReceive.length === 0) return;
     
-    // On lance la proposition d'échange
     const success = await proposeTrade(targetUid, targetName, toGive, toReceive);
     if (success) {
-        router.push('/trades'); // Redirection vers le centre d'échanges après succès
+        router.push('/trades'); 
     }
   };
 
-  // Calculs totaux (Valeurs estimées)
   const valGive = toGive.reduce((acc, c) => acc + (c.customPrice ?? c.price ?? 0) * c.quantity, 0);
   const valReceive = toReceive.reduce((acc, c) => acc + (c.customPrice ?? c.price ?? 0) * c.quantity, 0);
 
@@ -122,7 +112,7 @@ export default function DirectTradePage({ params }: { params: Promise<{ uid: str
                     ))}
                 </div>
 
-                {/* 2. Filtre Recherche locale */}
+                {/* 2. Filtre Recherche */}
                 <input 
                     type="text" 
                     placeholder="Filtrer ma collection..." 
@@ -131,16 +121,18 @@ export default function DirectTradePage({ params }: { params: Promise<{ uid: str
                     onChange={e => setSearchMe(e.target.value)}
                 />
 
-                {/* 3. Liste DISPONIBLE (Source) */}
+                {/* 3. Liste DISPONIBLE */}
                 <div className="grow overflow-y-auto custom-scrollbar space-y-2 pr-1">
                     {loadingMe ? <p>Chargement...</p> : 
                         myCollection
                             .filter(c => c.name.toLowerCase().includes(searchMe.toLowerCase()))
-                            .slice(0, 50) // Limite d'affichage pour éviter le lag
+                            .slice(0, 50) 
                             .map(card => (
                                 <div key={card.id} onClick={() => handleSelectCard(card, 'give')} className="cursor-pointer hover:bg-red-100 dark:hover:bg-red-900/30 p-2 rounded flex items-center gap-2 border border-transparent hover:border-red-200 transition">
-                                    <div className="w-8 h-11 bg-gray-200 rounded shrink-0 overflow-hidden">
-                                        <img src={card.imageUrl} className="w-full h-full object-cover" alt="" />
+                                    <div className="w-8 h-11 bg-gray-200 rounded shrink-0 overflow-hidden relative">
+                                         <img src={card.imageUrl} className="w-full h-full object-cover" alt="" />
+                                         {/* Indicateur si la carte est marquée à l'échange chez MOI (Info visuelle) */}
+                                         {card.isForTrade && <div className="absolute bottom-0 right-0 bg-green-500 text-white text-[8px] px-1">🤝</div>}
                                     </div>
                                     <div className="grow min-w-0">
                                         <p className="font-bold text-xs truncate dark:text-gray-200">{card.name}</p>
@@ -157,7 +149,7 @@ export default function DirectTradePage({ params }: { params: Promise<{ uid: str
             <div className="flex flex-col bg-blue-50/50 dark:bg-blue-900/10 rounded-xl border border-blue-100 dark:border-blue-900 p-4">
                 <h2 className="font-bold text-blue-600 mb-2">📥 Je reçois (Sa Collection)</h2>
 
-                {/* 1. Liste des cartes SÉLECTIONNÉES */}
+                {/* 1. Liste SÉLECTIONNÉE */}
                 <div className="flex-none mb-4 space-y-2 min-h-[100px] bg-white dark:bg-gray-800 p-2 rounded border border-gray-200 dark:border-gray-700 overflow-y-auto max-h-[25vh]">
                     {toReceive.length === 0 && <p className="text-xs text-gray-400 italic text-center py-4">Rien sélectionné</p>}
                     {toReceive.map(card => (
@@ -168,7 +160,7 @@ export default function DirectTradePage({ params }: { params: Promise<{ uid: str
                     ))}
                 </div>
 
-                {/* 2. Filtre Recherche locale (chez l'ami) */}
+                {/* 2. Filtre Recherche */}
                 <input 
                     type="text" 
                     placeholder={`Filtrer la collection de ${targetName}...`}
@@ -177,16 +169,20 @@ export default function DirectTradePage({ params }: { params: Promise<{ uid: str
                     onChange={e => setSearchHim(e.target.value)}
                 />
 
-                {/* 3. Liste DISPONIBLE (Source Ami) */}
+                {/* 3. Liste DISPONIBLE (Source Ami) - FILTRÉE PAR isForTrade */}
                 <div className="grow overflow-y-auto custom-scrollbar space-y-2 pr-1">
                     {loadingHim ? <p>Chargement...</p> : 
                         friendCollection
+                            // 🔒 FILTRE CRUCIAL : On ne montre que ce qui est "En Échange"
+                            .filter(c => c.isForTrade) 
+                            // -----------------------------------------------------------
                             .filter(c => c.name.toLowerCase().includes(searchHim.toLowerCase()))
                             .slice(0, 50)
                             .map(card => (
                                 <div key={card.id} onClick={() => handleSelectCard(card, 'receive')} className="cursor-pointer hover:bg-blue-100 dark:hover:bg-blue-900/30 p-2 rounded flex items-center gap-2 border border-transparent hover:border-blue-200 transition">
-                                    <div className="w-8 h-11 bg-gray-200 rounded shrink-0 overflow-hidden">
+                                    <div className="w-8 h-11 bg-gray-200 rounded shrink-0 overflow-hidden relative">
                                         <img src={card.imageUrl} className="w-full h-full object-cover" alt="" />
+                                        <div className="absolute bottom-0 right-0 bg-green-500 text-white text-[8px] px-1">🤝</div>
                                     </div>
                                     <div className="grow min-w-0">
                                         <p className="font-bold text-xs truncate dark:text-gray-200">{card.name}</p>

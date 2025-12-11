@@ -1,7 +1,7 @@
 // components/MagicCard.tsx
 'use client';
 
-import { useState, useEffect } from 'react'; // <--- useEffect ajouté
+import { useState, useEffect } from 'react';
 
 type MagicCardProps = {
   id?: string;
@@ -15,6 +15,7 @@ type MagicCardProps = {
   
   isFoil?: boolean;
   isSpecificVersion?: boolean;
+  isForTrade?: boolean; // <--- Nouveau
   
   onDelete?: () => void;
   onIncrement?: () => void;
@@ -22,7 +23,8 @@ type MagicCardProps = {
   onMove?: () => void;
   
   onEditPrice?: (newPrice: number) => void;
-  onToggleAttribute?: (field: 'isFoil' | 'isSpecificVersion', currentValue: boolean) => void;
+  // Signature mise à jour pour accepter isForTrade
+  onToggleAttribute?: (field: 'isFoil' | 'isSpecificVersion' | 'isForTrade', currentValue: boolean) => void;
   
   isWishlist?: boolean;
   readOnly?: boolean;
@@ -36,7 +38,7 @@ export default function MagicCard(props: MagicCardProps) {
   const { 
       id, name, imageUrl, imageBackUrl, quantity = 1, 
       price, customPrice, setName, 
-      isFoil, isSpecificVersion, 
+      isFoil, isSpecificVersion, isForTrade,
       isTradeView, allowPriceEdit, 
       onEditPrice, onToggleAttribute, 
       readOnly, isWishlist,
@@ -46,15 +48,12 @@ export default function MagicCard(props: MagicCardProps) {
   const [isFlipped, setIsFlipped] = useState(false);
   const [isEditingPrice, setIsEditingPrice] = useState(false);
   
-  // Initialisation
   const [tempPrice, setTempPrice] = useState(customPrice?.toString() || price?.toString() || "0");
 
-  // --- CORRECTION : Synchronisation ---
-  // Si le parent met à jour customPrice, on met à jour l'input local
- useEffect(() => {
+  // Synchronisation du prix
+  useEffect(() => {
     if (!isEditingPrice) {
         const newVal = customPrice?.toString() || price?.toString() || "0";
-        // eslint-disable-next-line react-hooks/set-state-in-effect
         setTempPrice(newVal);
     }
   }, [customPrice, price, isEditingPrice]);
@@ -117,6 +116,8 @@ export default function MagicCard(props: MagicCardProps) {
       
       {/* --- BADGES ET TOGGLES --- */}
       <div className="absolute top-14 left-4 z-10 flex flex-col gap-1">
+        
+        {/* BOUTON FOIL */}
         {isWishlist && !readOnly && onToggleAttribute && (
             <button 
                 onClick={() => onToggleAttribute('isFoil', !!isFoil)}
@@ -126,6 +127,8 @@ export default function MagicCard(props: MagicCardProps) {
                 ✨
             </button>
         )}
+
+        {/* BOUTON VERSION EXACTE */}
         {isWishlist && !readOnly && onToggleAttribute && (
             <button 
                 onClick={() => onToggleAttribute('isSpecificVersion', !!isSpecificVersion)}
@@ -135,9 +138,24 @@ export default function MagicCard(props: MagicCardProps) {
                 {isSpecificVersion ? '🔒' : '🌍'}
             </button>
         )}
+
+        {/* --- NOUVEAU : BOUTON TRADE (COLLECTION SEULEMENT) --- */}
+        {!isWishlist && !readOnly && onToggleAttribute && (
+            <button 
+                onClick={() => onToggleAttribute('isForTrade', !!isForTrade)}
+                className={`w-8 h-8 rounded-full flex items-center justify-center text-sm shadow-md border transition-all ${
+                    isForTrade 
+                    ? 'bg-green-500 text-white border-green-600 scale-110' 
+                    : 'bg-white/90 text-gray-300 border-gray-300 hover:text-green-500 grayscale'
+                }`}
+                title={isForTrade ? "Disponible à l'échange" : "Non disponible à l'échange"}
+            >
+                🤝
+            </button>
+        )}
       </div>
 
-      {/* --- BOUTONS D'ACTION --- */}
+      {/* --- BOUTONS D'ACTION (Delete/Move) --- */}
       {!readOnly && (
         <div className="absolute top-2 left-2 right-2 flex justify-between z-20 pointer-events-none">
             {isWishlist && onMove && (
@@ -179,6 +197,8 @@ export default function MagicCard(props: MagicCardProps) {
             <p className="text-xs text-blue-600 dark:text-blue-400 truncate font-medium max-w-[70%]">{setName}</p>
             {readOnly && isFoil && <span className="text-[10px] bg-purple-100 text-purple-700 px-1 rounded border border-purple-200">Foil</span>}
             {readOnly && isSpecificVersion && <span className="text-[10px] bg-gray-100 text-gray-700 px-1 rounded border border-gray-200">Exact</span>}
+            {/* BADGE TRADE */}
+            {isForTrade && <span className="text-[10px] bg-green-100 text-green-700 px-1 rounded border border-green-200 font-bold flex items-center gap-1">🤝 Échange</span>}
         </div>
         
         <div className="mt-auto flex justify-between items-end border-t border-gray-100 dark:border-gray-700 pt-2">

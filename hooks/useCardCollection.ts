@@ -17,9 +17,12 @@ export type CardType = {
   setCode?: string;
   wishlistId?: string;
   
-  // --- NOUVEAUX CHAMPS ---
-  isFoil?: boolean;             // L'utilisateur veut-il (ou a-t-il) une version Foil ?
-  isSpecificVersion?: boolean;  // Si true : Je veux CETTE édition précise. Si false : N'importe laquelle.
+  // --- OPTIONS ---
+  isFoil?: boolean;             
+  isSpecificVersion?: boolean;
+  
+  // --- NOUVEAU : CLASSEUR D'ÉCHANGE ---
+  isForTrade?: boolean; 
 };
 
 export function useCardCollection(
@@ -82,13 +85,17 @@ export function useCardCollection(
       }
   };
 
-  // NOUVEAU : Fonction pour changer Foil / Version stricte
-  const toggleAttribute = async (cardId: string, field: 'isFoil' | 'isSpecificVersion', currentValue: boolean) => {
+  // NOUVEAU : On ajoute 'isForTrade' aux champs modifiables
+  const toggleAttribute = async (
+      cardId: string, 
+      field: 'isFoil' | 'isSpecificVersion' | 'isForTrade', 
+      currentValue: boolean
+  ) => {
       if (!isOwner) return;
       const ref = getDocRef(cardId);
       if (ref) {
           await updateDoc(ref, { [field]: !currentValue });
-          // Pas de toast ici pour ne pas spammer l'UI, le switch visuel suffit
+          // Pas de toast pour fluidifier l'UI lors des clics répétés
       }
   };
 
@@ -118,6 +125,6 @@ export function useCardCollection(
 
   return { 
       cards, loading, isOwner, totalPrice,
-      updateQuantity, removeCard, setCustomPrice, toggleAttribute // Export de la nouvelle fonction
+      updateQuantity, removeCard, setCustomPrice, toggleAttribute 
   };
 }
