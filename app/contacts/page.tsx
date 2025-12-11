@@ -1,31 +1,44 @@
 // app/contacts/page.tsx
 'use client';
 
-import { useState } from 'react';
-import Link from 'next/link'; // <--- Import nécessaire pour la navigation
+import { useState, useEffect } from 'react'; // <--- Ajout de useEffect
+import Link from 'next/link';
 import { useAuth } from '@/lib/AuthContext';
 import { useFriends, FriendProfile } from '@/hooks/useFriends';
 import toast from 'react-hot-toast';
 
+// Liste des Planeswalkers pour l'exemple aléatoire
+const PLANESWALKERS = [
+  "Jace", "Liliana", "Chandra", "Ajani", "Garruk", 
+  "Teferi", "Nissa", "Gideon", "Nicol Bolas", "Ugin", 
+  "Karn", "Sorin", "Elspeth", "Tezzeret", "Sarkhan",
+  "Vraska", "Domri", "Ral Zarek", "Kaya", "Narset"
+];
+
 export default function ContactsPage() {
   const { user } = useAuth();
   
-  // On récupère toutes les fonctions et données depuis notre hook
   const { 
     friends, requestsReceived, loading,
     searchUsers, 
     sendFriendRequest, acceptRequest, declineRequest, removeFriend
   } = useFriends();
 
-  // États locaux pour la recherche
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<FriendProfile[]>([]);
   const [isSearching, setIsSearching] = useState(false);
+  
+  // État pour le placeholder aléatoire
+  const [randomPlaceholder, setRandomPlaceholder] = useState("ex: Jace...");
 
-  // Protection simple si pas connecté
+  // Au chargement, on choisit un nom au hasard
+  useEffect(() => {
+    const randomName = PLANESWALKERS[Math.floor(Math.random() * PLANESWALKERS.length)];
+    setRandomPlaceholder(`ex: ${randomName} (pour trouver ${randomName.toLowerCase()}_fan...)`);
+  }, []);
+
   if (!user) return <div className="p-10 text-center">Veuillez vous connecter pour gérer vos contacts.</div>;
 
-  // Gestion de la soumission du formulaire de recherche
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!searchQuery.trim()) return;
@@ -42,7 +55,6 @@ export default function ContactsPage() {
       }
     } catch (err: any) {
         console.error(err);
-        // Gestion spécifique de l'erreur d'Index Firestore (la première fois)
         if (err.message && err.message.includes("indexes")) {
             toast.error("Configuration serveur requise (voir console F12)");
         } else {
@@ -73,7 +85,7 @@ export default function ContactsPage() {
                         <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">@</span>
                         <input 
                             type="text" 
-                            placeholder="ex: bla (pour blaydd...)" 
+                            placeholder={randomPlaceholder} // <--- Placeholder dynamique ici
                             className="w-full pl-7 p-2 border rounded-lg bg-gray-50 dark:bg-gray-900 dark:border-gray-600 outline-none focus:ring-2 focus:ring-blue-500 lowercase text-gray-900 dark:text-white"
                             value={searchQuery}
                             onChange={e => setSearchQuery(e.target.value.toLowerCase())}
@@ -89,7 +101,7 @@ export default function ContactsPage() {
                 </form>
 
                 {/* LISTE DES RÉSULTATS DE RECHERCHE */}
-                <div className="space-y-2 max-h-60 overflow-y-auto">
+                <div className="space-y-2 max-h-60 overflow-y-auto custom-scrollbar">
                     {searchResults.map(result => (
                         <div key={result.uid} className="flex items-center justify-between bg-blue-50 dark:bg-blue-900/20 p-3 rounded-lg border border-blue-100 dark:border-blue-800 animate-in fade-in">
                             <div className="flex items-center gap-3">
