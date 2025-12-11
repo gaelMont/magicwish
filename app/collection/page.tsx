@@ -31,9 +31,7 @@ export default function CollectionPage() {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   
   const [visibleCount, setVisibleCount] = useState(ITEMS_PER_PAGE);
-
-  // NOUVEAU : État pour plier/déplier les filtres sur mobile
-  const [showFilters, setShowFilters] = useState(false);
+  const [showFilters, setShowFilters] = useState(false); // Pour plier/déplier sur mobile
 
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<SortOption>('date');
@@ -132,25 +130,26 @@ export default function CollectionPage() {
       {/* HEADER AMÉLIORÉ POUR MOBILE */}
       <div className="flex flex-col gap-4 mb-6">
         
-        {/* Ligne 1 : Titre + Valeur (Mobile Friendly) */}
+        {/* Ligne 1 : Titre + Valeur (Layout Mobile Friendly) */}
         <div className="flex justify-between items-center">
-            <h1 className="text-2xl md:text-3xl font-bold text-blue-700 dark:text-blue-400">
+            <h1 className="text-2xl md:text-3xl font-bold text-blue-700 dark:text-blue-400 truncate">
                 Ma Collection 
                 <span className="ml-2 text-base font-normal text-gray-500">
                     ({filteredAndSortedCards.length})
                 </span>
             </h1>
-            <div className="bg-blue-50 dark:bg-blue-900/30 text-blue-800 dark:text-blue-100 px-3 py-1.5 rounded-lg border border-blue-200 dark:border-blue-700 text-right">
+            <div className="flex-shrink-0 bg-blue-50 dark:bg-blue-900/30 text-blue-800 dark:text-blue-100 px-3 py-1.5 rounded-lg border border-blue-200 dark:border-blue-700 text-right">
                 <span className="text-[10px] uppercase tracking-wide opacity-70 block">Total</span>
                 <span className="font-bold whitespace-nowrap">{totalPrice.toFixed(2)} EUR</span>
             </div>
         </div>
         
-        {/* Ligne 2 : Actions (Défilable sur mobile pour éviter l'écrasement) */}
-        <div className="flex items-center gap-2 overflow-x-auto pb-2 scrollbar-hide -mx-4 px-4 md:mx-0 md:px-0">
+        {/* Ligne 2 : Actions (Scrollable horizontalement sur mobile pour ne pas écraser les boutons) */}
+        {/* 'overflow-x-auto' permet de scroller si ça dépasse */}
+        <div className="flex items-center gap-2 overflow-x-auto pb-2 -mx-4 px-4 md:mx-0 md:px-0 no-scrollbar">
            <button 
              onClick={() => { setIsSelectMode(!isSelectMode); setSelectedIds([]); }}
-             className={`flex-shrink-0 px-3 py-2 rounded-lg text-sm font-medium transition shadow-sm border flex items-center gap-2 ${isSelectMode ? 'bg-blue-600 text-white border-blue-600' : 'bg-white hover:bg-gray-100 text-gray-700 border-gray-300 dark:bg-gray-800 dark:border-gray-600 dark:text-gray-200'}`}
+             className={`flex-shrink-0 px-3 py-2 rounded-lg text-sm font-medium transition shadow-sm border flex items-center gap-2 whitespace-nowrap ${isSelectMode ? 'bg-blue-600 text-white border-blue-600' : 'bg-white hover:bg-gray-100 text-gray-700 border-gray-300 dark:bg-gray-800 dark:border-gray-600 dark:text-gray-200'}`}
            >
              {isSelectMode ? 'Annuler' : 'Selectionner'}
            </button>
@@ -159,19 +158,18 @@ export default function CollectionPage() {
                <>
                 <button 
                     onClick={() => setIsToolsOpen(true)}
-                    className="flex-shrink-0 bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200 px-3 py-2 rounded-lg text-sm font-medium transition shadow-sm border border-gray-200 dark:border-gray-600 flex items-center gap-2"
+                    className="flex-shrink-0 bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200 px-3 py-2 rounded-lg text-sm font-medium transition shadow-sm border border-gray-200 dark:border-gray-600 flex items-center gap-2 whitespace-nowrap"
                 >
                     Gerer
                 </button>
 
-                {/* Composant DeleteAllButton modifié pour être flex-shrink-0 si possible, sinon on l'encapsule */}
                 <div className="flex-shrink-0">
                     <DeleteAllButton targetCollection="collection" />
                 </div>
                 
                 <button 
                     onClick={() => setIsImportOpen(true)} 
-                    className="flex-shrink-0 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition shadow-sm"
+                    className="flex-shrink-0 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition shadow-sm whitespace-nowrap"
                 >
                     Importer CSV
                 </button>
@@ -182,7 +180,7 @@ export default function CollectionPage() {
 
       {/* FILTRES COMPACTS */}
       <div className="bg-white dark:bg-gray-800 p-4 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm mb-6">
-          <div className="flex gap-2">
+          <div className="flex gap-2 items-center">
               <div className="flex-grow">
                   <input 
                       type="text" 
@@ -195,13 +193,13 @@ export default function CollectionPage() {
               {/* Bouton Toggle Filtres (Mobile uniquement) */}
               <button 
                 onClick={() => setShowFilters(!showFilters)}
-                className="md:hidden px-3 py-2 bg-gray-100 dark:bg-gray-700 rounded-lg text-gray-600 dark:text-gray-300 border border-gray-300 dark:border-gray-600"
+                className="md:hidden flex-shrink-0 px-3 py-2 bg-gray-100 dark:bg-gray-700 rounded-lg text-gray-600 dark:text-gray-300 border border-gray-300 dark:border-gray-600 text-sm font-medium"
               >
-                {showFilters ? '▲' : 'Filtres ▼'}
+                {showFilters ? 'Masquer' : 'Filtres'}
               </button>
           </div>
 
-          {/* Zone de filtres pliable */}
+          {/* Zone de filtres pliable sur mobile */}
           <div className={`mt-4 space-y-4 md:space-y-0 md:flex md:items-end md:gap-4 ${showFilters ? 'block' : 'hidden md:flex'}`}>
             <div className="min-w-[200px]">
                 <label className="block text-xs font-bold text-gray-500 mb-1 uppercase">Edition</label>
@@ -220,7 +218,7 @@ export default function CollectionPage() {
                     <option value="quantity">Quantite</option>
                 </select>
             </div>
-            <div className="flex items-center gap-4 pb-3">
+            <div className="flex items-center gap-4 pb-3 pt-2 md:pt-0">
                 <label className="flex items-center gap-2 cursor-pointer select-none">
                     <input type="checkbox" checked={filterFoil} onChange={(e) => setFilterFoil(e.target.checked)} className="w-4 h-4 text-blue-600 rounded" />
                     <span className="text-sm font-medium">Foil</span>
@@ -244,7 +242,7 @@ export default function CollectionPage() {
           </div>
       )}
 
-      {/* GRILLE (inchangée) */}
+      {/* GRILLE */}
       {filteredAndSortedCards.length === 0 ? (
         <div className="text-center py-20 bg-gray-50 dark:bg-gray-800/50 rounded-xl border-2 border-dashed border-gray-200 dark:border-gray-700">
           <p className="text-xl text-gray-500 mb-4">Aucun resultat ne correspond a vos filtres.</p>
@@ -268,6 +266,7 @@ export default function CollectionPage() {
             ))}
             </div>
 
+            {/* BOUTON CHARGER PLUS */}
             {visibleCount < filteredAndSortedCards.length && (
                 <div className="mt-8 flex justify-center pb-10">
                     <button 
