@@ -1,7 +1,7 @@
 // hooks/useCardCollection.ts
 import { useState, useEffect, useMemo } from 'react';
 import { db } from '@/lib/firebase';
-import { collection, onSnapshot, doc, updateDoc, deleteDoc, increment } from 'firebase/firestore';
+import { collection, onSnapshot, doc, updateDoc, deleteDoc, increment, writeBatch } from 'firebase/firestore';
 import { useAuth } from '@/lib/AuthContext';
 import toast from 'react-hot-toast';
 
@@ -22,7 +22,7 @@ export type CardType = {
   isSpecificVersion?: boolean;
   isForTrade?: boolean; 
   
-  // --- NOUVEAU : DONNÉES BRUTES SCRYFALL ---
+  // --- DONNÉES BRUTES SCRYFALL ---
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   scryfallData?: any;
 };
@@ -116,6 +116,71 @@ export function useCardCollection(
     if(ref) { await deleteDoc(ref); toast.success('Carte retirée', { icon: '🗑️' }); }
   };
 
+  // --- NOUVEAU : MISE À JOUR GLOBALE DES PRIX ---
+  const refreshCollectionPrices = async () => {
+      if (!isOwner || cards.length === 0) return;
+      const toastId = toast.loading(`Mise à jour de ${cards.length} cartes...`);
+
+      try {
+          // 1. Découpage par lots de 75 (Limite API)
+          const chunks = [];
+          for (let i = 0; i < cards.length; i += 75) {
+              chunks.push(cards.slice(i, i + 75));
+          }
+
+          let updatedCount = 0;
+
+          for (const chunk of chunks) {
+              // On utilise l'ID Scryfall (stocké dans .id pour les cartes Scryfall)
+              const identifiers = chunk.map(c => ({ id: c.id }));
+
+              const res = await fetch('https://api.scryfall.com/cards/collection', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ identifiers })
+              });
+
+              if (!res.ok) continue;
+
+              const data = await res.json();
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              const foundCards: any[] = data.data || [];
+              
+              const batch = writeBatch(db);
+              let batchHasOps = false;
+
+              foundCards.forEach(scryCard => {
+                  const localCard = chunk.find(c => c.id === scryCard.id);
+                  const newPrice = parseFloat(scryCard.prices?.eur || "0");
+
+                  // On force la mise à jour pour rafraîchir scryfallData et le prix
+                  if (localCard) {
+                      const ref = getDocRef(localCard.id);
+                      if (ref) {
+                          batch.update(ref, { 
+                              price: newPrice,
+                              scryfallData: scryCard // Sauvegarde des nouvelles données brutes
+                          });
+                          batchHasOps = true;
+                          updatedCount++;
+                      }
+                  }
+              });
+
+              if (batchHasOps) await batch.commit();
+              
+              // Petit délai pour l'API
+              await new Promise(r => setTimeout(r, 100));
+          }
+
+          toast.success("Collection mise à jour avec succès !", { id: toastId });
+
+      } catch (e) {
+          console.error(e);
+          toast.error("Erreur lors de la mise à jour", { id: toastId });
+      }
+  };
+
   const totalPrice = useMemo(() => {
     return cards.reduce((acc, card) => {
         const effectivePrice = card.customPrice !== undefined ? card.customPrice : (card.price || 0);
@@ -125,6 +190,7 @@ export function useCardCollection(
 
   return { 
       cards, loading, isOwner, totalPrice,
-      updateQuantity, removeCard, setCustomPrice, toggleAttribute 
+      updateQuantity, removeCard, setCustomPrice, toggleAttribute,
+      refreshCollectionPrices // <--- Export de la fonction
   };
 }
