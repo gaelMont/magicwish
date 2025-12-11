@@ -77,6 +77,7 @@ function MagicCard(props: MagicCardProps) {
       }
   };
 
+  // --- VUE LISTE (TRADE) ---
   if (isTradeView) {
       return (
         <div className="flex items-center gap-3 bg-white dark:bg-gray-800 p-2 rounded-lg border border-gray-100 dark:border-gray-700 content-visibility-auto">
@@ -117,6 +118,7 @@ function MagicCard(props: MagicCardProps) {
       );
   }
 
+  // --- VUE NORMALE (GRILLE) ---
   return (
     <div 
         onClick={handleCardClick}
@@ -131,11 +133,6 @@ function MagicCard(props: MagicCardProps) {
         `}
     >
       
-      {!readOnly && !isSelectMode && isWishlist && onMove && (
-        <div className="absolute top-2 left-2 right-2 flex justify-end z-20 pointer-events-none">
-            <button onClick={(e) => { e.stopPropagation(); onMove(); }} className="pointer-events-auto p-1.5 bg-green-100 text-green-700 hover:bg-green-600 hover:text-white rounded-full transition opacity-100 md:opacity-0 md:group-hover:opacity-100 shadow-sm text-xs font-bold">Deplacer</button>
-        </div>
-      )}
 
       {isSelectMode && (
           <div className="absolute top-2 right-2 z-30 pointer-events-none">
@@ -210,6 +207,7 @@ function MagicCard(props: MagicCardProps) {
                 )
             )}
             
+            {/* LE BOUTON ACHETÉ RESTE ICI */}
             {isWishlist && !readOnly && !isSelectMode && onMove && (
                 <button 
                     onClick={(e) => { e.stopPropagation(); onMove(); }}
