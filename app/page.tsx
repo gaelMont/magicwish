@@ -6,37 +6,13 @@ import { useAuth } from '@/lib/AuthContext';
 import { db } from '@/lib/firebase';
 import { doc, setDoc, updateDoc, getDoc, increment } from 'firebase/firestore'; 
 import { useWishlists } from '@/hooks/useWishlists';
+import { normalizeCardData, ScryfallRawData } from '@/lib/cardUtils'; // <--- IMPORT
 import toast from 'react-hot-toast';
 
-// --- TYPES ---
-type ScryfallCard = {
-  id: string;
-  oracle_id: string;
-  name: string;
-  set_name: string;
-  set: string;
-  released_at: string;
-  image_uris?: { small: string; normal: string; };
-  card_faces?: { image_uris?: { small: string; normal: string; }; }[];
-  prices?: { eur?: string; };
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  [key: string]: any; // Permet de stocker tout le reste
-};
-
-const CARD_BACK_URL = "https://cards.scryfall.io/large/front/a/6/a6984342-f723-4e80-8e69-902d287a915f.jpg";
-
-const getCardImage = (card: ScryfallCard): string => {
-  if (card.image_uris?.normal) return card.image_uris.normal;
-  if (card.card_faces && card.card_faces[0]?.image_uris?.normal) {
-    return card.card_faces[0].image_uris.normal;
-  }
-  return CARD_BACK_URL;
-};
-
 // --- SOUS-COMPOSANT CARTE ---
-const CardGroup = ({ name, versions, targetListId }: { name: string, versions: ScryfallCard[], targetListId: string }) => {
+const CardGroup = ({ name, versions, targetListId }: { name: string, versions: ScryfallRawData[], targetListId: string }) => {
   const { user } = useAuth();
-  const [selectedCard, setSelectedCard] = useState<ScryfallCard>(versions[0]);
+  const [selectedCard, setSelectedCard] = useState<ScryfallRawData>(versions[0]);
   
   const [isFoil, setIsFoil] = useState(false);
   const [isSpecificVersion, setIsSpecificVersion] = useState(false);
@@ -46,13 +22,18 @@ const CardGroup = ({ name, versions, targetListId }: { name: string, versions: S
     if (newVersion) setSelectedCard(newVersion);
   };
 
+  // On utilise l'utilitaire pour l'affichage propre
+  const { imageUrl } = normalizeCardData(selectedCard);
+
   const addToWishlist = async () => {
     if (!user) {
       toast.error("Connectez-vous pour ajouter des cartes !");
       return;
     }
 
-    const card = selectedCard; 
+    // ⚡ Utilisation de la fonction centralisée
+    const { id, name, imageUrl, imageBackUrl, setName, setCode, price, scryfallData } = normalizeCardData(selectedCard);
+    
     let collectionPath = '';
     if (targetListId === 'default') {
         collectionPath = `users/${user.uid}/wishlist`;
@@ -60,38 +41,34 @@ const CardGroup = ({ name, versions, targetListId }: { name: string, versions: S
         collectionPath = `users/${user.uid}/wishlists_data/${targetListId}/cards`;
     }
     
-    const wishlistRef = doc(db, collectionPath, card.id);
-    const validImageUrl = getCardImage(card);
-    const priceNumber = card.prices?.eur ? parseFloat(card.prices.eur) : 0;
-    const cleanName = card.name.split(' // ')[0];
+    const wishlistRef = doc(db, collectionPath, id);
 
     try {
       const docSnap = await getDoc(wishlistRef);
       if (docSnap.exists()) {
         await updateDoc(wishlistRef, { 
           quantity: increment(1),
-          price: priceNumber,
+          price: price,
           isFoil: isFoil,
           isSpecificVersion: isSpecificVersion,
-          // Mise à jour de la data fraîche
-          scryfallData: card 
+          scryfallData: scryfallData 
         });
-        toast.success(`+1 exemplaire (${card.set_name})`);
+        toast.success(`+1 exemplaire (${setName})`);
       } else {
         await setDoc(wishlistRef, {
-          name: cleanName,
-          imageUrl: validImageUrl,
+          name,
+          imageUrl,
+          imageBackUrl: imageBackUrl || null, // Important pour Firestore
           quantity: 1,
-          price: priceNumber,
-          setName: card.set_name,
-          setCode: card.set,
+          price: price,
+          setName: setName,
+          setCode: setCode,
           addedAt: new Date(),
           isFoil: isFoil,
           isSpecificVersion: isSpecificVersion,
-          // SAUVEGARDE DE TOUTES LES DONNÉES
-          scryfallData: card 
+          scryfallData: scryfallData 
         });
-        toast.success(`Ajoutée : ${card.set_name}`);
+        toast.success(`Ajoutée : ${setName}`);
       }
     } catch (error) {
       console.error(error);
@@ -102,7 +79,7 @@ const CardGroup = ({ name, versions, targetListId }: { name: string, versions: S
   return (
     <div className="relative group flex flex-col h-full bg-white dark:bg-gray-800 rounded-xl shadow-md border border-gray-100 dark:border-gray-700 overflow-hidden">
       <div className="relative w-full min-h-[250px] bg-gray-200 dark:bg-gray-900 flex items-center justify-center p-2">
-        <img src={getCardImage(selectedCard)} alt={name} className="w-full h-full object-contain max-h-[350px]" />
+        <img src={imageUrl} alt={name} className="w-full h-full object-contain max-h-[350px]" />
       </div>
 
       <div className="p-3 flex flex-col flex-grow gap-2">
@@ -159,7 +136,7 @@ export default function HomePage() {
   const [selectedTargetList, setSelectedTargetList] = useState<string>('default');
 
   const [query, setQuery] = useState('');
-  const [groupedResults, setGroupedResults] = useState<{ name: string, versions: ScryfallCard[] }[]>([]);
+  const [groupedResults, setGroupedResults] = useState<{ name: string, versions: ScryfallRawData[] }[]>([]);
   const [isSearching, setIsSearching] = useState(false);
 
   const handleSearch = async (e: React.FormEvent) => {
@@ -172,9 +149,9 @@ export default function HomePage() {
       const response = await fetch(`/api/search?q=${query}`);
       if (!response.ok) throw new Error('Erreur');
       const data = await response.json();
-      const rawCards: ScryfallCard[] = data.data || [];
+      const rawCards: ScryfallRawData[] = data.data || [];
 
-      const groups = new Map<string, ScryfallCard[]>();
+      const groups = new Map<string, ScryfallRawData[]>();
       rawCards.forEach(card => {
         const cleanName = card.name.split(' // ')[0];
         if (!groups.has(cleanName)) groups.set(cleanName, []);

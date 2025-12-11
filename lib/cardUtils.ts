@@ -5,18 +5,29 @@
 export type ScryfallRawData = any;
 
 export const normalizeCardData = (data: ScryfallRawData) => {
-  const isDoubleFaced = data.card_faces && data.card_faces.length > 1;
-  const rawName = isDoubleFaced ? data.card_faces[0].name : data.name;
-  const name = rawName.split(' // ')[0];
+  // Gestion des noms pour les cartes doubles (ex: "Malakir Rebirth // Malakir Mire")
+  const rawName = data.name;
+  const name = rawName.split(' // ')[0]; 
 
-  let imageUrl = data.image_uris?.normal;
-  let imageBackUrl = undefined;
+  let imageUrl = "";
+  let imageBackUrl: string | null = null;
 
-  if (isDoubleFaced) {
+  // CAS 1 : Carte standard (image à la racine)
+  if (data.image_uris?.normal) {
+    imageUrl = data.image_uris.normal;
+  } 
+  // CAS 2 : Carte double face (Transform, Modal DFC, etc.)
+  else if (data.card_faces && data.card_faces.length > 0) {
+    // Face Avant
     imageUrl = data.card_faces[0].image_uris?.normal;
-    imageBackUrl = data.card_faces[1].image_uris?.normal;
+    
+    // Face Arrière (si elle a une image)
+    if (data.card_faces[1] && data.card_faces[1].image_uris?.normal) {
+      imageBackUrl = data.card_faces[1].image_uris.normal;
+    }
   }
 
+  // Fallback si aucune image trouvée (Card Back par défaut)
   if (!imageUrl) {
     imageUrl = "https://cards.scryfall.io/large/front/a/6/a6984342-f723-4e80-8e69-902d287a915f.jpg";
   }
@@ -26,10 +37,10 @@ export const normalizeCardData = (data: ScryfallRawData) => {
     scryfallId: data.id,
     name,
     imageUrl,
-    imageBackUrl,
+    imageBackUrl, // Sera string ou null (jamais undefined)
     setName: data.set_name,
     setCode: data.set,
     price: parseFloat(data.prices?.eur || "0"),
-    // On peut aussi retourner la data brute ici si besoin, mais c'est fait ailleurs
+    scryfallData: data // On garde la donnée brute
   };
 };

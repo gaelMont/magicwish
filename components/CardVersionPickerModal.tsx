@@ -3,38 +3,25 @@
 
 import { useState, useEffect, useMemo } from 'react';
 import { CardType } from '@/hooks/useCardCollection';
+import { normalizeCardData, ScryfallRawData } from '@/lib/cardUtils'; // <--- On utilise l'utilitaire
 import toast from 'react-hot-toast';
 
-export type ScryfallCardRaw = {
-  id: string;
-  oracle_id: string;
-  name: string;
-  set: string;
-  set_name: string;
-  collector_number: string;
-  released_at: string;
-  image_uris?: { normal: string; small?: string };
-  card_faces?: Array<{ image_uris?: { normal: string } }>;
-  prices?: { eur?: string; eur_foil?: string };
-  finishes?: string[]; 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  [key: string]: any; // <--- Autoriser les autres champs
-};
-
+// On utilise le type brut défini dans utils
 type Props = {
   isOpen: boolean;
   onClose: () => void;
-  baseCard: ScryfallCardRaw | null; 
+  baseCard: ScryfallRawData | null; 
   onConfirm: (card: CardType) => void;
 };
 
 export default function CardVersionPickerModal({ isOpen, onClose, baseCard, onConfirm }: Props) {
-  const [versions, setVersions] = useState<ScryfallCardRaw[]>([]);
+  const [versions, setVersions] = useState<ScryfallRawData[]>([]);
   const [loading, setLoading] = useState(false);
   
   const [selectedVersionId, setSelectedVersionId] = useState<string>('');
   const [isFoil, setIsFoil] = useState(false);
   const [quantity, setQuantity] = useState(1);
+  const [isFlipped, setIsFlipped] = useState(false); // Pour prévisualiser le verso
 
   useEffect(() => {
     const fetchVersions = async (oracleId: string) => {
@@ -44,9 +31,9 @@ export default function CardVersionPickerModal({ isOpen, onClose, baseCard, onCo
           const data = await res.json();
           
           if (data.data && data.data.length > 0) {
-            setVersions(data.data as ScryfallCardRaw[]); 
+            setVersions(data.data); 
             
-            const defaultVer = data.data.find((c: ScryfallCardRaw) => c.id === baseCard?.id) || data.data[0];
+            const defaultVer = data.data.find((c: ScryfallRawData) => c.id === baseCard?.id) || data.data[0];
             setSelectedVersionId(defaultVer.id);
           }
         } catch (e) {
@@ -63,37 +50,40 @@ export default function CardVersionPickerModal({ isOpen, onClose, baseCard, onCo
 
     setQuantity(1);
     setIsFoil(false);
+    setIsFlipped(false);
   }, [isOpen, baseCard]); 
 
-  const currentCard = useMemo(() => {
+  const currentCardRaw = useMemo(() => {
     return versions.find(v => v.id === selectedVersionId) || baseCard;
   }, [versions, selectedVersionId, baseCard]);
 
-  if (!isOpen || !currentCard) return null;
+  if (!isOpen || !currentCardRaw) return null;
 
-  const imageUrl = currentCard.image_uris?.normal || currentCard.card_faces?.[0]?.image_uris?.normal || "https://cards.scryfall.io/large/front/a/6/a6984342-f723-4e80-8e69-902d287a915f.jpg";
+  // UTILISATION DE LA FONCTION NORMALISÉE POUR AVOIR LES BONNES IMAGES
+  const { imageUrl, imageBackUrl, name, setName, setCode, price } = normalizeCardData(currentCardRaw);
   
-  const priceNormal = parseFloat(currentCard.prices?.eur || "0");
-  const priceFoil = parseFloat(currentCard.prices?.eur_foil || "0");
-  
+  // Prix
+  const priceNormal = parseFloat(currentCardRaw.prices?.eur || "0");
+  const priceFoil = parseFloat(currentCardRaw.prices?.eur_foil || "0");
   const currentPrice = isFoil ? (priceFoil || priceNormal) : (priceNormal || priceFoil);
   
-  const hasFoilVersion = currentCard.finishes?.includes('foil') || !!currentCard.prices?.eur_foil;
-  const hasNonFoilVersion = currentCard.finishes?.includes('nonfoil') || !!currentCard.prices?.eur;
+  // Disponibilité Foil
+  const hasFoilVersion = currentCardRaw.finishes?.includes('foil') || !!currentCardRaw.prices?.eur_foil;
+  const hasNonFoilVersion = currentCardRaw.finishes?.includes('nonfoil') || !!currentCardRaw.prices?.eur;
 
   const handleConfirm = () => {
     const finalCard: CardType = {
-        id: currentCard.id,
-        name: currentCard.name,
+        id: currentCardRaw.id,
+        name: name,
         imageUrl: imageUrl,
+        imageBackUrl: imageBackUrl || undefined, // undefined est accepté par le type CardType, mais null par Firestore
         quantity: quantity,
         price: currentPrice,
-        setName: currentCard.set_name,
-        setCode: currentCard.set,
+        setName: setName,
+        setCode: setCode,
         isFoil: isFoil,
         isSpecificVersion: true,
-        // --- SAUVEGARDE COMPLÈTE ICI ---
-        scryfallData: currentCard
+        scryfallData: currentCardRaw
     };
     onConfirm(finalCard);
     onClose();
@@ -105,21 +95,35 @@ export default function CardVersionPickerModal({ isOpen, onClose, baseCard, onCo
         
         {/* HEADER */}
         <div className="p-4 flex justify-between items-center border-b border-gray-800">
-            <h3 className="text-white font-bold truncate pr-4">{currentCard.name}</h3>
+            <h3 className="text-white font-bold truncate pr-4">{name}</h3>
             <button onClick={onClose} className="text-gray-400 hover:text-white px-2 text-xl">✕</button>
         </div>
 
         {/* CONTENU SCROLLABLE */}
         <div className="overflow-y-auto p-6 flex flex-col items-center space-y-6 custom-scrollbar">
             
-            {/* 1. IMAGE DISPLAY */}
-            <div className="relative w-64 aspect-[2.5/3.5] rounded-xl overflow-hidden shadow-lg ring-1 ring-white/10 group">
+            {/* 1. IMAGE DISPLAY AVEC FLIP */}
+            <div 
+                className="relative w-64 aspect-[2.5/3.5] rounded-xl overflow-hidden shadow-lg ring-1 ring-white/10 group cursor-pointer"
+                onClick={() => imageBackUrl && setIsFlipped(!isFlipped)}
+            >
                 {loading ? (
                     <div className="w-full h-full bg-gray-800 animate-pulse flex items-center justify-center text-gray-500">Chargement...</div>
                 ) : (
-                    <img src={imageUrl} alt="" className="w-full h-full object-cover" />
+                    <img 
+                        src={isFlipped && imageBackUrl ? imageBackUrl : imageUrl} 
+                        alt="" 
+                        className="w-full h-full object-cover transition-transform duration-300" 
+                    />
                 )}
+                
                 {isFoil && <div className="absolute inset-0 bg-gradient-to-tr from-purple-500/30 to-transparent mix-blend-overlay pointer-events-none" />}
+                
+                {imageBackUrl && (
+                    <div className="absolute bottom-2 right-2 bg-black/60 text-white p-1.5 rounded-full backdrop-blur-md">
+                        🔄
+                    </div>
+                )}
             </div>
 
             {/* 2. SÉLECTEUR D'ÉDITION */}
@@ -131,7 +135,8 @@ export default function CardVersionPickerModal({ isOpen, onClose, baseCard, onCo
                         value={selectedVersionId}
                         onChange={(e) => {
                             setSelectedVersionId(e.target.value);
-                            setIsFoil(false); 
+                            setIsFoil(false);
+                            setIsFlipped(false);
                         }}
                     >
                         {versions.map((v) => (
