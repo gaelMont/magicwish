@@ -1,7 +1,7 @@
 // app/contacts/page.tsx
 'use client';
 
-import { useState, useEffect } from 'react'; // <--- Ajout de useEffect
+import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useAuth } from '@/lib/AuthContext';
 import { useFriends, FriendProfile } from '@/hooks/useFriends';
@@ -53,9 +53,11 @@ export default function ContactsPage() {
       if (results.length === 0) {
         toast("Aucun utilisateur trouvé", { icon: '🤷‍♂️' });
       }
-    } catch (err: any) {
+    } catch (err: unknown) { // 1. On utilise 'unknown' au lieu de 'any'
         console.error(err);
-        if (err.message && err.message.includes("indexes")) {
+        
+        // 2. On vérifie que c'est bien une Erreur standard avant de lire '.message'
+        if (err instanceof Error && err.message.includes("indexes")) {
             toast.error("Configuration serveur requise (voir console F12)");
         } else {
             toast.error("Erreur lors de la recherche");
@@ -85,7 +87,7 @@ export default function ContactsPage() {
                         <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">@</span>
                         <input 
                             type="text" 
-                            placeholder={randomPlaceholder} // <--- Placeholder dynamique ici
+                            placeholder={randomPlaceholder} 
                             className="w-full pl-7 p-2 border rounded-lg bg-gray-50 dark:bg-gray-900 dark:border-gray-600 outline-none focus:ring-2 focus:ring-blue-500 lowercase text-gray-900 dark:text-white"
                             value={searchQuery}
                             onChange={e => setSearchQuery(e.target.value.toLowerCase())}
@@ -166,7 +168,7 @@ export default function ContactsPage() {
                 <p className="text-gray-500 text-sm">Chargement...</p>
             ) : friends.length === 0 ? (
                 <div className="text-center py-10 text-gray-400 italic">
-                    <p>Aucun ami pour l'instant.</p>
+                    <p>Aucun ami pour l&apos;instant.</p>
                 </div>
             ) : (
                 <div className="space-y-2">
@@ -192,6 +194,14 @@ export default function ContactsPage() {
                                     className="text-xs bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300 px-3 py-1.5 rounded hover:bg-blue-200 dark:hover:bg-blue-800 transition font-medium"
                                 >
                                     Voir
+                                </Link>
+
+                                {/* --- NOUVEAU : BOUTON ÉCHANGER --- */}
+                                <Link 
+                                    href={`/trades/new/${friend.uid}`}
+                                    className="text-xs bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300 px-3 py-1.5 rounded hover:bg-purple-200 dark:hover:bg-purple-800 transition font-medium flex items-center gap-1"
+                                >
+                                    🤝 Échanger
                                 </Link>
                                 
                                 <button 

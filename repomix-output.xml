@@ -50,6 +50,7 @@ app/layout.tsx
 app/login/page.tsx
 app/page.tsx
 app/trades/manual/page.tsx
+app/trades/new/[uid]/page.tsx
 app/trades/page.tsx
 app/user/[uid]/page.tsx
 app/wishlist/page.tsx
@@ -86,6 +87,463 @@ tsconfig.json
 
 <files>
 This section contains the contents of the repository's files.
+
+<file path="app/trades/new/[uid]/page.tsx">
+// app/trades/new/[uid]/page.tsx
+'use client';
+
+import { useState, use, useEffect } from 'react';
+import { useAuth } from '@/lib/AuthContext';
+import { useCardCollection, CardType } from '@/hooks/useCardCollection';
+import { useTradeSystem } from '@/hooks/useTradeSystem';
+import { db } from '@/lib/firebase';
+import { doc, getDoc } from 'firebase/firestore';
+import { useRouter } from 'next/navigation';
+import toast from 'react-hot-toast';
+
+export default function DirectTradePage({ params }: { params: Promise<{ uid: string }> }) {
+  // Récupération des paramètres (Next.js 15)
+  const unwrappedParams = use(params);
+  const targetUid = unwrappedParams.uid;
+
+  const { user } = useAuth();
+  const router = useRouter();
+  const { proposeTrade } = useTradeSystem();
+
+  // --- CHARGEMENT DES COLLECTIONS ---
+  // 1. Ma Collection
+  const { cards: myCollection, loading: loadingMe } = useCardCollection('collection');
+  // 2. Collection de l'ami (on utilise le 3ème argument targetUid)
+  const { cards: friendCollection, loading: loadingHim } = useCardCollection('collection', 'default', targetUid);
+
+  // --- ÉTATS ---
+  const [targetName, setTargetName] = useState('L\'ami');
+  
+  // Cartes sélectionnées pour l'échange
+  const [toGive, setToGive] = useState<CardType[]>([]);
+  const [toReceive, setToReceive] = useState<CardType[]>([]);
+
+  // Filtres de recherche locaux
+  const [searchMe, setSearchMe] = useState('');
+  const [searchHim, setSearchHim] = useState('');
+
+  // Récupérer le nom de l'ami pour l'affichage propre
+  useEffect(() => {
+    const fetchName = async () => {
+        try {
+            const snap = await getDoc(doc(db, 'users', targetUid, 'public_profile', 'info'));
+            if(snap.exists()) setTargetName(snap.data().displayName || snap.data().username);
+        } catch(e) { console.error(e); }
+    };
+    if (targetUid) fetchName();
+  }, [targetUid]);
+
+  // --- LOGIQUE DE SÉLECTION ---
+
+  const handleSelectCard = (card: CardType, listType: 'give' | 'receive') => {
+    const targetList = listType === 'give' ? toGive : toReceive;
+    const setTarget = listType === 'give' ? setToGive : setToReceive;
+
+    const existing = targetList.find(c => c.id === card.id);
+    
+    // On vérifie qu'on ne dépasse pas le stock disponible de la collection source
+    const maxStock = card.quantity;
+    const currentSelected = existing ? existing.quantity : 0;
+
+    if (currentSelected < maxStock) {
+        if (existing) {
+            setTarget(prev => prev.map(c => c.id === card.id ? { ...c, quantity: c.quantity + 1 } : c));
+        } else {
+            setTarget(prev => [...prev, { ...card, quantity: 1 }]);
+        }
+    } else {
+        toast.error("Stock maximum atteint pour cette carte");
+    }
+  };
+
+  const handleRemoveCard = (cardId: string, listType: 'give' | 'receive') => {
+    const setTarget = listType === 'give' ? setToGive : setToReceive;
+    setTarget(prev => prev.filter(c => c.id !== cardId));
+  };
+
+  // --- VALIDATION ---
+  const handlePropose = async () => {
+    if (toGive.length === 0 && toReceive.length === 0) return;
+    
+    // On lance la proposition d'échange
+    const success = await proposeTrade(targetUid, targetName, toGive, toReceive);
+    if (success) {
+        router.push('/trades'); // Redirection vers le centre d'échanges après succès
+    }
+  };
+
+  // Calculs totaux (Valeurs estimées)
+  const valGive = toGive.reduce((acc, c) => acc + (c.customPrice ?? c.price ?? 0) * c.quantity, 0);
+  const valReceive = toReceive.reduce((acc, c) => acc + (c.customPrice ?? c.price ?? 0) * c.quantity, 0);
+
+  if (!user) return <div className="p-10 text-center">Connexion requise.</div>;
+
+  return (
+    <div className="container mx-auto p-4 min-h-screen pb-24">
+        
+        {/* HEADER */}
+        <div className="flex items-center gap-4 mb-6">
+            <button onClick={() => router.back()} className="text-gray-500 hover:text-gray-700 bg-gray-100 px-3 py-1 rounded-lg text-sm">
+                ← Retour
+            </button>
+            <h1 className="text-2xl font-bold">
+                Échange avec <span className="text-blue-600">{targetName}</span>
+            </h1>
+        </div>
+
+        <div className="grid lg:grid-cols-2 gap-8 h-[calc(100vh-200px)]">
+            
+            {/* --- COLONNE GAUCHE : CE QUE JE DONNE --- */}
+            <div className="flex flex-col bg-red-50/50 dark:bg-red-900/10 rounded-xl border border-red-100 dark:border-red-900 p-4">
+                <h2 className="font-bold text-red-600 mb-2">📤 Je donne (Ma Collection)</h2>
+                
+                {/* 1. Liste des cartes SÉLECTIONNÉES */}
+                <div className="flex-none mb-4 space-y-2 min-h-[100px] bg-white dark:bg-gray-800 p-2 rounded border border-gray-200 dark:border-gray-700 overflow-y-auto max-h-[25vh]">
+                    {toGive.length === 0 && <p className="text-xs text-gray-400 italic text-center py-4">Rien sélectionné</p>}
+                    {toGive.map(card => (
+                        <div key={card.id} className="flex justify-between items-center text-sm p-1 border-b dark:border-gray-700">
+                            <span>{card.quantity}x {card.name} <span className="text-gray-400 text-xs">({card.setName})</span></span>
+                            <button onClick={() => handleRemoveCard(card.id, 'give')} className="text-red-500 font-bold px-2">✕</button>
+                        </div>
+                    ))}
+                </div>
+
+                {/* 2. Filtre Recherche locale */}
+                <input 
+                    type="text" 
+                    placeholder="Filtrer ma collection..." 
+                    className="w-full p-2 mb-2 rounded border dark:bg-gray-800 dark:text-white"
+                    value={searchMe}
+                    onChange={e => setSearchMe(e.target.value)}
+                />
+
+                {/* 3. Liste DISPONIBLE (Source) */}
+                <div className="grow overflow-y-auto custom-scrollbar space-y-2 pr-1">
+                    {loadingMe ? <p>Chargement...</p> : 
+                        myCollection
+                            .filter(c => c.name.toLowerCase().includes(searchMe.toLowerCase()))
+                            .slice(0, 50) // Limite d'affichage pour éviter le lag
+                            .map(card => (
+                                <div key={card.id} onClick={() => handleSelectCard(card, 'give')} className="cursor-pointer hover:bg-red-100 dark:hover:bg-red-900/30 p-2 rounded flex items-center gap-2 border border-transparent hover:border-red-200 transition">
+                                    <div className="w-8 h-11 bg-gray-200 rounded shrink-0 overflow-hidden">
+                                        <img src={card.imageUrl} className="w-full h-full object-cover" alt="" />
+                                    </div>
+                                    <div className="grow min-w-0">
+                                        <p className="font-bold text-xs truncate dark:text-gray-200">{card.name}</p>
+                                        <p className="text-[10px] text-gray-500">{card.setName} - Dispo: {card.quantity}</p>
+                                    </div>
+                                    <span className="text-xs font-bold text-gray-400">+</span>
+                                </div>
+                            ))
+                    }
+                </div>
+            </div>
+
+            {/* --- COLONNE DROITE : CE QUE JE VEUX (SA COLLECTION) --- */}
+            <div className="flex flex-col bg-blue-50/50 dark:bg-blue-900/10 rounded-xl border border-blue-100 dark:border-blue-900 p-4">
+                <h2 className="font-bold text-blue-600 mb-2">📥 Je reçois (Sa Collection)</h2>
+
+                {/* 1. Liste des cartes SÉLECTIONNÉES */}
+                <div className="flex-none mb-4 space-y-2 min-h-[100px] bg-white dark:bg-gray-800 p-2 rounded border border-gray-200 dark:border-gray-700 overflow-y-auto max-h-[25vh]">
+                    {toReceive.length === 0 && <p className="text-xs text-gray-400 italic text-center py-4">Rien sélectionné</p>}
+                    {toReceive.map(card => (
+                        <div key={card.id} className="flex justify-between items-center text-sm p-1 border-b dark:border-gray-700">
+                            <span>{card.quantity}x {card.name} <span className="text-gray-400 text-xs">({card.setName})</span></span>
+                            <button onClick={() => handleRemoveCard(card.id, 'receive')} className="text-red-500 font-bold px-2">✕</button>
+                        </div>
+                    ))}
+                </div>
+
+                {/* 2. Filtre Recherche locale (chez l'ami) */}
+                <input 
+                    type="text" 
+                    placeholder={`Filtrer la collection de ${targetName}...`}
+                    className="w-full p-2 mb-2 rounded border dark:bg-gray-800 dark:text-white"
+                    value={searchHim}
+                    onChange={e => setSearchHim(e.target.value)}
+                />
+
+                {/* 3. Liste DISPONIBLE (Source Ami) */}
+                <div className="grow overflow-y-auto custom-scrollbar space-y-2 pr-1">
+                    {loadingHim ? <p>Chargement...</p> : 
+                        friendCollection
+                            .filter(c => c.name.toLowerCase().includes(searchHim.toLowerCase()))
+                            .slice(0, 50)
+                            .map(card => (
+                                <div key={card.id} onClick={() => handleSelectCard(card, 'receive')} className="cursor-pointer hover:bg-blue-100 dark:hover:bg-blue-900/30 p-2 rounded flex items-center gap-2 border border-transparent hover:border-blue-200 transition">
+                                    <div className="w-8 h-11 bg-gray-200 rounded shrink-0 overflow-hidden">
+                                        <img src={card.imageUrl} className="w-full h-full object-cover" alt="" />
+                                    </div>
+                                    <div className="grow min-w-0">
+                                        <p className="font-bold text-xs truncate dark:text-gray-200">{card.name}</p>
+                                        <p className="text-[10px] text-gray-500">{card.setName} - Dispo: {card.quantity}</p>
+                                    </div>
+                                    <span className="text-xs font-bold text-gray-400">+</span>
+                                </div>
+                            ))
+                    }
+                </div>
+            </div>
+
+        </div>
+
+        {/* --- FOOTER DE VALIDATION --- */}
+        <div className="fixed bottom-0 left-0 right-0 p-4 bg-white dark:bg-gray-900 border-t dark:border-gray-800 flex justify-between items-center z-40 shadow-2xl">
+            <div className="flex gap-4 text-sm">
+                <div>Donne: <span className="font-bold">{valGive.toFixed(2)}€</span></div>
+                <div>Reçoit: <span className="font-bold">{valReceive.toFixed(2)}€</span></div>
+            </div>
+            <button 
+                onClick={handlePropose}
+                disabled={toGive.length === 0 && toReceive.length === 0}
+                className="bg-purple-600 hover:bg-purple-700 text-white px-8 py-3 rounded-xl font-bold disabled:opacity-50 transition shadow-lg flex items-center gap-2"
+            >
+                <span>🚀</span> Proposer l&apos;échange
+            </button>
+        </div>
+
+    </div>
+  );
+}
+</file>
+
+<file path=".gitignore">
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+/node_modules
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# testing
+/coverage
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# env files (can opt-in for committing if needed)
+.env*
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+</file>
+
+<file path="app/globals.css">
+@import "tailwindcss";
+
+:root {
+  --background: #ffffff;
+  --foreground: #171717;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0a0a0a;
+    --foreground: #ededed;
+  }
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: Arial, Helvetica, sans-serif;
+}
+</file>
+
+<file path="app/login/page.tsx">
+// Fichier : app/login/page.tsx
+
+'use client'; // Cette page est interactive
+
+import { useRouter } from 'next/navigation'; // Pour rediriger l'utilisateur
+import { useAuth } from '@/lib/AuthContext'; // On utilise notre "raccourci" !
+
+export default function LoginPage() {
+  // On récupère les infos de notre "carte d'identité"
+  const { user, signInWithGoogle, loading } = useAuth();
+  const router = useRouter(); // L'outil de redirection
+
+  // Si le chargement est terminé ET que l'utilisateur est DÉJÀ connecté...
+  if (!loading && user) {
+    // ...on le renvoie à la page d'accueil.
+    router.push('/');
+    return null; // On n'affiche rien sur cette page
+  }
+
+  // Si on charge, on affiche un message simple
+  if (loading) {
+    return <p>Chargement...</p>;
+  }
+
+  // C'est le HTML (JSX) qui s'affiche
+  return (
+    <main className="flex items-center justify-center min-h-screen">
+      <div className="text-center">
+        <h1 className="text-3xl font-bold mb-4">Bienvenue sur MagicWish</h1>
+        <p className="mb-6">Veuillez vous connecter pour créer votre wishlist.</p>
+        
+        {/* LE BOUTON DE CONNEXION */}
+        <button
+          onClick={signInWithGoogle} // Au clic, on appelle la fonction du Contexte
+          className="bg-blue-500 text-white p-3 rounded-lg font-semibold"
+        >
+          Se connecter avec Google
+        </button>
+      </div>
+    </main>
+  );
+}
+</file>
+
+<file path="app/user/[uid]/page.tsx">
+// app/user/[uid]/page.tsx
+'use client';
+
+import { useState, useEffect, use } from 'react';
+import { db } from '@/lib/firebase';
+import { doc, getDoc } from 'firebase/firestore';
+import { useCardCollection } from '@/hooks/useCardCollection';
+import MagicCard from '@/components/MagicCard';
+import { FriendProfile } from '@/hooks/useFriends'; // Réutilisation du type
+
+export default function UserProfilePage({ params }: { params: Promise<{ uid: string }> }) {
+  // En Next.js 15+, params est une Promise
+  const unwrappedParams = use(params);
+  const targetUid = unwrappedParams.uid;
+
+  const [profile, setProfile] = useState<FriendProfile | null>(null);
+  const [activeTab, setActiveTab] = useState<'collection' | 'wishlist'>('collection');
+  
+  // On utilise notre hook modifié avec le targetUid !
+  const { cards, loading, totalPrice } = useCardCollection(activeTab, 'default', targetUid);
+
+  // Charger les infos du profil (Nom, Avatar)
+  useEffect(() => {
+    const fetchProfile = async () => {
+      try {
+        const docRef = doc(db, 'users', targetUid, 'public_profile', 'info');
+        const snap = await getDoc(docRef);
+        if (snap.exists()) {
+            setProfile({ uid: targetUid, ...snap.data() } as FriendProfile);
+        }
+      } catch (e) {
+        console.error("Erreur profil", e);
+      }
+    };
+    fetchProfile();
+  }, [targetUid]);
+
+  if (!profile && !loading) return <div className="p-10 text-center">Profil introuvable ou privé.</div>;
+
+  return (
+    <main className="container mx-auto p-4 pb-20">
+        
+        {/* HEADER PROFIL */}
+        <div className="bg-white dark:bg-gray-800 rounded-2xl p-6 shadow-sm border border-gray-100 dark:border-gray-700 mb-6 flex flex-col md:flex-row items-center md:items-start gap-6">
+            {/* Avatar */}
+            <div className="w-24 h-24 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-white text-3xl font-bold border-4 border-white dark:border-gray-700 shadow-md overflow-hidden">
+                {profile?.photoURL ? <img src={profile.photoURL} alt="" className="w-full h-full object-cover"/> : profile?.username?.[0]?.toUpperCase()}
+            </div>
+            
+            {/* Infos */}
+            <div className="text-center md:text-left flex-grow">
+                <h1 className="text-3xl font-bold text-gray-900 dark:text-white mb-1">
+                    {profile?.displayName || 'Utilisateur'}
+                </h1>
+                <p className="text-blue-600 dark:text-blue-400 font-medium bg-blue-50 dark:bg-blue-900/30 inline-block px-3 py-1 rounded-full text-sm">
+                    @{profile?.username}
+                </p>
+            </div>
+
+            {/* Stats Valeur */}
+            <div className="bg-green-50 dark:bg-green-900/20 px-6 py-4 rounded-xl border border-green-100 dark:border-green-800 text-center">
+                <p className="text-xs uppercase text-green-600 dark:text-green-400 font-bold mb-1">Valeur affichée</p>
+                <p className="text-2xl font-bold text-green-700 dark:text-green-300">{totalPrice.toFixed(2)} €</p>
+            </div>
+        </div>
+
+        {/* TABS (Collection vs Wishlist) */}
+        <div className="flex justify-center mb-8 border-b border-gray-200 dark:border-gray-700">
+            <button 
+                onClick={() => setActiveTab('collection')}
+                className={`px-6 py-3 font-medium transition-colors border-b-2 ${
+                    activeTab === 'collection' 
+                    ? 'border-blue-600 text-blue-600' 
+                    : 'border-transparent text-gray-500 hover:text-gray-700'
+                }`}
+            >
+                📚 Sa Collection
+            </button>
+            <button 
+                onClick={() => setActiveTab('wishlist')}
+                className={`px-6 py-3 font-medium transition-colors border-b-2 ${
+                    activeTab === 'wishlist' 
+                    ? 'border-purple-600 text-purple-600' 
+                    : 'border-transparent text-gray-500 hover:text-gray-700'
+                }`}
+            >
+                ✨ Sa Wishlist
+            </button>
+        </div>
+
+        {/* GRILLE DE CARTES */}
+        {loading ? (
+            <p className="text-center p-10 text-gray-500">Chargement des cartes...</p>
+        ) : cards.length === 0 ? (
+            <div className="text-center py-16 bg-gray-50 dark:bg-gray-800/50 rounded-xl border-dashed border-2 border-gray-200 dark:border-gray-700">
+                <p className="text-gray-400 italic">Cette liste est vide.</p>
+            </div>
+        ) : (
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 animate-in fade-in slide-in-from-bottom-4 duration-500">
+                {cards.map(card => (
+                    <MagicCard 
+                        key={card.id} 
+                        {...card} 
+                        readOnly={true} // <--- Important : Mode lecture seule
+                    />
+                ))}
+            </div>
+        )}
+
+    </main>
+  );
+}
+</file>
 
 <file path="components/CardVersionPickerModal.tsx">
 'use client';
@@ -297,604 +755,6 @@ export default function CardVersionPickerModal({ isOpen, onClose, baseCard, onCo
 
       </div>
     </div>
-  );
-}
-</file>
-
-<file path="hooks/useTradeSystem.ts">
-// hooks/useTradeSystem.ts
-import { useState, useEffect } from 'react';
-import { db } from '@/lib/firebase';
-import { 
-  collection, addDoc, query, where, onSnapshot, 
-  doc, updateDoc, serverTimestamp, orderBy, 
-  Timestamp
-} from 'firebase/firestore';
-import { useAuth } from '@/lib/AuthContext';
-import { CardType } from './useCardCollection';
-import { useTradeTransaction } from './useTradeTransaction';
-import toast from 'react-hot-toast';
-
-export type TradeStatus = 'pending' | 'completed' | 'rejected' | 'cancelled';
-
-export type TradeRequest = {
-  id: string;
-  senderUid: string;
-  senderName: string;
-  receiverUid: string;
-  receiverName: string;
-  itemsGiven: CardType[];
-  itemsReceived: CardType[];
-  status: TradeStatus;
-  createdAt: Timestamp;
-};
-
-export function useTradeSystem() {
-  const { user, username } = useAuth();
-  // Renommage pour éviter conflit de nom
-  const { executeTrade, isProcessing: isTransactionProcessing } = useTradeTransaction();
-  
-  const [incomingTrades, setIncomingTrades] = useState<TradeRequest[]>([]);
-  const [outgoingTrades, setOutgoingTrades] = useState<TradeRequest[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  // 1. Écouter les échanges
-  useEffect(() => {
-    if (!user) return;
-
-    const qIn = query(
-      collection(db, 'trades'),
-      where('receiverUid', '==', user.uid),
-      where('status', '==', 'pending'),
-      orderBy('createdAt', 'desc')
-    );
-
-    const qOut = query(
-      collection(db, 'trades'),
-      where('senderUid', '==', user.uid),
-      where('status', '==', 'pending'),
-      orderBy('createdAt', 'desc')
-    );
-
-    const unsubIn = onSnapshot(qIn, (snap) => {
-      setIncomingTrades(snap.docs.map(d => ({ id: d.id, ...d.data() } as TradeRequest)));
-    });
-
-    const unsubOut = onSnapshot(qOut, (snap) => {
-      setOutgoingTrades(snap.docs.map(d => ({ id: d.id, ...d.data() } as TradeRequest)));
-      setLoading(false);
-    });
-
-    return () => { unsubIn(); unsubOut(); };
-  }, [user]);
-
-  // 2. Proposer
-  const proposeTrade = async (receiverUid: string, receiverName: string, toGive: CardType[], toReceive: CardType[]) => {
-    if (!user) return;
-    const toastId = toast.loading("Envoi de la proposition...");
-
-    try {
-      await addDoc(collection(db, 'trades'), {
-        senderUid: user.uid,
-        senderName: username || user.displayName || 'Inconnu',
-        receiverUid,
-        receiverName,
-        itemsGiven: toGive,
-        itemsReceived: toReceive,
-        status: 'pending',
-        createdAt: serverTimestamp()
-      });
-      toast.success("Proposition envoyée !", { id: toastId });
-      return true;
-    } catch (e) {
-      console.error(e);
-      toast.error("Erreur envoi", { id: toastId });
-      return false;
-    }
-  };
-
-  // 3. Accepter
-  const acceptTrade = async (trade: TradeRequest) => {
-    if (!user) return;
-    
-    // Inversion Sender/Receiver pour l'exécution
-    const success = await executeTrade(
-        trade.itemsReceived, 
-        trade.itemsGiven,    
-        trade.senderUid      
-    );
-
-    if (success) {
-      await updateDoc(doc(db, 'trades', trade.id), { status: 'completed' });
-    }
-  };
-
-  // 4. Refuser / Annuler
-  const rejectTrade = async (tradeId: string) => {
-    if(!confirm("Refuser cet échange ?")) return;
-    await updateDoc(doc(db, 'trades', tradeId), { status: 'rejected' });
-    toast.success("Échange refusé");
-  };
-
-  const cancelTrade = async (tradeId: string) => {
-    if(!confirm("Annuler cette proposition ?")) return;
-    await updateDoc(doc(db, 'trades', tradeId), { status: 'cancelled' });
-    toast.success("Proposition annulée");
-  };
-
-  return { 
-    incomingTrades, outgoingTrades, loading, 
-    proposeTrade, acceptTrade, rejectTrade, cancelTrade,
-    isProcessing: isTransactionProcessing 
-  };
-}
-</file>
-
-<file path=".gitignore">
-# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
-
-# dependencies
-/node_modules
-/.pnp
-.pnp.*
-.yarn/*
-!.yarn/patches
-!.yarn/plugins
-!.yarn/releases
-!.yarn/versions
-
-# testing
-/coverage
-
-# next.js
-/.next/
-/out/
-
-# production
-/build
-
-# misc
-.DS_Store
-*.pem
-
-# debug
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-.pnpm-debug.log*
-
-# env files (can opt-in for committing if needed)
-.env*
-
-# vercel
-.vercel
-
-# typescript
-*.tsbuildinfo
-next-env.d.ts
-</file>
-
-<file path="app/globals.css">
-@import "tailwindcss";
-
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
-
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
-}
-</file>
-
-<file path="app/login/page.tsx">
-// Fichier : app/login/page.tsx
-
-'use client'; // Cette page est interactive
-
-import { useRouter } from 'next/navigation'; // Pour rediriger l'utilisateur
-import { useAuth } from '@/lib/AuthContext'; // On utilise notre "raccourci" !
-
-export default function LoginPage() {
-  // On récupère les infos de notre "carte d'identité"
-  const { user, signInWithGoogle, loading } = useAuth();
-  const router = useRouter(); // L'outil de redirection
-
-  // Si le chargement est terminé ET que l'utilisateur est DÉJÀ connecté...
-  if (!loading && user) {
-    // ...on le renvoie à la page d'accueil.
-    router.push('/');
-    return null; // On n'affiche rien sur cette page
-  }
-
-  // Si on charge, on affiche un message simple
-  if (loading) {
-    return <p>Chargement...</p>;
-  }
-
-  // C'est le HTML (JSX) qui s'affiche
-  return (
-    <main className="flex items-center justify-center min-h-screen">
-      <div className="text-center">
-        <h1 className="text-3xl font-bold mb-4">Bienvenue sur MagicWish</h1>
-        <p className="mb-6">Veuillez vous connecter pour créer votre wishlist.</p>
-        
-        {/* LE BOUTON DE CONNEXION */}
-        <button
-          onClick={signInWithGoogle} // Au clic, on appelle la fonction du Contexte
-          className="bg-blue-500 text-white p-3 rounded-lg font-semibold"
-        >
-          Se connecter avec Google
-        </button>
-      </div>
-    </main>
-  );
-}
-</file>
-
-<file path="app/trades/manual/page.tsx">
-// app/trades/manual/page.tsx
-'use client';
-
-import { useState } from 'react';
-import { useAuth } from '@/lib/AuthContext';
-import { useCardCollection, CardType } from '@/hooks/useCardCollection';
-import { useTradeTransaction } from '@/hooks/useTradeTransaction';
-import MagicCard from '@/components/MagicCard';
-import toast from 'react-hot-toast';
-// 1. IMPORT DU NOUVEAU COMPOSANT
-import CardVersionPickerModal, { ScryfallCardRaw } from '@/components/CardVersionPickerModal';
-
-export default function ManualTradePage() {
-  const { user } = useAuth();
-  const { cards: myCollection, loading } = useCardCollection('collection'); 
-  const { executeTrade, isProcessing } = useTradeTransaction();
-
-  // --- ÉTATS ---
-  const [toGive, setToGive] = useState<CardType[]>([]);
-  const [toReceive, setToReceive] = useState<CardType[]>([]);
-  
-  const [localSearch, setLocalSearch] = useState('');
-  
-  const [remoteSearch, setRemoteSearch] = useState('');
-  const [searchResults, setSearchResults] = useState<ScryfallCardRaw[]>([]);
-  const [isSearching, setIsSearching] = useState(false);
-
-  // 2. ÉTAT POUR LA MODALE DE SÉLECTION
-  const [cardToPick, setCardToPick] = useState<ScryfallCardRaw | null>(null);
-
-  // --- LOGIQUE AJOUT / RETRAIT ---
-  
-  const handleAddToGive = (card: CardType) => {
-      // (Code existant inchangé pour "Je donne")
-      const existing = toGive.find(c => c.id === card.id);
-      if (existing) {
-          if (existing.quantity < card.quantity) { 
-              setToGive(prev => prev.map(c => c.id === card.id ? { ...c, quantity: c.quantity + 1 } : c));
-          } else {
-              toast.error("Max quantité atteinte");
-          }
-      } else {
-          setToGive(prev => [...prev, { ...card, quantity: 1 }]);
-      }
-  };
-
-  const handleSearchScryfall = async (e: React.FormEvent) => {
-      e.preventDefault();
-      if (!remoteSearch.trim()) return;
-      setIsSearching(true);
-      try {
-          // On ajoute &unique=prints pour avoir moins de doublons visuels dans la recherche initiale
-          const res = await fetch(`/api/search?q=${remoteSearch}`); 
-          const data = await res.json();
-          setSearchResults(data.data || []);
-      } catch (e) { toast.error("Erreur recherche"); }
-      finally { setIsSearching(false); }
-  };
-
-  // 3. FONCTION DÉCLENCHEUR (Click sur résultat recherche)
-  const handleSearchResultClick = (scryfallCard: ScryfallCardRaw) => {
-    // Au lieu d'ajouter direct, on ouvre la modale
-    setCardToPick(scryfallCard);
-  };
-
-  // 4. FONCTION DE CONFIRMATION (Retour de la modale)
-  const handleConfirmReceive = (card: CardType) => {
-      const existing = toReceive.find(c => c.id === card.id && c.isFoil === card.isFoil); // On distingue les foils
-      
-      if (existing) {
-          setToReceive(prev => prev.map(c => 
-              (c.id === card.id && c.isFoil === card.isFoil) 
-              ? { ...c, quantity: c.quantity + card.quantity } 
-              : c
-          ));
-      } else {
-          setToReceive(prev => [...prev, card]);
-      }
-      
-      // On ferme la recherche pour plus de clarté
-      setSearchResults([]); 
-      setRemoteSearch("");
-      toast.success(`Ajouté : ${card.name}`);
-  };
-
-  // --- VALIDATION ---
-  const handleValidate = async () => {
-      // (Code existant inchangé)
-      if (toGive.length === 0 && toReceive.length === 0) return;
-      if (!confirm("Confirmer cet échange ? Vos cartes données seront retirées de votre collection.")) return;
-
-      const success = await executeTrade(toGive, toReceive, null);
-      if (success) {
-          setToGive([]);
-          setToReceive([]);
-          setLocalSearch("");
-      }
-  };
-
-  // --- CALCULS ---
-  // On prend en compte le customPrice s'il existe (non pertinent pour l'externe mais bon pour la structure)
-  const valGive = toGive.reduce((acc, c) => acc + (c.customPrice ?? c.price ?? 0) * c.quantity, 0);
-  const valReceive = toReceive.reduce((acc, c) => acc + (c.price || 0) * c.quantity, 0);
-
-  if (!user) return <div className="p-10 text-center">Connectez-vous.</div>;
-
-  return (
-    <div className="container mx-auto p-4 min-h-screen pb-20">
-        <h1 className="text-2xl font-bold mb-6 flex items-center gap-2">
-            🖐️ Échange Manuel / Externe
-        </h1>
-
-        <div className="grid lg:grid-cols-2 gap-8 h-[calc(100vh-200px)]">
-            
-            {/* --- COLONNE GAUCHE (Inchinchangé) --- */}
-            <div className="flex flex-col bg-red-50/50 dark:bg-red-900/10 rounded-xl border border-red-100 dark:border-red-900 p-4">
-                <h2 className="font-bold text-red-600 mb-2">📤 Je donne (De ma collection)</h2>
-                {/* ... (Reste du code de la colonne gauche inchangé) ... */}
-                 <div className="flex-none mb-4 space-y-2 min-h-[100px] bg-white dark:bg-gray-800 p-2 rounded border border-gray-200 dark:border-gray-700 overflow-y-auto max-h-[30vh]">
-                    {toGive.length === 0 && <p className="text-xs text-gray-400 italic text-center py-4">Aucune carte sélectionnée</p>}
-                    {toGive.map(card => (
-                        <div key={card.id} className="flex justify-between items-center text-sm p-1 border-b dark:border-gray-700">
-                            <span>{card.quantity}x {card.name}</span>
-                            <button onClick={() => setToGive(p => p.filter(c => c.id !== card.id))} className="text-red-500">✕</button>
-                        </div>
-                    ))}
-                </div>
-                <input 
-                    type="text" 
-                    placeholder="Chercher dans ma collection..." 
-                    className="w-full p-2 mb-2 rounded border dark:bg-gray-800 dark:text-white"
-                    value={localSearch}
-                    onChange={e => setLocalSearch(e.target.value)}
-                />
-                <div className="flex-grow overflow-y-auto custom-scrollbar space-y-2 pr-1">
-                    {loading ? <p>Chargement...</p> : 
-                        myCollection
-                            .filter(c => c.name.toLowerCase().includes(localSearch.toLowerCase()))
-                            .slice(0, 20)
-                            .map(card => (
-                                <div key={card.id} onClick={() => handleAddToGive(card)} className="cursor-pointer hover:bg-red-100 dark:hover:bg-red-900/30 p-2 rounded flex items-center gap-2 border border-transparent hover:border-red-200 transition">
-                                    <img src={card.imageUrl} className="w-8 h-11 rounded object-cover bg-gray-200" alt="" />
-                                    <div className="flex-grow min-w-0">
-                                        <p className="font-bold text-xs truncate dark:text-gray-200">{card.name}</p>
-                                        <p className="text-[10px] text-gray-500">{card.setName} - En stock: {card.quantity}</p>
-                                    </div>
-                                    <span className="text-xs font-bold text-gray-400">+</span>
-                                </div>
-                            ))
-                    }
-                </div>
-            </div>
-
-            {/* --- COLONNE DROITE : JE REÇOIS (Modifiée) --- */}
-            <div className="flex flex-col bg-green-50/50 dark:bg-green-900/10 rounded-xl border border-green-100 dark:border-green-900 p-4">
-                <h2 className="font-bold text-green-600 mb-2">📥 Je reçois (Ajout libre)</h2>
-
-                {/* 1. Liste des cartes reçues */}
-                 <div className="flex-none mb-4 space-y-2 min-h-[100px] bg-white dark:bg-gray-800 p-2 rounded border border-gray-200 dark:border-gray-700 overflow-y-auto max-h-[30vh]">
-                    {toReceive.length === 0 && <p className="text-xs text-gray-400 italic text-center py-4">Aucune carte ajoutée</p>}
-                    {toReceive.map((card, idx) => (
-                        <div key={`${card.id}-${idx}`} className="flex justify-between items-center text-sm p-1 border-b dark:border-gray-700">
-                            <div className="flex items-center gap-2">
-                                <span className="font-bold">{card.quantity}x</span>
-                                <div className="flex flex-col">
-                                    <span className="dark:text-gray-200">{card.name}</span>
-                                    <span className="text-[10px] text-gray-500">
-                                        {card.setName} {card.isFoil && '✨ Foil'} - {(card.price || 0).toFixed(2)}€
-                                    </span>
-                                </div>
-                            </div>
-                            <button onClick={() => setToReceive(p => p.filter((_, i) => i !== idx))} className="text-red-500">✕</button>
-                        </div>
-                    ))}
-                </div>
-
-                {/* 2. Moteur Scryfall */}
-                <form onSubmit={handleSearchScryfall} className="flex gap-2 mb-2">
-                    <input 
-                        type="text" 
-                        placeholder="Rechercher carte à recevoir..." 
-                        className="flex-grow p-2 rounded border dark:bg-gray-800 dark:text-white"
-                        value={remoteSearch}
-                        onChange={e => setRemoteSearch(e.target.value)}
-                    />
-                    <button type="submit" className="bg-green-600 text-white px-3 rounded">🔍</button>
-                </form>
-
-                {/* 3. Résultats Scryfall (Click ouvre la modale) */}
-                 <div className="flex-grow overflow-y-auto custom-scrollbar space-y-2 pr-1">
-                    {isSearching && <p className="text-xs">Recherche...</p>}
-                    {searchResults.map(card => (
-                        <div key={card.id} onClick={() => handleSearchResultClick(card)} className="cursor-pointer hover:bg-green-100 dark:hover:bg-green-900/30 p-2 rounded flex items-center gap-2 border border-transparent hover:border-green-200 transition">
-                             <div className="w-8 h-11 bg-gray-200 rounded overflow-hidden">
-                                {card.image_uris?.small && <img src={card.image_uris.small} className="w-full h-full object-cover" alt="" />}
-                             </div>
-                             <div className="flex-grow min-w-0">
-                                <p className="font-bold text-xs truncate dark:text-gray-200">{card.name}</p>
-                                <p className="text-[10px] text-gray-500">{card.set_name}</p>
-                             </div>
-                             <span className="text-xs font-bold text-gray-400">Choisir ›</span>
-                        </div>
-                    ))}
-                </div>
-            </div>
-        </div>
-
-        {/* --- FOOTER DE VALIDATION --- */}
-        <div className="fixed bottom-0 left-0 right-0 p-4 bg-white dark:bg-gray-900 border-t dark:border-gray-800 flex justify-between items-center z-40 shadow-2xl">
-            <div className="flex gap-4 text-sm">
-                <div>Donne: <span className="font-bold">{valGive.toFixed(2)}€</span></div>
-                <div>Reçoit: <span className="font-bold">{valReceive.toFixed(2)}€</span></div>
-            </div>
-            <button 
-                onClick={handleValidate}
-                disabled={isProcessing || (toGive.length === 0 && toReceive.length === 0)}
-                className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-3 rounded-xl font-bold disabled:opacity-50 transition"
-            >
-                {isProcessing ? 'Validation...' : '✅ Valider l\'échange'}
-            </button>
-        </div>
-
-        {/* 5. INTÉGRATION DE LA MODALE */}
-        <CardVersionPickerModal 
-            isOpen={!!cardToPick}
-            baseCard={cardToPick}
-            onClose={() => setCardToPick(null)}
-            onConfirm={handleConfirmReceive}
-        />
-
-    </div>
-  );
-}
-</file>
-
-<file path="app/user/[uid]/page.tsx">
-// app/user/[uid]/page.tsx
-'use client';
-
-import { useState, useEffect, use } from 'react';
-import { db } from '@/lib/firebase';
-import { doc, getDoc } from 'firebase/firestore';
-import { useCardCollection } from '@/hooks/useCardCollection';
-import MagicCard from '@/components/MagicCard';
-import { FriendProfile } from '@/hooks/useFriends'; // Réutilisation du type
-
-export default function UserProfilePage({ params }: { params: Promise<{ uid: string }> }) {
-  // En Next.js 15+, params est une Promise
-  const unwrappedParams = use(params);
-  const targetUid = unwrappedParams.uid;
-
-  const [profile, setProfile] = useState<FriendProfile | null>(null);
-  const [activeTab, setActiveTab] = useState<'collection' | 'wishlist'>('collection');
-  
-  // On utilise notre hook modifié avec le targetUid !
-  const { cards, loading, totalPrice } = useCardCollection(activeTab, 'default', targetUid);
-
-  // Charger les infos du profil (Nom, Avatar)
-  useEffect(() => {
-    const fetchProfile = async () => {
-      try {
-        const docRef = doc(db, 'users', targetUid, 'public_profile', 'info');
-        const snap = await getDoc(docRef);
-        if (snap.exists()) {
-            setProfile({ uid: targetUid, ...snap.data() } as FriendProfile);
-        }
-      } catch (e) {
-        console.error("Erreur profil", e);
-      }
-    };
-    fetchProfile();
-  }, [targetUid]);
-
-  if (!profile && !loading) return <div className="p-10 text-center">Profil introuvable ou privé.</div>;
-
-  return (
-    <main className="container mx-auto p-4 pb-20">
-        
-        {/* HEADER PROFIL */}
-        <div className="bg-white dark:bg-gray-800 rounded-2xl p-6 shadow-sm border border-gray-100 dark:border-gray-700 mb-6 flex flex-col md:flex-row items-center md:items-start gap-6">
-            {/* Avatar */}
-            <div className="w-24 h-24 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-white text-3xl font-bold border-4 border-white dark:border-gray-700 shadow-md overflow-hidden">
-                {profile?.photoURL ? <img src={profile.photoURL} alt="" className="w-full h-full object-cover"/> : profile?.username?.[0]?.toUpperCase()}
-            </div>
-            
-            {/* Infos */}
-            <div className="text-center md:text-left flex-grow">
-                <h1 className="text-3xl font-bold text-gray-900 dark:text-white mb-1">
-                    {profile?.displayName || 'Utilisateur'}
-                </h1>
-                <p className="text-blue-600 dark:text-blue-400 font-medium bg-blue-50 dark:bg-blue-900/30 inline-block px-3 py-1 rounded-full text-sm">
-                    @{profile?.username}
-                </p>
-            </div>
-
-            {/* Stats Valeur */}
-            <div className="bg-green-50 dark:bg-green-900/20 px-6 py-4 rounded-xl border border-green-100 dark:border-green-800 text-center">
-                <p className="text-xs uppercase text-green-600 dark:text-green-400 font-bold mb-1">Valeur affichée</p>
-                <p className="text-2xl font-bold text-green-700 dark:text-green-300">{totalPrice.toFixed(2)} €</p>
-            </div>
-        </div>
-
-        {/* TABS (Collection vs Wishlist) */}
-        <div className="flex justify-center mb-8 border-b border-gray-200 dark:border-gray-700">
-            <button 
-                onClick={() => setActiveTab('collection')}
-                className={`px-6 py-3 font-medium transition-colors border-b-2 ${
-                    activeTab === 'collection' 
-                    ? 'border-blue-600 text-blue-600' 
-                    : 'border-transparent text-gray-500 hover:text-gray-700'
-                }`}
-            >
-                📚 Sa Collection
-            </button>
-            <button 
-                onClick={() => setActiveTab('wishlist')}
-                className={`px-6 py-3 font-medium transition-colors border-b-2 ${
-                    activeTab === 'wishlist' 
-                    ? 'border-purple-600 text-purple-600' 
-                    : 'border-transparent text-gray-500 hover:text-gray-700'
-                }`}
-            >
-                ✨ Sa Wishlist
-            </button>
-        </div>
-
-        {/* GRILLE DE CARTES */}
-        {loading ? (
-            <p className="text-center p-10 text-gray-500">Chargement des cartes...</p>
-        ) : cards.length === 0 ? (
-            <div className="text-center py-16 bg-gray-50 dark:bg-gray-800/50 rounded-xl border-dashed border-2 border-gray-200 dark:border-gray-700">
-                <p className="text-gray-400 italic">Cette liste est vide.</p>
-            </div>
-        ) : (
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 animate-in fade-in slide-in-from-bottom-4 duration-500">
-                {cards.map(card => (
-                    <MagicCard 
-                        key={card.id} 
-                        {...card} 
-                        readOnly={true} // <--- Important : Mode lecture seule
-                    />
-                ))}
-            </div>
-        )}
-
-    </main>
   );
 }
 </file>
@@ -1870,6 +1730,499 @@ export function useFriends() {
 }
 </file>
 
+<file path="hooks/useTradeSystem.ts">
+// hooks/useTradeSystem.ts
+import { useState, useEffect } from 'react';
+import { db } from '@/lib/firebase';
+import { 
+  collection, addDoc, query, where, onSnapshot, 
+  doc, updateDoc, serverTimestamp, orderBy, 
+  Timestamp
+} from 'firebase/firestore';
+import { useAuth } from '@/lib/AuthContext';
+import { CardType } from './useCardCollection';
+import { useTradeTransaction } from './useTradeTransaction';
+import toast from 'react-hot-toast';
+
+export type TradeStatus = 'pending' | 'completed' | 'rejected' | 'cancelled';
+
+export type TradeRequest = {
+  id: string;
+  senderUid: string;
+  senderName: string;
+  receiverUid: string;
+  receiverName: string;
+  itemsGiven: CardType[];
+  itemsReceived: CardType[];
+  status: TradeStatus;
+  createdAt: Timestamp;
+};
+
+// --- UTILITAIRE DE NETTOYAGE ---
+// Firestore déteste les valeurs "undefined". On les convertit en JSON "propre".
+const cleanCardsForFirestore = (cards: CardType[]) => {
+    return cards.map(card => {
+        // On crée une copie superficielle
+        const clean = { ...card };
+        // On parcourt toutes les clés
+        Object.keys(clean).forEach(key => {
+            const k = key as keyof CardType;
+            // Si une valeur est undefined, on supprime la clé
+            if (clean[k] === undefined) {
+                delete clean[k];
+            }
+        });
+        return clean;
+    });
+};
+
+export function useTradeSystem() {
+  const { user, username } = useAuth();
+  const { executeTrade, isProcessing: isTransactionProcessing } = useTradeTransaction();
+  
+  const [incomingTrades, setIncomingTrades] = useState<TradeRequest[]>([]);
+  const [outgoingTrades, setOutgoingTrades] = useState<TradeRequest[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  // 1. Écouter les échanges
+  useEffect(() => {
+    if (!user) return;
+
+    const qIn = query(
+      collection(db, 'trades'),
+      where('receiverUid', '==', user.uid),
+      where('status', '==', 'pending'),
+      orderBy('createdAt', 'desc')
+    );
+
+    const qOut = query(
+      collection(db, 'trades'),
+      where('senderUid', '==', user.uid),
+      where('status', '==', 'pending'),
+      orderBy('createdAt', 'desc')
+    );
+
+    const unsubIn = onSnapshot(qIn, (snap) => {
+      setIncomingTrades(snap.docs.map(d => ({ id: d.id, ...d.data() } as TradeRequest)));
+    });
+
+    const unsubOut = onSnapshot(qOut, (snap) => {
+      setOutgoingTrades(snap.docs.map(d => ({ id: d.id, ...d.data() } as TradeRequest)));
+      setLoading(false);
+    });
+
+    return () => { unsubIn(); unsubOut(); };
+  }, [user]);
+
+  // 2. Proposer (CORRIGÉ)
+  const proposeTrade = async (receiverUid: string, receiverName: string, toGive: CardType[], toReceive: CardType[]) => {
+    if (!user) return;
+    const toastId = toast.loading("Envoi de la proposition...");
+
+    try {
+      // NETTOYAGE DES DONNÉES AVANT ENVOI
+      const cleanGiven = cleanCardsForFirestore(toGive);
+      const cleanReceived = cleanCardsForFirestore(toReceive);
+
+      await addDoc(collection(db, 'trades'), {
+        senderUid: user.uid,
+        senderName: username || user.displayName || 'Inconnu',
+        receiverUid,
+        receiverName,
+        itemsGiven: cleanGiven,    // <--- Utilisation des versions nettoyées
+        itemsReceived: cleanReceived, // <--- Utilisation des versions nettoyées
+        status: 'pending',
+        createdAt: serverTimestamp()
+      });
+      toast.success("Proposition envoyée !", { id: toastId });
+      return true;
+    } catch (e) {
+      console.error("Erreur Firestore:", e); // Ajout d'un log plus clair
+      toast.error("Erreur envoi (voir console)", { id: toastId });
+      return false;
+    }
+  };
+
+  // 3. Accepter
+  const acceptTrade = async (trade: TradeRequest) => {
+    if (!user) return;
+    
+    // Inversion Sender/Receiver pour l'exécution
+    const success = await executeTrade(
+        trade.itemsReceived, 
+        trade.itemsGiven,    
+        trade.senderUid      
+    );
+
+    if (success) {
+      await updateDoc(doc(db, 'trades', trade.id), { status: 'completed' });
+    }
+  };
+
+  // 4. Refuser / Annuler
+  const rejectTrade = async (tradeId: string) => {
+    if(!confirm("Refuser cet échange ?")) return;
+    await updateDoc(doc(db, 'trades', tradeId), { status: 'rejected' });
+    toast.success("Échange refusé");
+  };
+
+  const cancelTrade = async (tradeId: string) => {
+    if(!confirm("Annuler cette proposition ?")) return;
+    await updateDoc(doc(db, 'trades', tradeId), { status: 'cancelled' });
+    toast.success("Proposition annulée");
+  };
+
+  return { 
+    incomingTrades, outgoingTrades, loading, 
+    proposeTrade, acceptTrade, rejectTrade, cancelTrade,
+    isProcessing: isTransactionProcessing 
+  };
+}
+</file>
+
+<file path="lib/firebase.ts">
+import { initializeApp, getApps, getApp } from 'firebase/app';
+import { getAuth } from 'firebase/auth';
+import { getFirestore } from 'firebase/firestore';
+
+const firebaseConfig = {
+  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
+  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
+  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
+  storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
+  appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
+};
+
+// Initialisation unique (évite les erreurs de re-init en dev)
+const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
+
+export const auth = getAuth(app);
+export const db = getFirestore(app);
+</file>
+
+<file path="next.config.ts">
+import type { NextConfig } from 'next';
+
+const nextConfig: NextConfig = {
+  // Mode strict pour détecter les bugs en dev
+  reactStrictMode: true,
+
+  // Optimisation des images
+  images: {
+    formats: ['image/avif', 'image/webp'],
+    remotePatterns: [
+      {
+        protocol: 'https',
+        hostname: 'cards.scryfall.io', // Indispensable pour tes cartes
+        port: '',
+        pathname: '/**',
+      },
+      {
+        protocol: 'https',
+        hostname: '*.googleusercontent.com', // Indispensable pour les avatars Google Auth
+        port: '',
+        pathname: '/**',
+      },
+    ],
+  },
+
+  // Sécurité (Headers HTTP)
+  async headers() {
+    return [
+      {
+        source: '/(.*)',
+        headers: [
+          { key: 'X-Content-Type-Options', value: 'nosniff' },
+          { key: 'X-Frame-Options', value: 'DENY' },
+          { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
+        ],
+      },
+    ];
+  },
+};
+
+export default nextConfig;
+</file>
+
+<file path="package.json">
+{
+  "name": "magicwish",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint"
+  },
+  "dependencies": {
+    "@types/papaparse": "^5.5.1",
+    "firebase": "^12.5.0",
+    "next": "^16.0.8",
+    "papaparse": "^5.5.3",
+    "react": "^19.2.1",
+    "react-dom": "^19.2.1",
+    "react-hot-toast": "^2.6.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "babel-plugin-react-compiler": "1.0.0",
+    "eslint": "^9",
+    "eslint-config-next": "16.0.3",
+    "tailwindcss": "^4",
+    "typescript": "^5"
+  }
+}
+</file>
+
+<file path="app/trades/manual/page.tsx">
+'use client';
+
+import { useState, useMemo } from 'react'; // <--- Ajout de useMemo
+import { useAuth } from '@/lib/AuthContext';
+import { useCardCollection, CardType } from '@/hooks/useCardCollection';
+import { useTradeTransaction } from '@/hooks/useTradeTransaction';
+import toast from 'react-hot-toast';
+import CardVersionPickerModal, { ScryfallCardRaw } from '@/components/CardVersionPickerModal';
+
+export default function ManualTradePage() {
+  const { user } = useAuth();
+  const { cards: myCollection, loading } = useCardCollection('collection'); 
+  const { executeTrade, isProcessing } = useTradeTransaction();
+
+  // --- ÉTATS ---
+  const [toGive, setToGive] = useState<CardType[]>([]);
+  const [toReceive, setToReceive] = useState<CardType[]>([]);
+  
+  const [localSearch, setLocalSearch] = useState('');
+  
+  const [remoteSearch, setRemoteSearch] = useState('');
+  const [searchResults, setSearchResults] = useState<ScryfallCardRaw[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+
+  // État pour la modale de sélection
+  const [cardToPick, setCardToPick] = useState<ScryfallCardRaw | null>(null);
+
+  // --- LOGIQUE AJOUT / RETRAIT ---
+  
+  const handleAddToGive = (card: CardType) => {
+      const existing = toGive.find(c => c.id === card.id);
+      if (existing) {
+          if (existing.quantity < card.quantity) { 
+              setToGive(prev => prev.map(c => c.id === card.id ? { ...c, quantity: c.quantity + 1 } : c));
+          } else {
+              toast.error("Max quantité atteinte");
+          }
+      } else {
+          setToGive(prev => [...prev, { ...card, quantity: 1 }]);
+      }
+  };
+
+  const handleSearchScryfall = async (e: React.FormEvent) => {
+      e.preventDefault();
+      if (!remoteSearch.trim()) return;
+      setIsSearching(true);
+      try {
+          const res = await fetch(`/api/search?q=${remoteSearch}`); 
+          const data = await res.json();
+          setSearchResults(data.data || []);
+      } catch (e) { toast.error("Erreur recherche"); }
+      finally { setIsSearching(false); }
+  };
+
+  // Click sur résultat recherche -> Ouvre la modale
+  const handleSearchResultClick = (scryfallCard: ScryfallCardRaw) => {
+    setCardToPick(scryfallCard);
+  };
+
+  // Retour de la modale -> Ajoute à la liste "Je reçois"
+  const handleConfirmReceive = (card: CardType) => {
+      const existing = toReceive.find(c => c.id === card.id && c.isFoil === card.isFoil); 
+      
+      if (existing) {
+          setToReceive(prev => prev.map(c => 
+              (c.id === card.id && c.isFoil === card.isFoil) 
+              ? { ...c, quantity: c.quantity + card.quantity } 
+              : c
+          ));
+      } else {
+          setToReceive(prev => [...prev, card]);
+      }
+      
+      // On vide la recherche pour nettoyer l'interface
+      setSearchResults([]); 
+      setRemoteSearch("");
+      toast.success(`Ajouté : ${card.name}`);
+  };
+
+  // --- VALIDATION ---
+  const handleValidate = async () => {
+      if (toGive.length === 0 && toReceive.length === 0) return;
+      if (!confirm("Confirmer cet échange ? Vos cartes données seront retirées de votre collection.")) return;
+
+      const success = await executeTrade(toGive, toReceive, null);
+      if (success) {
+          setToGive([]);
+          setToReceive([]);
+          setLocalSearch("");
+      }
+  };
+
+  // --- CALCULS & FILTRES ---
+  const valGive = toGive.reduce((acc, c) => acc + (c.customPrice ?? c.price ?? 0) * c.quantity, 0);
+  const valReceive = toReceive.reduce((acc, c) => acc + (c.price || 0) * c.quantity, 0);
+
+  // ⚡ NOUVEAU : On filtre les doublons de nom pour l'affichage
+  const uniqueSearchResults = useMemo(() => {
+    const seen = new Set();
+    return searchResults.filter(card => {
+      // On nettoie le nom (gestion des cartes doubles faces "Name // Name")
+      const name = card.name.split(' // ')[0];
+      if (seen.has(name)) return false;
+      seen.add(name);
+      return true;
+    });
+  }, [searchResults]);
+
+  if (!user) return <div className="p-10 text-center">Connectez-vous.</div>;
+
+  return (
+    <div className="container mx-auto p-4 min-h-screen pb-20">
+        <h1 className="text-2xl font-bold mb-6 flex items-center gap-2">
+            🖐️ Échange Manuel / Externe
+        </h1>
+
+        <div className="grid lg:grid-cols-2 gap-8 h-[calc(100vh-200px)]">
+            
+            {/* --- COLONNE GAUCHE : JE DONNE --- */}
+            <div className="flex flex-col bg-red-50/50 dark:bg-red-900/10 rounded-xl border border-red-100 dark:border-red-900 p-4">
+                <h2 className="font-bold text-red-600 mb-2">📤 Je donne (De ma collection)</h2>
+                
+                 <div className="flex-none mb-4 space-y-2 min-h-[100px] bg-white dark:bg-gray-800 p-2 rounded border border-gray-200 dark:border-gray-700 overflow-y-auto max-h-[30vh]">
+                    {toGive.length === 0 && <p className="text-xs text-gray-400 italic text-center py-4">Aucune carte sélectionnée</p>}
+                    {toGive.map(card => (
+                        <div key={card.id} className="flex justify-between items-center text-sm p-1 border-b dark:border-gray-700">
+                            <span>{card.quantity}x {card.name}</span>
+                            <button onClick={() => setToGive(p => p.filter(c => c.id !== card.id))} className="text-red-500">✕</button>
+                        </div>
+                    ))}
+                </div>
+                
+                <input 
+                    type="text" 
+                    placeholder="Chercher dans ma collection..." 
+                    className="w-full p-2 mb-2 rounded border dark:bg-gray-800 dark:text-white"
+                    value={localSearch}
+                    onChange={e => setLocalSearch(e.target.value)}
+                />
+                
+                <div className="grow overflow-y-auto custom-scrollbar space-y-2 pr-1">
+                    {loading ? <p>Chargement...</p> : 
+                        myCollection
+                            .filter(c => c.name.toLowerCase().includes(localSearch.toLowerCase()))
+                            .slice(0, 20)
+                            .map(card => (
+                                <div key={card.id} onClick={() => handleAddToGive(card)} className="cursor-pointer hover:bg-red-100 dark:hover:bg-red-900/30 p-2 rounded flex items-center gap-2 border border-transparent hover:border-red-200 transition">
+                                    <img src={card.imageUrl} className="w-8 h-11 rounded object-cover bg-gray-200" alt="" />
+                                    <div className="grow min-w-0">
+                                        <p className="font-bold text-xs truncate dark:text-gray-200">{card.name}</p>
+                                        <p className="text-[10px] text-gray-500">{card.setName} - En stock: {card.quantity}</p>
+                                    </div>
+                                    <span className="text-xs font-bold text-gray-400">+</span>
+                                </div>
+                            ))
+                    }
+                </div>
+            </div>
+
+            {/* --- COLONNE DROITE : JE REÇOIS --- */}
+            <div className="flex flex-col bg-green-50/50 dark:bg-green-900/10 rounded-xl border border-green-100 dark:border-green-900 p-4">
+                <h2 className="font-bold text-green-600 mb-2">📥 Je reçois (Ajout libre)</h2>
+
+                {/* 1. Liste des cartes reçues */}
+                 <div className="flex-none mb-4 space-y-2 min-h-[100px] bg-white dark:bg-gray-800 p-2 rounded border border-gray-200 dark:border-gray-700 overflow-y-auto max-h-[30vh]">
+                    {toReceive.length === 0 && <p className="text-xs text-gray-400 italic text-center py-4">Aucune carte ajoutée</p>}
+                    {toReceive.map((card, idx) => (
+                        <div key={`${card.id}-${idx}`} className="flex justify-between items-center text-sm p-1 border-b dark:border-gray-700">
+                            <div className="flex items-center gap-2">
+                                <span className="font-bold">{card.quantity}x</span>
+                                <div className="flex flex-col">
+                                    <span className="dark:text-gray-200">{card.name}</span>
+                                    <span className="text-[10px] text-gray-500">
+                                        {card.setName} {card.isFoil && '✨ Foil'} - {(card.price || 0).toFixed(2)}€
+                                    </span>
+                                </div>
+                            </div>
+                            <button onClick={() => setToReceive(p => p.filter((_, i) => i !== idx))} className="text-red-500">✕</button>
+                        </div>
+                    ))}
+                </div>
+
+                {/* 2. Moteur Scryfall */}
+                <form onSubmit={handleSearchScryfall} className="flex gap-2 mb-2">
+                    <input 
+                        type="text" 
+                        placeholder="Rechercher carte à recevoir..." 
+                        className="grow p-2 rounded border dark:bg-gray-800 dark:text-white"
+                        value={remoteSearch}
+                        onChange={e => setRemoteSearch(e.target.value)}
+                    />
+                    <button type="submit" className="bg-green-600 text-white px-3 rounded">🔍</button>
+                </form>
+
+                {/* 3. Résultats Scryfall (FILTRÉS) */}
+                 <div className="grow overflow-y-auto custom-scrollbar space-y-2 pr-1">
+                    {isSearching && <p className="text-xs">Recherche...</p>}
+                    
+                    {/* On utilise uniqueSearchResults ici ! */}
+                    {uniqueSearchResults.map(card => (
+                        <div key={card.id} onClick={() => handleSearchResultClick(card)} className="cursor-pointer hover:bg-green-100 dark:hover:bg-green-900/30 p-2 rounded flex items-center gap-2 border border-transparent hover:border-green-200 transition">
+                             <div className="w-8 h-11 bg-gray-200 rounded overflow-hidden">
+                                {card.image_uris?.small && <img src={card.image_uris.small} className="w-full h-full object-cover" alt="" />}
+                             </div>
+                             <div className="grow min-w-0">
+                                <p className="font-bold text-xs truncate dark:text-gray-200">{card.name}</p>
+                                <p className="text-[10px] text-gray-500 italic">Sélectionner version...</p>
+                             </div>
+                             <span className="text-xs font-bold text-gray-400">Choisir ›</span>
+                        </div>
+                    ))}
+                </div>
+            </div>
+        </div>
+
+        {/* --- FOOTER DE VALIDATION --- */}
+        <div className="fixed bottom-0 left-0 right-0 p-4 bg-white dark:bg-gray-900 border-t dark:border-gray-800 flex justify-between items-center z-40 shadow-2xl">
+            <div className="flex gap-4 text-sm">
+                <div>Donne: <span className="font-bold">{valGive.toFixed(2)}€</span></div>
+                <div>Reçoit: <span className="font-bold">{valReceive.toFixed(2)}€</span></div>
+            </div>
+            <button 
+                onClick={handleValidate}
+                disabled={isProcessing || (toGive.length === 0 && toReceive.length === 0)}
+                className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-3 rounded-xl font-bold disabled:opacity-50 transition"
+            >
+                {isProcessing ? 'Validation...' : '✅ Valider l\'échange'}
+            </button>
+        </div>
+
+        {/* MODALE DE SÉLECTION DE VERSION */}
+        <CardVersionPickerModal 
+            isOpen={!!cardToPick}
+            baseCard={cardToPick}
+            onClose={() => setCardToPick(null)}
+            onConfirm={handleConfirmReceive}
+        />
+
+    </div>
+  );
+}
+</file>
+
 <file path="hooks/useTradeMatcher.ts">
 // hooks/useTradeMatcher.ts
 import { useState } from 'react';
@@ -2220,105 +2573,6 @@ export function useTradeTransaction() {
 }
 </file>
 
-<file path="lib/firebase.ts">
-import { initializeApp, getApps, getApp } from 'firebase/app';
-import { getAuth } from 'firebase/auth';
-import { getFirestore } from 'firebase/firestore';
-
-const firebaseConfig = {
-  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
-  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
-  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
-  storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
-  appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
-};
-
-// Initialisation unique (évite les erreurs de re-init en dev)
-const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
-
-export const auth = getAuth(app);
-export const db = getFirestore(app);
-</file>
-
-<file path="next.config.ts">
-import type { NextConfig } from 'next';
-
-const nextConfig: NextConfig = {
-  // Mode strict pour détecter les bugs en dev
-  reactStrictMode: true,
-
-  // Optimisation des images
-  images: {
-    formats: ['image/avif', 'image/webp'],
-    remotePatterns: [
-      {
-        protocol: 'https',
-        hostname: 'cards.scryfall.io', // Indispensable pour tes cartes
-        port: '',
-        pathname: '/**',
-      },
-      {
-        protocol: 'https',
-        hostname: '*.googleusercontent.com', // Indispensable pour les avatars Google Auth
-        port: '',
-        pathname: '/**',
-      },
-    ],
-  },
-
-  // Sécurité (Headers HTTP)
-  async headers() {
-    return [
-      {
-        source: '/(.*)',
-        headers: [
-          { key: 'X-Content-Type-Options', value: 'nosniff' },
-          { key: 'X-Frame-Options', value: 'DENY' },
-          { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
-        ],
-      },
-    ];
-  },
-};
-
-export default nextConfig;
-</file>
-
-<file path="package.json">
-{
-  "name": "magicwish",
-  "version": "0.1.0",
-  "private": true,
-  "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
-    "lint": "eslint"
-  },
-  "dependencies": {
-    "@types/papaparse": "^5.5.1",
-    "firebase": "^12.5.0",
-    "next": "^16.0.8",
-    "papaparse": "^5.5.3",
-    "react": "^19.2.1",
-    "react-dom": "^19.2.1",
-    "react-hot-toast": "^2.6.0"
-  },
-  "devDependencies": {
-    "@tailwindcss/postcss": "^4",
-    "@types/node": "^20",
-    "@types/react": "^19",
-    "@types/react-dom": "^19",
-    "babel-plugin-react-compiler": "1.0.0",
-    "eslint": "^9",
-    "eslint-config-next": "16.0.3",
-    "tailwindcss": "^4",
-    "typescript": "^5"
-  }
-}
-</file>
-
 <file path="app/api/search/route.ts">
 // app/api/search/route.ts
 import { NextResponse } from 'next/server';
@@ -2564,6 +2818,474 @@ export default function MagicCard(props: MagicCardProps) {
         </div>
       </div>
     </div>
+  );
+}
+</file>
+
+<file path="hooks/useCardCollection.ts">
+// hooks/useCardCollection.ts
+import { useState, useEffect, useMemo } from 'react';
+import { db } from '@/lib/firebase';
+import { collection, onSnapshot, doc, updateDoc, deleteDoc, increment } from 'firebase/firestore';
+import { useAuth } from '@/lib/AuthContext';
+import toast from 'react-hot-toast';
+
+export type CardType = {
+  id: string;
+  name: string;
+  imageUrl: string;
+  imageBackUrl?: string;
+  quantity: number;
+  price?: number; 
+  customPrice?: number;
+  setName?: string;
+  setCode?: string;
+  wishlistId?: string;
+  
+  // --- NOUVEAUX CHAMPS ---
+  isFoil?: boolean;             // L'utilisateur veut-il (ou a-t-il) une version Foil ?
+  isSpecificVersion?: boolean;  // Si true : Je veux CETTE édition précise. Si false : N'importe laquelle.
+};
+
+export function useCardCollection(
+    target: 'collection' | 'wishlist', 
+    listId: string = 'default',
+    targetUid?: string
+) {
+  const { user, loading: authLoading } = useAuth();
+  const [cards, setCards] = useState<CardType[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const effectiveUid = targetUid || user?.uid;
+  const isOwner = user?.uid === effectiveUid; 
+
+  useEffect(() => {
+    if (!effectiveUid || authLoading) {
+        if (!authLoading && !effectiveUid) setLoading(false);
+        return;
+    }
+    setLoading(true);
+
+    let collectionPath = '';
+    if (target === 'collection') {
+        collectionPath = `users/${effectiveUid}/collection`;
+    } else {
+        if (listId === 'default') collectionPath = `users/${effectiveUid}/wishlist`;
+        else collectionPath = `users/${effectiveUid}/wishlists_data/${listId}/cards`;
+    }
+
+    const colRef = collection(db, collectionPath);
+    const unsubscribe = onSnapshot(colRef, (snapshot) => {
+      const items = snapshot.docs.map((doc) => ({
+        id: doc.id,
+        wishlistId: listId,
+        ...doc.data(),
+      })) as CardType[];
+      setCards(items);
+      setLoading(false);
+    });
+    return () => unsubscribe();
+  }, [effectiveUid, target, listId, authLoading]);
+
+  // --- ACTIONS ---
+
+  const getDocRef = (cardId: string) => {
+      if (!isOwner || !effectiveUid) return null;
+      let path = '';
+      if (target === 'collection') path = `users/${effectiveUid}/collection`;
+      else if (listId === 'default') path = `users/${effectiveUid}/wishlist`;
+      else path = `users/${effectiveUid}/wishlists_data/${listId}/cards`;
+      return doc(db, path, cardId);
+  };
+
+  const setCustomPrice = async (cardId: string, price: number) => {
+      if (!isOwner) return;
+      const ref = getDocRef(cardId);
+      if (ref) {
+          await updateDoc(ref, { customPrice: price });
+          toast.success("Prix mis à jour");
+      }
+  };
+
+  // NOUVEAU : Fonction pour changer Foil / Version stricte
+  const toggleAttribute = async (cardId: string, field: 'isFoil' | 'isSpecificVersion', currentValue: boolean) => {
+      if (!isOwner) return;
+      const ref = getDocRef(cardId);
+      if (ref) {
+          await updateDoc(ref, { [field]: !currentValue });
+          // Pas de toast ici pour ne pas spammer l'UI, le switch visuel suffit
+      }
+  };
+
+  const updateQuantity = async (cardId: string, amount: number, currentQuantity: number) => {
+    if (!isOwner) return;
+    const ref = getDocRef(cardId);
+    if (!ref) return;
+    if (currentQuantity + amount <= 0) return 'shouldDelete';
+    try {
+      await updateDoc(ref, { quantity: increment(amount) });
+      return 'updated';
+    } catch (err) { return 'error'; }
+  };
+
+  const removeCard = async (cardId: string) => {
+    if (!isOwner) return;
+    const ref = getDocRef(cardId);
+    if(ref) { await deleteDoc(ref); toast.success('Carte retirée', { icon: '🗑️' }); }
+  };
+
+  const totalPrice = useMemo(() => {
+    return cards.reduce((acc, card) => {
+        const effectivePrice = card.customPrice !== undefined ? card.customPrice : (card.price || 0);
+        return acc + effectivePrice * card.quantity;
+    }, 0);
+  }, [cards]);
+
+  return { 
+      cards, loading, isOwner, totalPrice,
+      updateQuantity, removeCard, setCustomPrice, toggleAttribute // Export de la nouvelle fonction
+  };
+}
+</file>
+
+<file path="lib/AuthContext.tsx">
+'use client';
+
+import { createContext, useContext, useEffect, useState, useMemo } from 'react';
+import { 
+  onAuthStateChanged, 
+  signInWithPopup, 
+  GoogleAuthProvider, 
+  signOut, 
+  User 
+} from 'firebase/auth';
+import { doc, onSnapshot, collection } from 'firebase/firestore'; 
+import { auth, db } from './firebase'; 
+import toast from 'react-hot-toast';
+
+type AuthContextType = {
+  user: User | null;
+  username: string | null;
+  loading: boolean;
+  friendRequestCount: number; // Compteur pour les notifications
+  signInWithGoogle: () => Promise<void>;
+  logOut: () => Promise<void>;
+};
+
+const AuthContext = createContext<AuthContextType>({
+  user: null,
+  username: null,
+  loading: true,
+  friendRequestCount: 0,
+  signInWithGoogle: async () => {},
+  logOut: async () => {},
+});
+
+export const useAuth = () => useContext(AuthContext);
+
+export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
+  const [user, setUser] = useState<User | null>(null);
+  const [username, setUsername] = useState<string | null>(null);
+  const [friendRequestCount, setFriendRequestCount] = useState(0);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const unsubscribeAuth = onAuthStateChanged(auth, (currentUser) => {
+      setUser(currentUser);
+
+      if (currentUser) {
+        // 1. Écoute du Pseudo (Profil Public)
+        const profileRef = doc(db, 'users', currentUser.uid, 'public_profile', 'info');
+        const unsubProfile = onSnapshot(profileRef, (docSnap) => {
+          if (docSnap.exists()) {
+            setUsername(docSnap.data().username);
+          } else {
+            setUsername(null);
+          }
+          // On ne met loading à false qu'ici pour être sûr d'avoir le username
+          setLoading(false);
+        });
+
+        // 2. Écoute des Demandes d'amis (Notifications)
+        const requestsRef = collection(db, 'users', currentUser.uid, 'friend_requests_received');
+        const unsubRequests = onSnapshot(requestsRef, (snap) => {
+          setFriendRequestCount(snap.docs.length);
+        });
+
+        // Nettoyage quand l'utilisateur change ou se déconnecte
+        return () => {
+          unsubProfile();
+          unsubRequests();
+        };
+      } else {
+        setUsername(null);
+        setFriendRequestCount(0);
+        setLoading(false);
+      }
+    });
+
+    return () => unsubscribeAuth();
+  }, []);
+
+  const signInWithGoogle = async () => {
+    try {
+      const provider = new GoogleAuthProvider();
+      await signInWithPopup(auth, provider);
+      toast.success('Connexion réussie !');
+    } catch (error) {
+      console.error(error);
+      toast.error("Erreur lors de la connexion Google");
+    }
+  };
+
+  const logOut = async () => {
+    try {
+      await signOut(auth);
+      toast.success('Déconnecté');
+    } catch (error) {
+      console.error(error);
+      toast.error("Erreur déconnexion");
+    }
+  };
+
+  const value = useMemo(() => ({
+    user,
+    username,
+    friendRequestCount,
+    loading,
+    signInWithGoogle,
+    logOut
+  }), [user, username, loading, friendRequestCount]);
+
+  return (
+    <AuthContext.Provider value={value}>
+      {children}
+    </AuthContext.Provider>
+  );
+};
+</file>
+
+<file path="app/contacts/page.tsx">
+// app/contacts/page.tsx
+'use client';
+
+import { useState, useEffect } from 'react';
+import Link from 'next/link';
+import { useAuth } from '@/lib/AuthContext';
+import { useFriends, FriendProfile } from '@/hooks/useFriends';
+import toast from 'react-hot-toast';
+
+// Liste des Planeswalkers pour l'exemple aléatoire
+const PLANESWALKERS = [
+  "Jace", "Liliana", "Chandra", "Ajani", "Garruk", 
+  "Teferi", "Nissa", "Gideon", "Nicol_Bolas", "Ugin", 
+  "Karn", "Sorin", "Elspeth", "Tezzeret", "Sarkhan",
+  "Vraska", "Domri", "Ral_Zarek", "Kaya", "Narset"
+];
+
+export default function ContactsPage() {
+  const { user } = useAuth();
+  
+  const { 
+    friends, requestsReceived, loading,
+    searchUsers, 
+    sendFriendRequest, acceptRequest, declineRequest, removeFriend
+  } = useFriends();
+
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<FriendProfile[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+  
+  // État pour le placeholder aléatoire
+  const [randomPlaceholder, setRandomPlaceholder] = useState("ex: Jace...");
+
+  // Au chargement, on choisit un nom au hasard
+  useEffect(() => {
+    const randomName = PLANESWALKERS[Math.floor(Math.random() * PLANESWALKERS.length)];
+    setRandomPlaceholder(`ex: ${randomName} (pour trouver ${randomName.toLowerCase()}_fan...)`);
+  }, []);
+
+  if (!user) return <div className="p-10 text-center">Veuillez vous connecter pour gérer vos contacts.</div>;
+
+  const handleSearch = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!searchQuery.trim()) return;
+    
+    setIsSearching(true);
+    setSearchResults([]);
+    
+    try {
+      const results = await searchUsers(searchQuery);
+      setSearchResults(results);
+      
+      if (results.length === 0) {
+        toast("Aucun utilisateur trouvé", { icon: '🤷‍♂️' });
+      }
+    } catch (err: any) {
+        console.error(err);
+        if (err.message && err.message.includes("indexes")) {
+            toast.error("Configuration serveur requise (voir console F12)");
+        } else {
+            toast.error("Erreur lors de la recherche");
+        }
+    } finally {
+      setIsSearching(false);
+    }
+  };
+
+  return (
+    <main className="container mx-auto p-4 max-w-4xl min-h-[80vh]">
+      <h1 className="text-3xl font-bold mb-8 text-blue-600 dark:text-blue-400 flex items-center gap-2">
+        👥 Mes Contacts
+      </h1>
+
+      <div className="grid md:grid-cols-2 gap-8">
+        
+        {/* --- COLONNE GAUCHE : RECHERCHE & DEMANDES --- */}
+        <div className="space-y-8">
+            
+            {/* 1. MODULE DE RECHERCHE */}
+            <div className="bg-white dark:bg-gray-800 p-6 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700">
+                <h2 className="font-bold text-lg mb-4 text-gray-800 dark:text-white">Chercher un ami</h2>
+                
+                <form onSubmit={handleSearch} className="flex gap-2 mb-4">
+                    <div className="relative flex-grow">
+                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">@</span>
+                        <input 
+                            type="text" 
+                            placeholder={randomPlaceholder} 
+                            className="w-full pl-7 p-2 border rounded-lg bg-gray-50 dark:bg-gray-900 dark:border-gray-600 outline-none focus:ring-2 focus:ring-blue-500 lowercase text-gray-900 dark:text-white"
+                            value={searchQuery}
+                            onChange={e => setSearchQuery(e.target.value.toLowerCase())}
+                        />
+                    </div>
+                    <button 
+                        type="submit" 
+                        disabled={isSearching}
+                        className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-bold transition disabled:opacity-50"
+                    >
+                        {isSearching ? '...' : '🔍'}
+                    </button>
+                </form>
+
+                {/* LISTE DES RÉSULTATS DE RECHERCHE */}
+                <div className="space-y-2 max-h-60 overflow-y-auto custom-scrollbar">
+                    {searchResults.map(result => (
+                        <div key={result.uid} className="flex items-center justify-between bg-blue-50 dark:bg-blue-900/20 p-3 rounded-lg border border-blue-100 dark:border-blue-800 animate-in fade-in">
+                            <div className="flex items-center gap-3">
+                                {/* Avatar */}
+                                <div className="w-8 h-8 rounded-full bg-blue-200 flex items-center justify-center text-blue-700 font-bold text-xs overflow-hidden">
+                                    {result.photoURL ? <img src={result.photoURL} alt="" className="w-full h-full object-cover"/> : result.username[0].toUpperCase()}
+                                </div>
+                                {/* Infos */}
+                                <div>
+                                    <p className="font-bold text-sm text-gray-900 dark:text-white">{result.displayName}</p>
+                                    <p className="text-xs text-blue-600 dark:text-blue-400">@{result.username}</p>
+                                </div>
+                            </div>
+                            {/* Bouton Ajouter */}
+                            <button 
+                                onClick={() => sendFriendRequest(result)}
+                                className="text-xs bg-blue-600 text-white px-3 py-1.5 rounded-full hover:bg-blue-700 transition shadow-sm"
+                            >
+                                Ajouter +
+                            </button>
+                        </div>
+                    ))}
+                </div>
+            </div>
+
+            {/* 2. DEMANDES D'AMIS REÇUES */}
+            {requestsReceived.length > 0 && (
+                <div className="bg-white dark:bg-gray-800 p-6 rounded-xl shadow-sm border border-orange-200 dark:border-orange-900/50 animate-in slide-in-from-left-4">
+                    <h2 className="font-bold text-lg mb-4 text-orange-600 dark:text-orange-400 flex items-center gap-2">
+                        🔔 Demandes reçues <span className="bg-orange-100 text-orange-800 text-xs px-2 py-0.5 rounded-full">{requestsReceived.length}</span>
+                    </h2>
+                    <div className="space-y-3">
+                        {requestsReceived.map(req => (
+                            <div key={req.uid} className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
+                                <div className="flex items-center gap-3">
+                                    <div className="w-10 h-10 rounded-full bg-gray-300 overflow-hidden">
+                                        {req.photoURL ? <img src={req.photoURL} alt="" className="w-full h-full object-cover"/> : <span className="flex items-center justify-center h-full font-bold text-gray-500">{req.username[0].toUpperCase()}</span>}
+                                    </div>
+                                    <div>
+                                        <p className="font-bold text-sm text-gray-900 dark:text-white">{req.displayName}</p>
+                                        <p className="text-xs text-gray-500">@{req.username}</p>
+                                    </div>
+                                </div>
+                                <div className="flex gap-2">
+                                    <button onClick={() => acceptRequest(req)} className="p-2 bg-green-100 text-green-700 hover:bg-green-200 rounded-full transition" title="Accepter">✓</button>
+                                    <button onClick={() => declineRequest(req.uid)} className="p-2 bg-red-100 text-red-700 hover:bg-red-200 rounded-full transition" title="Refuser">✕</button>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )}
+        </div>
+
+        {/* --- COLONNE DROITE : LISTE MES AMIS --- */}
+        <div className="bg-white dark:bg-gray-800 p-6 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 h-fit">
+            <h2 className="font-bold text-lg mb-4 flex items-center gap-2 text-gray-800 dark:text-white">
+                Mes Amis <span className="text-gray-400 font-normal">({friends.length})</span>
+            </h2>
+            
+            {loading ? (
+                <p className="text-gray-500 text-sm">Chargement...</p>
+            ) : friends.length === 0 ? (
+                <div className="text-center py-10 text-gray-400 italic">
+                    <p>Aucun ami pour l&apos;instant.</p>
+                </div>
+            ) : (
+                <div className="space-y-2">
+                    {friends.map(friend => (
+                        <div key={friend.uid} className="group flex items-center justify-between p-3 hover:bg-gray-50 dark:hover:bg-gray-700/50 rounded-lg transition border border-transparent hover:border-gray-100 dark:hover:border-gray-600">
+                            
+                            {/* Identité Ami */}
+                            <div className="flex items-center gap-3">
+                                <div className="w-10 h-10 rounded-full bg-gradient-to-br from-purple-500 to-blue-500 flex items-center justify-center text-white font-bold shadow-sm overflow-hidden">
+                                    {friend.photoURL ? <img src={friend.photoURL} alt="" className="w-full h-full object-cover" /> : friend.username[0].toUpperCase()}
+                                </div>
+                                <div>
+                                    <p className="font-bold text-gray-800 dark:text-gray-200">{friend.displayName}</p>
+                                    <p className="text-xs text-gray-500">@{friend.username}</p>
+                                </div>
+                            </div>
+                            
+                            {/* Actions (Visibles au survol sur desktop) */}
+                            <div className="flex items-center gap-2 opacity-100 md:opacity-0 group-hover:opacity-100 transition-opacity">
+                                {/* BOUTON VOIR PROFIL */}
+                                <Link 
+                                    href={`/user/${friend.uid}`}
+                                    className="text-xs bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300 px-3 py-1.5 rounded hover:bg-blue-200 dark:hover:bg-blue-800 transition font-medium"
+                                >
+                                    Voir
+                                </Link>
+
+                                {/* --- NOUVEAU : BOUTON ÉCHANGER --- */}
+                                <Link 
+                                    href={`/trades/new/${friend.uid}`}
+                                    className="text-xs bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300 px-3 py-1.5 rounded hover:bg-purple-200 dark:hover:bg-purple-800 transition font-medium flex items-center gap-1"
+                                >
+                                    🤝 Échanger
+                                </Link>
+                                
+                                <button 
+                                    onClick={() => removeFriend(friend.uid)} 
+                                    className="text-red-400 hover:text-red-600 text-xs px-2 py-1"
+                                    title="Retirer cet ami"
+                                >
+                                    ✕
+                                </button>
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            )}
+        </div>
+
+      </div>
+    </main>
   );
 }
 </file>
@@ -2827,466 +3549,6 @@ export default function TradesPage() {
             </div>
         )}
 
-    </main>
-  );
-}
-</file>
-
-<file path="hooks/useCardCollection.ts">
-// hooks/useCardCollection.ts
-import { useState, useEffect, useMemo } from 'react';
-import { db } from '@/lib/firebase';
-import { collection, onSnapshot, doc, updateDoc, deleteDoc, increment } from 'firebase/firestore';
-import { useAuth } from '@/lib/AuthContext';
-import toast from 'react-hot-toast';
-
-export type CardType = {
-  id: string;
-  name: string;
-  imageUrl: string;
-  imageBackUrl?: string;
-  quantity: number;
-  price?: number; 
-  customPrice?: number;
-  setName?: string;
-  setCode?: string;
-  wishlistId?: string;
-  
-  // --- NOUVEAUX CHAMPS ---
-  isFoil?: boolean;             // L'utilisateur veut-il (ou a-t-il) une version Foil ?
-  isSpecificVersion?: boolean;  // Si true : Je veux CETTE édition précise. Si false : N'importe laquelle.
-};
-
-export function useCardCollection(
-    target: 'collection' | 'wishlist', 
-    listId: string = 'default',
-    targetUid?: string
-) {
-  const { user, loading: authLoading } = useAuth();
-  const [cards, setCards] = useState<CardType[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  const effectiveUid = targetUid || user?.uid;
-  const isOwner = user?.uid === effectiveUid; 
-
-  useEffect(() => {
-    if (!effectiveUid || authLoading) {
-        if (!authLoading && !effectiveUid) setLoading(false);
-        return;
-    }
-    setLoading(true);
-
-    let collectionPath = '';
-    if (target === 'collection') {
-        collectionPath = `users/${effectiveUid}/collection`;
-    } else {
-        if (listId === 'default') collectionPath = `users/${effectiveUid}/wishlist`;
-        else collectionPath = `users/${effectiveUid}/wishlists_data/${listId}/cards`;
-    }
-
-    const colRef = collection(db, collectionPath);
-    const unsubscribe = onSnapshot(colRef, (snapshot) => {
-      const items = snapshot.docs.map((doc) => ({
-        id: doc.id,
-        wishlistId: listId,
-        ...doc.data(),
-      })) as CardType[];
-      setCards(items);
-      setLoading(false);
-    });
-    return () => unsubscribe();
-  }, [effectiveUid, target, listId, authLoading]);
-
-  // --- ACTIONS ---
-
-  const getDocRef = (cardId: string) => {
-      if (!isOwner || !effectiveUid) return null;
-      let path = '';
-      if (target === 'collection') path = `users/${effectiveUid}/collection`;
-      else if (listId === 'default') path = `users/${effectiveUid}/wishlist`;
-      else path = `users/${effectiveUid}/wishlists_data/${listId}/cards`;
-      return doc(db, path, cardId);
-  };
-
-  const setCustomPrice = async (cardId: string, price: number) => {
-      if (!isOwner) return;
-      const ref = getDocRef(cardId);
-      if (ref) {
-          await updateDoc(ref, { customPrice: price });
-          toast.success("Prix mis à jour");
-      }
-  };
-
-  // NOUVEAU : Fonction pour changer Foil / Version stricte
-  const toggleAttribute = async (cardId: string, field: 'isFoil' | 'isSpecificVersion', currentValue: boolean) => {
-      if (!isOwner) return;
-      const ref = getDocRef(cardId);
-      if (ref) {
-          await updateDoc(ref, { [field]: !currentValue });
-          // Pas de toast ici pour ne pas spammer l'UI, le switch visuel suffit
-      }
-  };
-
-  const updateQuantity = async (cardId: string, amount: number, currentQuantity: number) => {
-    if (!isOwner) return;
-    const ref = getDocRef(cardId);
-    if (!ref) return;
-    if (currentQuantity + amount <= 0) return 'shouldDelete';
-    try {
-      await updateDoc(ref, { quantity: increment(amount) });
-      return 'updated';
-    } catch (err) { return 'error'; }
-  };
-
-  const removeCard = async (cardId: string) => {
-    if (!isOwner) return;
-    const ref = getDocRef(cardId);
-    if(ref) { await deleteDoc(ref); toast.success('Carte retirée', { icon: '🗑️' }); }
-  };
-
-  const totalPrice = useMemo(() => {
-    return cards.reduce((acc, card) => {
-        const effectivePrice = card.customPrice !== undefined ? card.customPrice : (card.price || 0);
-        return acc + effectivePrice * card.quantity;
-    }, 0);
-  }, [cards]);
-
-  return { 
-      cards, loading, isOwner, totalPrice,
-      updateQuantity, removeCard, setCustomPrice, toggleAttribute // Export de la nouvelle fonction
-  };
-}
-</file>
-
-<file path="lib/AuthContext.tsx">
-'use client';
-
-import { createContext, useContext, useEffect, useState, useMemo } from 'react';
-import { 
-  onAuthStateChanged, 
-  signInWithPopup, 
-  GoogleAuthProvider, 
-  signOut, 
-  User 
-} from 'firebase/auth';
-import { doc, onSnapshot, collection } from 'firebase/firestore'; 
-import { auth, db } from './firebase'; 
-import toast from 'react-hot-toast';
-
-type AuthContextType = {
-  user: User | null;
-  username: string | null;
-  loading: boolean;
-  friendRequestCount: number; // Compteur pour les notifications
-  signInWithGoogle: () => Promise<void>;
-  logOut: () => Promise<void>;
-};
-
-const AuthContext = createContext<AuthContextType>({
-  user: null,
-  username: null,
-  loading: true,
-  friendRequestCount: 0,
-  signInWithGoogle: async () => {},
-  logOut: async () => {},
-});
-
-export const useAuth = () => useContext(AuthContext);
-
-export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
-  const [user, setUser] = useState<User | null>(null);
-  const [username, setUsername] = useState<string | null>(null);
-  const [friendRequestCount, setFriendRequestCount] = useState(0);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    const unsubscribeAuth = onAuthStateChanged(auth, (currentUser) => {
-      setUser(currentUser);
-
-      if (currentUser) {
-        // 1. Écoute du Pseudo (Profil Public)
-        const profileRef = doc(db, 'users', currentUser.uid, 'public_profile', 'info');
-        const unsubProfile = onSnapshot(profileRef, (docSnap) => {
-          if (docSnap.exists()) {
-            setUsername(docSnap.data().username);
-          } else {
-            setUsername(null);
-          }
-          // On ne met loading à false qu'ici pour être sûr d'avoir le username
-          setLoading(false);
-        });
-
-        // 2. Écoute des Demandes d'amis (Notifications)
-        const requestsRef = collection(db, 'users', currentUser.uid, 'friend_requests_received');
-        const unsubRequests = onSnapshot(requestsRef, (snap) => {
-          setFriendRequestCount(snap.docs.length);
-        });
-
-        // Nettoyage quand l'utilisateur change ou se déconnecte
-        return () => {
-          unsubProfile();
-          unsubRequests();
-        };
-      } else {
-        setUsername(null);
-        setFriendRequestCount(0);
-        setLoading(false);
-      }
-    });
-
-    return () => unsubscribeAuth();
-  }, []);
-
-  const signInWithGoogle = async () => {
-    try {
-      const provider = new GoogleAuthProvider();
-      await signInWithPopup(auth, provider);
-      toast.success('Connexion réussie !');
-    } catch (error) {
-      console.error(error);
-      toast.error("Erreur lors de la connexion Google");
-    }
-  };
-
-  const logOut = async () => {
-    try {
-      await signOut(auth);
-      toast.success('Déconnecté');
-    } catch (error) {
-      console.error(error);
-      toast.error("Erreur déconnexion");
-    }
-  };
-
-  const value = useMemo(() => ({
-    user,
-    username,
-    friendRequestCount,
-    loading,
-    signInWithGoogle,
-    logOut
-  }), [user, username, loading, friendRequestCount]);
-
-  return (
-    <AuthContext.Provider value={value}>
-      {children}
-    </AuthContext.Provider>
-  );
-};
-</file>
-
-<file path="app/contacts/page.tsx">
-// app/contacts/page.tsx
-'use client';
-
-import { useState, useEffect } from 'react'; // <--- Ajout de useEffect
-import Link from 'next/link';
-import { useAuth } from '@/lib/AuthContext';
-import { useFriends, FriendProfile } from '@/hooks/useFriends';
-import toast from 'react-hot-toast';
-
-// Liste des Planeswalkers pour l'exemple aléatoire
-const PLANESWALKERS = [
-  "Jace", "Liliana", "Chandra", "Ajani", "Garruk", 
-  "Teferi", "Nissa", "Gideon", "Nicol_Bolas", "Ugin", 
-  "Karn", "Sorin", "Elspeth", "Tezzeret", "Sarkhan",
-  "Vraska", "Domri", "Ral_Zarek", "Kaya", "Narset"
-];
-
-export default function ContactsPage() {
-  const { user } = useAuth();
-  
-  const { 
-    friends, requestsReceived, loading,
-    searchUsers, 
-    sendFriendRequest, acceptRequest, declineRequest, removeFriend
-  } = useFriends();
-
-  const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState<FriendProfile[]>([]);
-  const [isSearching, setIsSearching] = useState(false);
-  
-  // État pour le placeholder aléatoire
-  const [randomPlaceholder, setRandomPlaceholder] = useState("ex: Jace...");
-
-  // Au chargement, on choisit un nom au hasard
-  useEffect(() => {
-    const randomName = PLANESWALKERS[Math.floor(Math.random() * PLANESWALKERS.length)];
-    setRandomPlaceholder(`ex: ${randomName} (pour trouver ${randomName.toLowerCase()}_fan...)`);
-  }, []);
-
-  if (!user) return <div className="p-10 text-center">Veuillez vous connecter pour gérer vos contacts.</div>;
-
-  const handleSearch = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!searchQuery.trim()) return;
-    
-    setIsSearching(true);
-    setSearchResults([]);
-    
-    try {
-      const results = await searchUsers(searchQuery);
-      setSearchResults(results);
-      
-      if (results.length === 0) {
-        toast("Aucun utilisateur trouvé", { icon: '🤷‍♂️' });
-      }
-    } catch (err: any) {
-        console.error(err);
-        if (err.message && err.message.includes("indexes")) {
-            toast.error("Configuration serveur requise (voir console F12)");
-        } else {
-            toast.error("Erreur lors de la recherche");
-        }
-    } finally {
-      setIsSearching(false);
-    }
-  };
-
-  return (
-    <main className="container mx-auto p-4 max-w-4xl min-h-[80vh]">
-      <h1 className="text-3xl font-bold mb-8 text-blue-600 dark:text-blue-400 flex items-center gap-2">
-        👥 Mes Contacts
-      </h1>
-
-      <div className="grid md:grid-cols-2 gap-8">
-        
-        {/* --- COLONNE GAUCHE : RECHERCHE & DEMANDES --- */}
-        <div className="space-y-8">
-            
-            {/* 1. MODULE DE RECHERCHE */}
-            <div className="bg-white dark:bg-gray-800 p-6 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700">
-                <h2 className="font-bold text-lg mb-4 text-gray-800 dark:text-white">Chercher un ami</h2>
-                
-                <form onSubmit={handleSearch} className="flex gap-2 mb-4">
-                    <div className="relative flex-grow">
-                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">@</span>
-                        <input 
-                            type="text" 
-                            placeholder={randomPlaceholder} // <--- Placeholder dynamique ici
-                            className="w-full pl-7 p-2 border rounded-lg bg-gray-50 dark:bg-gray-900 dark:border-gray-600 outline-none focus:ring-2 focus:ring-blue-500 lowercase text-gray-900 dark:text-white"
-                            value={searchQuery}
-                            onChange={e => setSearchQuery(e.target.value.toLowerCase())}
-                        />
-                    </div>
-                    <button 
-                        type="submit" 
-                        disabled={isSearching}
-                        className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-bold transition disabled:opacity-50"
-                    >
-                        {isSearching ? '...' : '🔍'}
-                    </button>
-                </form>
-
-                {/* LISTE DES RÉSULTATS DE RECHERCHE */}
-                <div className="space-y-2 max-h-60 overflow-y-auto custom-scrollbar">
-                    {searchResults.map(result => (
-                        <div key={result.uid} className="flex items-center justify-between bg-blue-50 dark:bg-blue-900/20 p-3 rounded-lg border border-blue-100 dark:border-blue-800 animate-in fade-in">
-                            <div className="flex items-center gap-3">
-                                {/* Avatar */}
-                                <div className="w-8 h-8 rounded-full bg-blue-200 flex items-center justify-center text-blue-700 font-bold text-xs overflow-hidden">
-                                    {result.photoURL ? <img src={result.photoURL} alt="" className="w-full h-full object-cover"/> : result.username[0].toUpperCase()}
-                                </div>
-                                {/* Infos */}
-                                <div>
-                                    <p className="font-bold text-sm text-gray-900 dark:text-white">{result.displayName}</p>
-                                    <p className="text-xs text-blue-600 dark:text-blue-400">@{result.username}</p>
-                                </div>
-                            </div>
-                            {/* Bouton Ajouter */}
-                            <button 
-                                onClick={() => sendFriendRequest(result)}
-                                className="text-xs bg-blue-600 text-white px-3 py-1.5 rounded-full hover:bg-blue-700 transition shadow-sm"
-                            >
-                                Ajouter +
-                            </button>
-                        </div>
-                    ))}
-                </div>
-            </div>
-
-            {/* 2. DEMANDES D'AMIS REÇUES */}
-            {requestsReceived.length > 0 && (
-                <div className="bg-white dark:bg-gray-800 p-6 rounded-xl shadow-sm border border-orange-200 dark:border-orange-900/50 animate-in slide-in-from-left-4">
-                    <h2 className="font-bold text-lg mb-4 text-orange-600 dark:text-orange-400 flex items-center gap-2">
-                        🔔 Demandes reçues <span className="bg-orange-100 text-orange-800 text-xs px-2 py-0.5 rounded-full">{requestsReceived.length}</span>
-                    </h2>
-                    <div className="space-y-3">
-                        {requestsReceived.map(req => (
-                            <div key={req.uid} className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
-                                <div className="flex items-center gap-3">
-                                    <div className="w-10 h-10 rounded-full bg-gray-300 overflow-hidden">
-                                        {req.photoURL ? <img src={req.photoURL} alt="" className="w-full h-full object-cover"/> : <span className="flex items-center justify-center h-full font-bold text-gray-500">{req.username[0].toUpperCase()}</span>}
-                                    </div>
-                                    <div>
-                                        <p className="font-bold text-sm text-gray-900 dark:text-white">{req.displayName}</p>
-                                        <p className="text-xs text-gray-500">@{req.username}</p>
-                                    </div>
-                                </div>
-                                <div className="flex gap-2">
-                                    <button onClick={() => acceptRequest(req)} className="p-2 bg-green-100 text-green-700 hover:bg-green-200 rounded-full transition" title="Accepter">✓</button>
-                                    <button onClick={() => declineRequest(req.uid)} className="p-2 bg-red-100 text-red-700 hover:bg-red-200 rounded-full transition" title="Refuser">✕</button>
-                                </div>
-                            </div>
-                        ))}
-                    </div>
-                </div>
-            )}
-        </div>
-
-        {/* --- COLONNE DROITE : LISTE MES AMIS --- */}
-        <div className="bg-white dark:bg-gray-800 p-6 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 h-fit">
-            <h2 className="font-bold text-lg mb-4 flex items-center gap-2 text-gray-800 dark:text-white">
-                Mes Amis <span className="text-gray-400 font-normal">({friends.length})</span>
-            </h2>
-            
-            {loading ? (
-                <p className="text-gray-500 text-sm">Chargement...</p>
-            ) : friends.length === 0 ? (
-                <div className="text-center py-10 text-gray-400 italic">
-                    <p>Aucun ami pour l'instant.</p>
-                </div>
-            ) : (
-                <div className="space-y-2">
-                    {friends.map(friend => (
-                        <div key={friend.uid} className="group flex items-center justify-between p-3 hover:bg-gray-50 dark:hover:bg-gray-700/50 rounded-lg transition border border-transparent hover:border-gray-100 dark:hover:border-gray-600">
-                            
-                            {/* Identité Ami */}
-                            <div className="flex items-center gap-3">
-                                <div className="w-10 h-10 rounded-full bg-gradient-to-br from-purple-500 to-blue-500 flex items-center justify-center text-white font-bold shadow-sm overflow-hidden">
-                                    {friend.photoURL ? <img src={friend.photoURL} alt="" className="w-full h-full object-cover" /> : friend.username[0].toUpperCase()}
-                                </div>
-                                <div>
-                                    <p className="font-bold text-gray-800 dark:text-gray-200">{friend.displayName}</p>
-                                    <p className="text-xs text-gray-500">@{friend.username}</p>
-                                </div>
-                            </div>
-                            
-                            {/* Actions (Visibles au survol sur desktop) */}
-                            <div className="flex items-center gap-2 opacity-100 md:opacity-0 group-hover:opacity-100 transition-opacity">
-                                {/* BOUTON VOIR PROFIL */}
-                                <Link 
-                                    href={`/user/${friend.uid}`}
-                                    className="text-xs bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300 px-3 py-1.5 rounded hover:bg-blue-200 dark:hover:bg-blue-800 transition font-medium"
-                                >
-                                    Voir
-                                </Link>
-                                
-                                <button 
-                                    onClick={() => removeFriend(friend.uid)} 
-                                    className="text-red-400 hover:text-red-600 text-xs px-2 py-1"
-                                    title="Retirer cet ami"
-                                >
-                                    ✕
-                                </button>
-                            </div>
-                        </div>
-                    ))}
-                </div>
-            )}
-        </div>
-
-      </div>
     </main>
   );
 }
