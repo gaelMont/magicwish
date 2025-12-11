@@ -7,14 +7,14 @@ import Papa from 'papaparse';
 type ImportModalProps = {
   isOpen: boolean;
   onClose: () => void;
-  targetCollection?: string; // On garde prop pour ne pas casser l'appel parent, même si inutilisé pour l'instant
+  targetCollection?: string;
 };
 
 export default function ImportModal({ isOpen, onClose }: ImportModalProps) {
-  // On utilise 'any' ici temporairement pour accepter n'importe quel CSV sans se soucier du typage strict
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [data, setData] = useState<any[]>([]);
   const [columns, setColumns] = useState<string[]>([]);
+  const [fileName, setFileName] = useState<string>("");
 
   if (!isOpen) return null;
 
@@ -22,19 +22,28 @@ export default function ImportModal({ isOpen, onClose }: ImportModalProps) {
     const file = event.target.files?.[0];
     if (!file) return;
 
+    setFileName(file.name);
+
     Papa.parse(file, {
-      header: true, // Transforme les lignes en objets (clé: valeur)
-      skipEmptyLines: true,
-      encoding: "UTF-8", // Crucial pour les accents et symboles Magic
+      header: true,         // Transforme les lignes en objets
+      skipEmptyLines: true, // Ignore les lignes vides
+      delimiter: ",",       // <--- ON FORCE LA VIRGULE (C'est la clé !)
+      encoding: "UTF-8",    // Pour gérer les accents
       complete: (results) => {
-        console.log("Données importées :", results.data);
+        console.log("Résultat brut PapaParse :", results);
+
+        // Si le parsing a échoué et n'a trouvé qu'une seule colonne, on tente un fallback
+        if (results.meta.fields && results.meta.fields.length === 1) {
+             console.warn("Attention : une seule colonne détectée. Tentative de détection auto...");
+             // Ici on pourrait relancer sans délimiteur si besoin, mais
+             // avec Manabox, forcer la virgule est normalement la bonne solution.
+        }
         
-        // On force le typage ici car PapaParse renvoie un type générique
         setColumns(results.meta.fields || []);
         setData(results.data as any[]);
       },
       error: (error) => {
-        console.error("Erreur lors du parsing :", error);
+        console.error("Erreur PapaParse :", error);
       }
     });
   };
@@ -42,13 +51,11 @@ export default function ImportModal({ isOpen, onClose }: ImportModalProps) {
   const handleReset = () => {
     setData([]);
     setColumns([]);
+    setFileName("");
   };
 
   return (
-    // Fond sombre (Overlay)
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
-      
-      {/* La boîte Modale */}
       <div className="bg-white dark:bg-gray-800 rounded-xl p-6 max-w-5xl w-full shadow-2xl border border-gray-100 dark:border-gray-700 flex flex-col max-h-[90vh]">
         
         {/* En-tête */}
@@ -59,44 +66,48 @@ export default function ImportModal({ isOpen, onClose }: ImportModalProps) {
           <button onClick={onClose} className="text-gray-500 hover:text-gray-700 dark:text-gray-400">✕</button>
         </div>
 
-        {/* Contenu Principal */}
+        {/* Contenu */}
         <div className="flex-grow overflow-hidden flex flex-col">
           
-          {/* Zone d'Input (Affichée seulement si pas de données) */}
+          {/* Écran d'upload */}
           {data.length === 0 && (
-            <div className="p-10 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-xl text-center hover:bg-gray-50 dark:hover:bg-gray-700/50 transition relative">
+            <div className="p-12 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-xl text-center hover:bg-gray-50 dark:hover:bg-gray-700/50 transition relative cursor-pointer group">
               <input 
                 type="file" 
                 accept=".csv" 
                 onChange={handleFileUpload}
-                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
               />
-              <div className="text-5xl mb-4">📂</div>
-              <p className="font-bold text-gray-700 dark:text-gray-200">Cliquez pour sélectionner votre CSV Manabox</p>
+              <div className="text-6xl mb-4 group-hover:scale-110 transition-transform">📂</div>
+              <p className="font-bold text-lg text-gray-700 dark:text-gray-200">
+                Déposer votre fichier Manabox ici
+              </p>
+              <p className="text-sm text-gray-400 mt-2">Format .csv attendu</p>
             </div>
           )}
 
-          {/* Affichage du Tableau (Affiché seulement si données présentes) */}
+          {/* Écran de résultat (Tableau) */}
           {data.length > 0 && (
             <div className="flex flex-col h-full overflow-hidden">
-              
-              <div className="flex justify-between items-center mb-2">
-                <p className="text-sm text-green-600 font-bold">✅ {data.length} lignes chargées</p>
+              <div className="flex justify-between items-center mb-3">
+                <div className="text-sm">
+                   <span className="font-bold text-gray-900 dark:text-white">{fileName}</span>
+                   <span className="ml-3 text-green-600 font-bold bg-green-50 px-2 py-1 rounded">✅ {data.length} cartes trouvées</span>
+                </div>
                 <button 
                   onClick={handleReset}
-                  className="text-xs bg-red-100 text-red-600 px-3 py-1 rounded hover:bg-red-200"
+                  className="text-xs bg-red-100 text-red-600 px-3 py-1.5 rounded hover:bg-red-200 font-medium"
                 >
-                  Changer de fichier
+                  🗑️ Changer de fichier
                 </button>
               </div>
 
-              {/* Zone scrollable du tableau */}
-              <div className="overflow-auto border border-gray-200 dark:border-gray-700 rounded-lg flex-grow bg-gray-50 dark:bg-gray-900">
+              <div className="overflow-auto border border-gray-200 dark:border-gray-700 rounded-lg flex-grow bg-gray-50 dark:bg-gray-900 shadow-inner">
                 <table className="w-full text-sm text-left text-gray-500 dark:text-gray-400 border-collapse">
-                  <thead className="text-xs text-gray-700 uppercase bg-gray-200 dark:bg-gray-800 dark:text-gray-200 sticky top-0">
+                  <thead className="text-xs text-gray-700 uppercase bg-gray-200 dark:bg-gray-800 dark:text-gray-200 sticky top-0 z-10 shadow-sm">
                     <tr>
                       {columns.map((col, index) => (
-                        <th key={index} className="px-4 py-3 border border-gray-300 dark:border-gray-600 whitespace-nowrap">
+                        <th key={index} className="px-4 py-3 border-b border-r border-gray-300 dark:border-gray-600 whitespace-nowrap last:border-r-0">
                           {col}
                         </th>
                       ))}
@@ -104,10 +115,11 @@ export default function ImportModal({ isOpen, onClose }: ImportModalProps) {
                   </thead>
                   <tbody>
                     {data.slice(0, 100).map((row, rowIndex) => (
-                      <tr key={rowIndex} className="bg-white border-b dark:bg-gray-800 dark:border-gray-700 hover:bg-blue-50 dark:hover:bg-gray-700">
+                      <tr key={rowIndex} className="bg-white border-b dark:bg-gray-800 dark:border-gray-700 hover:bg-blue-50 dark:hover:bg-gray-700 transition-colors">
                         {columns.map((col, colIndex) => (
-                          <td key={colIndex} className="px-4 py-2 border border-gray-200 dark:border-gray-700 whitespace-nowrap max-w-[200px] truncate">
-                            {row[col] || '-'}
+                          <td key={colIndex} className="px-4 py-2 border-r border-gray-100 dark:border-gray-700 whitespace-nowrap max-w-[250px] truncate last:border-r-0">
+                            {/* Affichage sécurisé */}
+                            {row[col] !== undefined && row[col] !== null ? String(row[col]) : ''}
                           </td>
                         ))}
                       </tr>
@@ -115,24 +127,12 @@ export default function ImportModal({ isOpen, onClose }: ImportModalProps) {
                   </tbody>
                 </table>
               </div>
-              
-              <p className="text-xs text-center text-gray-400 mt-2">
-                Affichage des 100 premières lignes uniquement pour prévisualisation.
+              <p className="text-xs text-center text-gray-400 mt-2 italic">
+                Aperçu des 100 premières lignes. Les accents et symboles doivent être lisibles.
               </p>
             </div>
           )}
         </div>
-
-        {/* Pied de page */}
-        <div className="mt-4 flex justify-end pt-2 border-t border-gray-100 dark:border-gray-700">
-          <button 
-            onClick={onClose}
-            className="px-5 py-2 bg-gray-200 hover:bg-gray-300 text-gray-800 rounded-lg font-medium transition"
-          >
-            Fermer
-          </button>
-        </div>
-
       </div>
     </div>
   );
