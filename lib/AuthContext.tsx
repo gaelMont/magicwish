@@ -8,11 +8,13 @@ import {
   signOut, 
   User 
 } from 'firebase/auth';
-import { auth } from './firebase';
+import { doc, onSnapshot } from 'firebase/firestore'; // <--- NOUVEAU
+import { auth, db } from './firebase'; // <--- NOUVEAU (db)
 import toast from 'react-hot-toast';
 
 type AuthContextType = {
   user: User | null;
+  username: string | null; // <--- NOUVEAU : Le pseudo unique
   loading: boolean;
   signInWithGoogle: () => Promise<void>;
   logOut: () => Promise<void>;
@@ -20,6 +22,7 @@ type AuthContextType = {
 
 const AuthContext = createContext<AuthContextType>({
   user: null,
+  username: null,
   loading: true,
   signInWithGoogle: async () => {},
   logOut: async () => {},
@@ -29,14 +32,36 @@ export const useAuth = () => useContext(AuthContext);
 
 export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const [user, setUser] = useState<User | null>(null);
+  const [username, setUsername] = useState<string | null>(null); // <--- ETAT DU PSEUDO
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+    const unsubscribeAuth = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser);
-      setLoading(false);
+
+      if (currentUser) {
+        // SI CONNECTÉ : On écoute le profil public pour récupérer le pseudo
+        const profileRef = doc(db, 'users', currentUser.uid, 'public_profile', 'info');
+        
+        const unsubscribeProfile = onSnapshot(profileRef, (docSnap) => {
+          if (docSnap.exists()) {
+            setUsername(docSnap.data().username);
+          } else {
+            setUsername(null); // Pas encore de profil
+          }
+          setLoading(false);
+        });
+
+        // Nettoyage de l'écouteur profil quand on change d'user
+        return () => unsubscribeProfile();
+      } else {
+        // SI DÉCONNECTÉ
+        setUsername(null);
+        setLoading(false);
+      }
     });
-    return () => unsubscribe();
+
+    return () => unsubscribeAuth();
   }, []);
 
   const signInWithGoogle = async () => {
@@ -60,13 +85,13 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     }
   };
 
-  // Optimisation : on ne recrée l'objet value que si user ou loading change
   const value = useMemo(() => ({
     user,
+    username, // On expose le username
     loading,
     signInWithGoogle,
     logOut
-  }), [user, loading]);
+  }), [user, username, loading]);
 
   return (
     <AuthContext.Provider value={value}>
