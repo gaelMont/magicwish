@@ -5,6 +5,7 @@ import { useState } from 'react';
 import { useAuth } from '@/lib/AuthContext';
 import { db } from '@/lib/firebase';
 import { doc, setDoc, updateDoc, getDoc, increment } from 'firebase/firestore'; 
+import { useWishlists } from '@/hooks/useWishlists'; // <--- NOUVEL IMPORT
 import toast from 'react-hot-toast';
 
 // --- TYPES ---
@@ -41,11 +42,20 @@ const getCardImage = (card: ScryfallCard): string => {
   return CARD_BACK_URL;
 };
 
-// --- SOUS-COMPOSANT : Gère l'affichage d'une carte et ses versions ---
-const CardGroup = ({ name, versions }: { name: string, versions: ScryfallCard[] }) => {
+// --- SOUS-COMPOSANT : Gère l'affichage d'une carte ---
+// PROPS AJOUTÉE : targetListId
+const CardGroup = ({ 
+  name, 
+  versions, 
+  targetListId 
+}: { 
+  name: string, 
+  versions: ScryfallCard[], 
+  targetListId: string 
+}) => {
   const { user } = useAuth();
   
-  // Par défaut, on prend la première version de la liste
+  // Par défaut, on prend la première version
   const [selectedCard, setSelectedCard] = useState<ScryfallCard>(versions[0]);
 
   const handleVersionChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
@@ -60,11 +70,20 @@ const CardGroup = ({ name, versions }: { name: string, versions: ScryfallCard[] 
     }
 
     const card = selectedCard; 
-    const wishlistRef = doc(db, 'users', user.uid, 'wishlist', card.id);
+    
+    // --- LOGIQUE DE CHEMIN DYNAMIQUE ---
+    let collectionPath = '';
+    if (targetListId === 'default') {
+        collectionPath = `users/${user.uid}/wishlist`;
+    } else {
+        collectionPath = `users/${user.uid}/wishlists_data/${targetListId}/cards`;
+    }
+    
+    const wishlistRef = doc(db, collectionPath, card.id);
+    // ------------------------------------
+
     const validImageUrl = getCardImage(card);
     const priceNumber = card.prices?.eur ? parseFloat(card.prices.eur) : 0;
-    
-    // On nettoie le nom pour la sauvegarde (pour que "Sol Ring // Sol Ring" devienne "Sol Ring" dans ta liste)
     const cleanName = card.name.split(' // ')[0];
 
     try {
@@ -72,12 +91,12 @@ const CardGroup = ({ name, versions }: { name: string, versions: ScryfallCard[] 
       if (docSnap.exists()) {
         await updateDoc(wishlistRef, { 
           quantity: increment(1),
-          price: priceNumber
+          price: priceNumber // Mise à jour du prix au cas où il a changé
         });
         toast.success(`+1 exemplaire (${card.set_name})`);
       } else {
         await setDoc(wishlistRef, {
-          name: cleanName, // Nom propre
+          name: cleanName,
           imageUrl: validImageUrl,
           quantity: 1,
           price: priceNumber,
@@ -89,13 +108,13 @@ const CardGroup = ({ name, versions }: { name: string, versions: ScryfallCard[] 
       }
     } catch (error) {
       console.error(error);
-      toast.error("Erreur sauvegarde");
+      toast.error("Erreur lors de l'ajout.");
     }
   };
 
   return (
     <div className="relative group flex flex-col h-full bg-white dark:bg-gray-800 rounded-xl shadow-md border border-gray-100 dark:border-gray-700 overflow-hidden">
-      {/* Image qui change selon la sélection */}
+      {/* Image */}
       <div className="relative w-full min-h-[250px] bg-gray-200 dark:bg-gray-900 flex items-center justify-center p-2">
         <img
           src={getCardImage(selectedCard)}
@@ -143,15 +162,21 @@ const CardGroup = ({ name, versions }: { name: string, versions: ScryfallCard[] 
 
 // --- COMPOSANT PRINCIPAL ---
 export default function HomePage() {
+  const { user } = useAuth();
+  
+  // --- NOUVEAU HOOK POUR LES LISTES ---
+  const { lists, loading: listsLoading } = useWishlists();
+  const [selectedTargetList, setSelectedTargetList] = useState<string>('default');
+
   const [query, setQuery] = useState('');
   const [groupedResults, setGroupedResults] = useState<{ name: string, versions: ScryfallCard[] }[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
+  const [isSearching, setIsSearching] = useState(false);
 
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!query.trim()) return;
 
-    setIsLoading(true);
+    setIsSearching(true);
     setGroupedResults([]); 
 
     try {
@@ -160,59 +185,88 @@ export default function HomePage() {
       const data = await response.json();
       const rawCards: ScryfallCard[] = data.data || [];
 
-      // --- ALGORITHME DE GROUPEMENT PAR NOM NETTOYÉ ---
-      // On ignore oracle_id et on force le groupement par le nom (sans le " // ")
+      // Groupement
       const groups = new Map<string, ScryfallCard[]>();
-
       rawCards.forEach(card => {
-        // "Sol Ring // Sol Ring" -> devient "Sol Ring"
         const cleanName = card.name.split(' // ')[0];
-
-        if (!groups.has(cleanName)) {
-          groups.set(cleanName, []);
-        }
+        if (!groups.has(cleanName)) groups.set(cleanName, []);
         groups.get(cleanName)?.push(card);
       });
 
-      // On transforme le Map en tableau pour l'afficher
-      const resultsArray = Array.from(groups.entries()).map(([cleanName, versions]) => {
-        return {
-          name: cleanName, // On utilise le nom nettoyé pour l'affichage (ex: juste "Sol Ring")
-          versions: versions
-        };
-      });
+      const resultsArray = Array.from(groups.entries()).map(([cleanName, versions]) => ({
+        name: cleanName, 
+        versions: versions
+      }));
 
       setGroupedResults(resultsArray);
 
     } catch (err) {
       toast.error("Aucune carte trouvée.");
     } finally {
-      setIsLoading(false);
+      setIsSearching(false);
     }
   };
 
   return (
     <main className="container mx-auto p-4 max-w-7xl">
-      <h1 className="text-3xl font-bold mb-8 text-center mt-8">MagicWish ✨</h1>
+      <h1 className="text-3xl font-bold mb-8 text-center mt-8 text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-purple-600">
+        MagicWish ✨
+      </h1>
 
-      <form onSubmit={handleSearch} className="flex gap-2 mb-10 max-w-xl mx-auto">
-        <input
-          type="text"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Rechercher (ex: Sol Ring)..."
-          className="flex-grow p-3 border rounded-lg shadow-sm outline-none transition-colors
-            bg-white text-gray-900 border-gray-300 placeholder-gray-500
-            dark:bg-gray-800 dark:text-white dark:border-gray-600 dark:placeholder-gray-400"
-        />
-        <button 
-          type="submit" 
-          disabled={isLoading}
-          className="bg-blue-600 hover:bg-blue-700 text-white px-6 rounded-lg font-semibold disabled:opacity-50 transition"
-        >
-          {isLoading ? '...' : '🔍'}
-        </button>
-      </form>
+      <div className="max-w-xl mx-auto mb-10 space-y-3">
+        {/* FORMULAIRE DE RECHERCHE */}
+        <form onSubmit={handleSearch} className="flex gap-2">
+            <input
+            type="text"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Rechercher (ex: Black Lotus)..."
+            className="flex-grow p-3 border rounded-lg shadow-sm outline-none transition-colors
+                bg-white text-gray-900 border-gray-300 placeholder-gray-500
+                dark:bg-gray-800 dark:text-white dark:border-gray-600 dark:placeholder-gray-400 focus:border-blue-500"
+            />
+            <button 
+            type="submit" 
+            disabled={isSearching}
+            className="bg-blue-600 hover:bg-blue-700 text-white px-6 rounded-lg font-semibold disabled:opacity-50 transition shadow-sm"
+            >
+            {isSearching ? '...' : '🔍'}
+            </button>
+        </form>
+
+        {/* SÉLECTEUR DE LISTE CIBLE (Visible seulement si connecté) */}
+        {user && (
+            <div className="flex justify-end items-center gap-2 animate-in fade-in slide-in-from-top-1">
+                <label htmlFor="targetList" className="text-sm text-gray-500 dark:text-gray-400">
+                    Ajouter dans :
+                </label>
+                <div className="relative">
+                    <select
+                        id="targetList"
+                        value={selectedTargetList}
+                        onChange={(e) => setSelectedTargetList(e.target.value)}
+                        disabled={listsLoading}
+                        className="appearance-none bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 text-gray-700 dark:text-gray-200 py-1.5 pl-3 pr-8 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer shadow-sm"
+                    >
+                        {/* Si chargement ou vide, option par défaut */}
+                        {lists.length === 0 ? (
+                            <option value="default">Liste principale</option>
+                        ) : (
+                            lists.map((list) => (
+                                <option key={list.id} value={list.id}>
+                                    {list.name}
+                                </option>
+                            ))
+                        )}
+                    </select>
+                    {/* Petite flèche custom pour le style */}
+                    <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-gray-500">
+                        <svg className="fill-current h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><path d="M9.293 12.95l.707.707L15.657 8l-1.414-1.414L10 10.828 5.757 6.586 4.343 8z"/></svg>
+                    </div>
+                </div>
+            </div>
+        )}
+      </div>
 
       {/* GRILLE D'AFFICHAGE */}
       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
@@ -221,6 +275,7 @@ export default function HomePage() {
             key={group.name} 
             name={group.name} 
             versions={group.versions} 
+            targetListId={selectedTargetList} // <--- ON PASSE L'ID DE LA LISTE CHOISIE
           />
         ))}
       </div>

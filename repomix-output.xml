@@ -56,6 +56,7 @@ components/ImportModal.tsx
 components/MagicCard.tsx
 eslint.config.mjs
 hooks/useCardCollection.ts
+hooks/useWishlists.ts
 lib/AuthContext.tsx
 lib/cardUtils.ts
 lib/firebase.ts
@@ -74,160 +75,97 @@ tsconfig.json
 <files>
 This section contains the contents of the repository's files.
 
-<file path="hooks/useCardCollection.ts">
-import { useState, useEffect, useMemo } from 'react';
+<file path="hooks/useWishlists.ts">
+// hooks/useWishlists.ts
+import { useState, useEffect } from 'react';
 import { db } from '@/lib/firebase';
-import { collection, onSnapshot, doc, updateDoc, deleteDoc, increment } from 'firebase/firestore';
+import { collection, onSnapshot, addDoc, deleteDoc, doc, serverTimestamp, setDoc } from 'firebase/firestore';
 import { useAuth } from '@/lib/AuthContext';
 import toast from 'react-hot-toast';
 
-export type CardType = {
+export type WishlistMeta = {
   id: string;
   name: string;
-  imageUrl: string;
-  imageBackUrl?: string;
-  quantity: number;
-  price?: number;
-  setName?: string;
-  setCode?: string;
+  isDefault?: boolean; // Pour identifier la liste principale historique
 };
 
-export function useCardCollection(collectionName: 'collection' | 'wishlist') {
-  const { user, loading: authLoading } = useAuth();
-  const [cards, setCards] = useState<CardType[]>([]);
+export function useWishlists() {
+  const { user } = useAuth();
+  const [lists, setLists] = useState<WishlistMeta[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // 1. ÉCOUTE TEMPS RÉEL
   useEffect(() => {
     if (!user) {
-      if (!authLoading) setLoading(false);
+      setLists([]);
+      setLoading(false);
       return;
     }
 
-    setLoading(true);
-    const colRef = collection(db, 'users', user.uid, collectionName);
-
-    const unsubscribe = onSnapshot(colRef, (snapshot) => {
-      const items = snapshot.docs.map((doc) => ({
+    // On écoute la collection des métadonnées
+    const metaRef = collection(db, 'users', user.uid, 'wishlists_meta');
+    
+    const unsubscribe = onSnapshot(metaRef, (snapshot) => {
+      const fetchedLists = snapshot.docs.map(doc => ({
         id: doc.id,
-        ...doc.data(),
-      })) as CardType[];
-      
-      setCards(items);
-      setLoading(false);
-    }, (error) => {
-      console.error("Erreur Firestore:", error);
-      toast.error("Impossible de charger la liste");
+        ...doc.data()
+      })) as WishlistMeta[];
+
+      // Si aucune liste n'existe (premier lancement V2), on crée la liste "Défaut"
+      // qui pointera conceptuellement vers ton ancienne collection
+      if (fetchedLists.length === 0 && !snapshot.metadata.fromCache) {
+        createList("Liste principale", "default");
+      } else {
+        // On trie : Défaut en premier, puis alphabétique
+        fetchedLists.sort((a, b) => {
+          if (a.id === 'default') return -1;
+          if (b.id === 'default') return 1;
+          return a.name.localeCompare(b.name);
+        });
+        setLists(fetchedLists);
+      }
       setLoading(false);
     });
 
     return () => unsubscribe();
-  }, [user, collectionName, authLoading]);
+  }, [user]);
 
-  // OPTIMISATION : Tri calculé à la volée uniquement si 'cards' change
-  const sortedCards = useMemo(() => {
-    return [...cards].sort((a, b) => a.name.localeCompare(b.name));
-  }, [cards]);
-
-  // 2. MISE À JOUR
-  const updateQuantity = async (cardId: string, amount: number, currentQuantity: number) => {
+  const createList = async (name: string, customId?: string) => {
     if (!user) return;
+    try {
+      const data = { name, createdAt: serverTimestamp() };
+      if (customId) {
+        await setDoc(doc(db, 'users', user.uid, 'wishlists_meta', customId), { ...data, isDefault: true });
+      } else {
+        await addDoc(collection(db, 'users', user.uid, 'wishlists_meta'), data);
+      }
+      toast.success(`Liste "${name}" créée`);
+    } catch (err) {
+      console.error(err);
+      toast.error("Erreur création liste");
+    }
+  };
+
+  const deleteList = async (listId: string) => {
+    if (!user || listId === 'default') return; // On protège la liste par défaut
+    if (!confirm("Supprimer cette liste et toutes ses cartes ?")) return;
     
-    // Si on descend à 0 ou moins, on signale qu'il faut supprimer
-    if (currentQuantity + amount <= 0) {
-      return 'shouldDelete'; 
-    }
-
     try {
-      const cardRef = doc(db, 'users', user.uid, collectionName, cardId);
-      await updateDoc(cardRef, { quantity: increment(amount) });
-      return 'updated';
+        // 1. Supprimer les métadonnées
+        await deleteDoc(doc(db, 'users', user.uid, 'wishlists_meta', listId));
+        
+        // 2. Note: Idéalement, il faudrait aussi supprimer la sous-collection 'cards'.
+        // C'est complexe côté client. Pour l'instant on supprime juste l'accès (meta).
+        // Une Cloud Function serait idéale ici pour le nettoyage complet.
+        
+        toast.success("Liste supprimée");
     } catch (err) {
-      console.error(err);
-      toast.error("Erreur de mise à jour");
-      return 'error';
+        console.error(err);
+        toast.error("Erreur suppression");
     }
   };
 
-  // 3. SUPPRESSION
-  const removeCard = async (cardId: string) => {
-    if (!user) return;
-    try {
-      await deleteDoc(doc(db, 'users', user.uid, collectionName, cardId));
-      toast.success('Carte retirée', { icon: '🗑️' });
-    } catch (err) {
-      console.error(err);
-      toast.error("Erreur lors de la suppression");
-    }
-  };
-
-  // 4. PRIX TOTAL (Mémorisé)
-  const totalPrice = useMemo(() => {
-    return cards.reduce((acc, card) => acc + (card.price || 0) * card.quantity, 0);
-  }, [cards]);
-
-  return { 
-    cards: sortedCards, // On renvoie la liste triée
-    loading, 
-    updateQuantity, 
-    removeCard,
-    totalPrice
-  };
+  return { lists, loading, createList, deleteList };
 }
-</file>
-
-<file path="lib/cardUtils.ts">
-// lib/cardUtils.ts
-
-// Type générique pour une carte Scryfall (simplifié)
-export type ScryfallRawData = {
-  id: string;
-  name: string;
-  set: string;
-  set_name: string;
-  prices?: { eur?: string; usd?: string };
-  image_uris?: { normal?: string };
-  card_faces?: Array<{
-    name: string;
-    image_uris?: { normal?: string };
-  }>;
-};
-
-// Fonction pour transformer la donnée brute en donnée propre pour notre app
-export const normalizeCardData = (data: ScryfallRawData) => {
-  // Gestion des cartes recto-verso
-  const isDoubleFaced = data.card_faces && data.card_faces.length > 1;
-
-  // 1. Nom : On prend le nom de la face avant si double face, sinon nom normal
-  // On nettoie le " // " si Scryfall le laisse traîner
-  const rawName = isDoubleFaced ? data.card_faces![0].name : data.name;
-  const name = rawName.split(' // ')[0];
-
-  // 2. Images
-  let imageUrl = data.image_uris?.normal;
-  let imageBackUrl = undefined; // ou null selon ta préférence
-
-  if (isDoubleFaced) {
-    imageUrl = data.card_faces![0].image_uris?.normal;
-    imageBackUrl = data.card_faces![1].image_uris?.normal;
-  }
-
-  // Fallback si pas d'image (dos de carte)
-  if (!imageUrl) {
-    imageUrl = "https://cards.scryfall.io/large/front/a/6/a6984342-f723-4e80-8e69-902d287a915f.jpg";
-  }
-
-  return {
-    id: data.id,
-    scryfallId: data.id,
-    name,
-    imageUrl,
-    imageBackUrl,
-    setName: data.set_name,
-    setCode: data.set,
-    price: parseFloat(data.prices?.eur || "0"),
-  };
-};
 </file>
 
 <file path=".gitignore">
@@ -677,6 +615,284 @@ const eslintConfig = defineConfig([
 export default eslintConfig;
 </file>
 
+<file path="hooks/useCardCollection.ts">
+// hooks/useCardCollection.ts
+import { useState, useEffect, useMemo } from 'react';
+import { db } from '@/lib/firebase';
+import { collection, onSnapshot, doc, updateDoc, deleteDoc, increment } from 'firebase/firestore';
+import { useAuth } from '@/lib/AuthContext';
+import toast from 'react-hot-toast';
+
+export type CardType = {
+  id: string;
+  name: string;
+  imageUrl: string;
+  imageBackUrl?: string;
+  quantity: number;
+  price?: number;
+  setName?: string;
+  setCode?: string;
+  wishlistId?: string; // Utile pour la vue globale
+};
+
+// MODIFICATION: On accepte maintenant un path explicite ou un listId
+export function useCardCollection(target: 'collection' | 'wishlist', listId: string = 'default') {
+  const { user, loading: authLoading } = useAuth();
+  const [cards, setCards] = useState<CardType[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!user || authLoading) {
+        if (!authLoading) setLoading(false);
+        return;
+    }
+
+    setLoading(true);
+
+    // LOGIQUE DE CHEMIN DYNAMIQUE
+    let collectionPath = '';
+    
+    if (target === 'collection') {
+        // La collection reste unique (pour l'instant)
+        collectionPath = `users/${user.uid}/collection`;
+    } else {
+        // Gestion des Wishlists
+        if (listId === 'default') {
+            // Rétro-compatibilité : l'ancienne wishlist
+            collectionPath = `users/${user.uid}/wishlist`;
+        } else {
+            // Nouvelles wishlists
+            collectionPath = `users/${user.uid}/wishlists_data/${listId}/cards`;
+        }
+    }
+
+    const colRef = collection(db, collectionPath);
+
+    const unsubscribe = onSnapshot(colRef, (snapshot) => {
+      const items = snapshot.docs.map((doc) => ({
+        id: doc.id,
+        wishlistId: listId, // On marque l'origine
+        ...doc.data(),
+      })) as CardType[];
+      
+      setCards(items);
+      setLoading(false);
+    }, (error) => {
+      console.error("Erreur Firestore:", error);
+      setLoading(false);
+    });
+
+    return () => unsubscribe();
+  }, [user, target, listId, authLoading]);
+
+  // Tri
+  const sortedCards = useMemo(() => {
+    return [...cards].sort((a, b) => a.name.localeCompare(b.name));
+  }, [cards]);
+
+  // Helpers pour retrouver le bon chemin pour les updates
+  const getDocRef = (cardId: string) => {
+      if (!user) return null;
+      let path = '';
+      if (target === 'collection') path = `users/${user.uid}/collection`;
+      else if (listId === 'default') path = `users/${user.uid}/wishlist`;
+      else path = `users/${user.uid}/wishlists_data/${listId}/cards`;
+      return doc(db, path, cardId);
+  };
+
+  const updateQuantity = async (cardId: string, amount: number, currentQuantity: number) => {
+    if (!user) return;
+    const ref = getDocRef(cardId);
+    if (!ref) return;
+
+    if (currentQuantity + amount <= 0) return 'shouldDelete';
+
+    try {
+      await updateDoc(ref, { quantity: increment(amount) });
+      return 'updated';
+    } catch (err) {
+      toast.error("Erreur update");
+      return 'error';
+    }
+  };
+
+  const removeCard = async (cardId: string) => {
+    if (!user) return;
+    const ref = getDocRef(cardId);
+    if(ref) {
+        await deleteDoc(ref);
+        toast.success('Carte retirée', { icon: '🗑️' });
+    }
+  };
+
+  const totalPrice = useMemo(() => {
+    return cards.reduce((acc, card) => acc + (card.price || 0) * card.quantity, 0);
+  }, [cards]);
+
+  return { cards: sortedCards, loading, updateQuantity, removeCard, totalPrice };
+}
+</file>
+
+<file path="lib/cardUtils.ts">
+// lib/cardUtils.ts
+
+// Type générique pour une carte Scryfall (simplifié)
+export type ScryfallRawData = {
+  id: string;
+  name: string;
+  set: string;
+  set_name: string;
+  prices?: { eur?: string; usd?: string };
+  image_uris?: { normal?: string };
+  card_faces?: Array<{
+    name: string;
+    image_uris?: { normal?: string };
+  }>;
+};
+
+// Fonction pour transformer la donnée brute en donnée propre pour notre app
+export const normalizeCardData = (data: ScryfallRawData) => {
+  // Gestion des cartes recto-verso
+  const isDoubleFaced = data.card_faces && data.card_faces.length > 1;
+
+  // 1. Nom : On prend le nom de la face avant si double face, sinon nom normal
+  // On nettoie le " // " si Scryfall le laisse traîner
+  const rawName = isDoubleFaced ? data.card_faces![0].name : data.name;
+  const name = rawName.split(' // ')[0];
+
+  // 2. Images
+  let imageUrl = data.image_uris?.normal;
+  let imageBackUrl = undefined; // ou null selon ta préférence
+
+  if (isDoubleFaced) {
+    imageUrl = data.card_faces![0].image_uris?.normal;
+    imageBackUrl = data.card_faces![1].image_uris?.normal;
+  }
+
+  // Fallback si pas d'image (dos de carte)
+  if (!imageUrl) {
+    imageUrl = "https://cards.scryfall.io/large/front/a/6/a6984342-f723-4e80-8e69-902d287a915f.jpg";
+  }
+
+  return {
+    id: data.id,
+    scryfallId: data.id,
+    name,
+    imageUrl,
+    imageBackUrl,
+    setName: data.set_name,
+    setCode: data.set,
+    price: parseFloat(data.prices?.eur || "0"),
+  };
+};
+</file>
+
+<file path="postcss.config.mjs">
+const config = {
+  plugins: {
+    "@tailwindcss/postcss": {},
+  },
+};
+
+export default config;
+</file>
+
+<file path="public/file.svg">
+<svg fill="none" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg"><path d="M14.5 13.5V5.41a1 1 0 0 0-.3-.7L9.8.29A1 1 0 0 0 9.08 0H1.5v13.5A2.5 2.5 0 0 0 4 16h8a2.5 2.5 0 0 0 2.5-2.5m-1.5 0v-7H8v-5H3v12a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1M9.5 5V2.12L12.38 5zM5.13 5h-.62v1.25h2.12V5zm-.62 3h7.12v1.25H4.5zm.62 3h-.62v1.25h7.12V11z" clip-rule="evenodd" fill="#666" fill-rule="evenodd"/></svg>
+</file>
+
+<file path="public/globe.svg">
+<svg fill="none" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><g clip-path="url(#a)"><path fill-rule="evenodd" clip-rule="evenodd" d="M10.27 14.1a6.5 6.5 0 0 0 3.67-3.45q-1.24.21-2.7.34-.31 1.83-.97 3.1M8 16A8 8 0 1 0 8 0a8 8 0 0 0 0 16m.48-1.52a7 7 0 0 1-.96 0H7.5a4 4 0 0 1-.84-1.32q-.38-.89-.63-2.08a40 40 0 0 0 3.92 0q-.25 1.2-.63 2.08a4 4 0 0 1-.84 1.31zm2.94-4.76q1.66-.15 2.95-.43a7 7 0 0 0 0-2.58q-1.3-.27-2.95-.43a18 18 0 0 1 0 3.44m-1.27-3.54a17 17 0 0 1 0 3.64 39 39 0 0 1-4.3 0 17 17 0 0 1 0-3.64 39 39 0 0 1 4.3 0m1.1-1.17q1.45.13 2.69.34a6.5 6.5 0 0 0-3.67-3.44q.65 1.26.98 3.1M8.48 1.5l.01.02q.41.37.84 1.31.38.89.63 2.08a40 40 0 0 0-3.92 0q.25-1.2.63-2.08a4 4 0 0 1 .85-1.32 7 7 0 0 1 .96 0m-2.75.4a6.5 6.5 0 0 0-3.67 3.44 29 29 0 0 1 2.7-.34q.31-1.83.97-3.1M4.58 6.28q-1.66.16-2.95.43a7 7 0 0 0 0 2.58q1.3.27 2.95.43a18 18 0 0 1 0-3.44m.17 4.71q-1.45-.12-2.69-.34a6.5 6.5 0 0 0 3.67 3.44q-.65-1.27-.98-3.1" fill="#666"/></g><defs><clipPath id="a"><path fill="#fff" d="M0 0h16v16H0z"/></clipPath></defs></svg>
+</file>
+
+<file path="public/next.svg">
+<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 394 80"><path fill="#000" d="M262 0h68.5v12.7h-27.2v66.6h-13.6V12.7H262V0ZM149 0v12.7H94v20.4h44.3v12.6H94v21h55v12.6H80.5V0h68.7zm34.3 0h-17.8l63.8 79.4h17.9l-32-39.7 32-39.6h-17.9l-23 28.6-23-28.6zm18.3 56.7-9-11-27.1 33.7h17.8l18.3-22.7z"/><path fill="#000" d="M81 79.3 17 0H0v79.3h13.6V17l50.2 62.3H81Zm252.6-.4c-1 0-1.8-.4-2.5-1s-1.1-1.6-1.1-2.6.3-1.8 1-2.5 1.6-1 2.6-1 1.8.3 2.5 1a3.4 3.4 0 0 1 .6 4.3 3.7 3.7 0 0 1-3 1.8zm23.2-33.5h6v23.3c0 2.1-.4 4-1.3 5.5a9.1 9.1 0 0 1-3.8 3.5c-1.6.8-3.5 1.3-5.7 1.3-2 0-3.7-.4-5.3-1s-2.8-1.8-3.7-3.2c-.9-1.3-1.4-3-1.4-5h6c.1.8.3 1.6.7 2.2s1 1.2 1.6 1.5c.7.4 1.5.5 2.4.5 1 0 1.8-.2 2.4-.6a4 4 0 0 0 1.6-1.8c.3-.8.5-1.8.5-3V45.5zm30.9 9.1a4.4 4.4 0 0 0-2-3.3 7.5 7.5 0 0 0-4.3-1.1c-1.3 0-2.4.2-3.3.5-.9.4-1.6 1-2 1.6a3.5 3.5 0 0 0-.3 4c.3.5.7.9 1.3 1.2l1.8 1 2 .5 3.2.8c1.3.3 2.5.7 3.7 1.2a13 13 0 0 1 3.2 1.8 8.1 8.1 0 0 1 3 6.5c0 2-.5 3.7-1.5 5.1a10 10 0 0 1-4.4 3.5c-1.8.8-4.1 1.2-6.8 1.2-2.6 0-4.9-.4-6.8-1.2-2-.8-3.4-2-4.5-3.5a10 10 0 0 1-1.7-5.6h6a5 5 0 0 0 3.5 4.6c1 .4 2.2.6 3.4.6 1.3 0 2.5-.2 3.5-.6 1-.4 1.8-1 2.4-1.7a4 4 0 0 0 .8-2.4c0-.9-.2-1.6-.7-2.2a11 11 0 0 0-2.1-1.4l-3.2-1-3.8-1c-2.8-.7-5-1.7-6.6-3.2a7.2 7.2 0 0 1-2.4-5.7 8 8 0 0 1 1.7-5 10 10 0 0 1 4.3-3.5c2-.8 4-1.2 6.4-1.2 2.3 0 4.4.4 6.2 1.2 1.8.8 3.2 2 4.3 3.4 1 1.4 1.5 3 1.5 5h-5.8z"/></svg>
+</file>
+
+<file path="public/vercel.svg">
+<svg fill="none" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1155 1000"><path d="m577.3 0 577.4 1000H0z" fill="#fff"/></svg>
+</file>
+
+<file path="public/window.svg">
+<svg fill="none" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path fill-rule="evenodd" clip-rule="evenodd" d="M1.5 2.5h13v10a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1zM0 1h16v11.5a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 0 12.5zm3.75 4.5a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5M7 4.75a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0m1.75.75a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5" fill="#666"/></svg>
+</file>
+
+<file path="README.md">
+This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+
+## Getting Started
+
+First, run the development server:
+
+```bash
+npm run dev
+# or
+yarn dev
+# or
+pnpm dev
+# or
+bun dev
+```
+
+Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+
+You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+
+This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+
+## Learn More
+
+To learn more about Next.js, take a look at the following resources:
+
+- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
+- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+
+You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+
+## Deploy on Vercel
+
+The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+
+Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+</file>
+
+<file path="tsconfig.json">
+{
+  "compilerOptions": {
+    "target": "ES2017",
+    "lib": ["dom", "dom.iterable", "esnext"],
+    "allowJs": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "jsx": "react-jsx",
+    "incremental": true,
+    "plugins": [
+      {
+        "name": "next"
+      }
+    ],
+    "paths": {
+      "@/*": ["./*"]
+    }
+  },
+  "include": [
+    "next-env.d.ts",
+    "**/*.ts",
+    "**/*.tsx",
+    ".next/types/**/*.ts",
+    ".next/dev/types/**/*.ts",
+    "**/*.mts"
+  ],
+  "exclude": ["node_modules"]
+}
+</file>
+
 <file path="lib/AuthContext.tsx">
 'use client';
 
@@ -819,112 +1035,6 @@ const nextConfig: NextConfig = {
 };
 
 export default nextConfig;
-</file>
-
-<file path="postcss.config.mjs">
-const config = {
-  plugins: {
-    "@tailwindcss/postcss": {},
-  },
-};
-
-export default config;
-</file>
-
-<file path="public/file.svg">
-<svg fill="none" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg"><path d="M14.5 13.5V5.41a1 1 0 0 0-.3-.7L9.8.29A1 1 0 0 0 9.08 0H1.5v13.5A2.5 2.5 0 0 0 4 16h8a2.5 2.5 0 0 0 2.5-2.5m-1.5 0v-7H8v-5H3v12a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1M9.5 5V2.12L12.38 5zM5.13 5h-.62v1.25h2.12V5zm-.62 3h7.12v1.25H4.5zm.62 3h-.62v1.25h7.12V11z" clip-rule="evenodd" fill="#666" fill-rule="evenodd"/></svg>
-</file>
-
-<file path="public/globe.svg">
-<svg fill="none" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><g clip-path="url(#a)"><path fill-rule="evenodd" clip-rule="evenodd" d="M10.27 14.1a6.5 6.5 0 0 0 3.67-3.45q-1.24.21-2.7.34-.31 1.83-.97 3.1M8 16A8 8 0 1 0 8 0a8 8 0 0 0 0 16m.48-1.52a7 7 0 0 1-.96 0H7.5a4 4 0 0 1-.84-1.32q-.38-.89-.63-2.08a40 40 0 0 0 3.92 0q-.25 1.2-.63 2.08a4 4 0 0 1-.84 1.31zm2.94-4.76q1.66-.15 2.95-.43a7 7 0 0 0 0-2.58q-1.3-.27-2.95-.43a18 18 0 0 1 0 3.44m-1.27-3.54a17 17 0 0 1 0 3.64 39 39 0 0 1-4.3 0 17 17 0 0 1 0-3.64 39 39 0 0 1 4.3 0m1.1-1.17q1.45.13 2.69.34a6.5 6.5 0 0 0-3.67-3.44q.65 1.26.98 3.1M8.48 1.5l.01.02q.41.37.84 1.31.38.89.63 2.08a40 40 0 0 0-3.92 0q.25-1.2.63-2.08a4 4 0 0 1 .85-1.32 7 7 0 0 1 .96 0m-2.75.4a6.5 6.5 0 0 0-3.67 3.44 29 29 0 0 1 2.7-.34q.31-1.83.97-3.1M4.58 6.28q-1.66.16-2.95.43a7 7 0 0 0 0 2.58q1.3.27 2.95.43a18 18 0 0 1 0-3.44m.17 4.71q-1.45-.12-2.69-.34a6.5 6.5 0 0 0 3.67 3.44q-.65-1.27-.98-3.1" fill="#666"/></g><defs><clipPath id="a"><path fill="#fff" d="M0 0h16v16H0z"/></clipPath></defs></svg>
-</file>
-
-<file path="public/next.svg">
-<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 394 80"><path fill="#000" d="M262 0h68.5v12.7h-27.2v66.6h-13.6V12.7H262V0ZM149 0v12.7H94v20.4h44.3v12.6H94v21h55v12.6H80.5V0h68.7zm34.3 0h-17.8l63.8 79.4h17.9l-32-39.7 32-39.6h-17.9l-23 28.6-23-28.6zm18.3 56.7-9-11-27.1 33.7h17.8l18.3-22.7z"/><path fill="#000" d="M81 79.3 17 0H0v79.3h13.6V17l50.2 62.3H81Zm252.6-.4c-1 0-1.8-.4-2.5-1s-1.1-1.6-1.1-2.6.3-1.8 1-2.5 1.6-1 2.6-1 1.8.3 2.5 1a3.4 3.4 0 0 1 .6 4.3 3.7 3.7 0 0 1-3 1.8zm23.2-33.5h6v23.3c0 2.1-.4 4-1.3 5.5a9.1 9.1 0 0 1-3.8 3.5c-1.6.8-3.5 1.3-5.7 1.3-2 0-3.7-.4-5.3-1s-2.8-1.8-3.7-3.2c-.9-1.3-1.4-3-1.4-5h6c.1.8.3 1.6.7 2.2s1 1.2 1.6 1.5c.7.4 1.5.5 2.4.5 1 0 1.8-.2 2.4-.6a4 4 0 0 0 1.6-1.8c.3-.8.5-1.8.5-3V45.5zm30.9 9.1a4.4 4.4 0 0 0-2-3.3 7.5 7.5 0 0 0-4.3-1.1c-1.3 0-2.4.2-3.3.5-.9.4-1.6 1-2 1.6a3.5 3.5 0 0 0-.3 4c.3.5.7.9 1.3 1.2l1.8 1 2 .5 3.2.8c1.3.3 2.5.7 3.7 1.2a13 13 0 0 1 3.2 1.8 8.1 8.1 0 0 1 3 6.5c0 2-.5 3.7-1.5 5.1a10 10 0 0 1-4.4 3.5c-1.8.8-4.1 1.2-6.8 1.2-2.6 0-4.9-.4-6.8-1.2-2-.8-3.4-2-4.5-3.5a10 10 0 0 1-1.7-5.6h6a5 5 0 0 0 3.5 4.6c1 .4 2.2.6 3.4.6 1.3 0 2.5-.2 3.5-.6 1-.4 1.8-1 2.4-1.7a4 4 0 0 0 .8-2.4c0-.9-.2-1.6-.7-2.2a11 11 0 0 0-2.1-1.4l-3.2-1-3.8-1c-2.8-.7-5-1.7-6.6-3.2a7.2 7.2 0 0 1-2.4-5.7 8 8 0 0 1 1.7-5 10 10 0 0 1 4.3-3.5c2-.8 4-1.2 6.4-1.2 2.3 0 4.4.4 6.2 1.2 1.8.8 3.2 2 4.3 3.4 1 1.4 1.5 3 1.5 5h-5.8z"/></svg>
-</file>
-
-<file path="public/vercel.svg">
-<svg fill="none" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1155 1000"><path d="m577.3 0 577.4 1000H0z" fill="#fff"/></svg>
-</file>
-
-<file path="public/window.svg">
-<svg fill="none" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path fill-rule="evenodd" clip-rule="evenodd" d="M1.5 2.5h13v10a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1zM0 1h16v11.5a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 0 12.5zm3.75 4.5a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5M7 4.75a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0m1.75.75a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5" fill="#666"/></svg>
-</file>
-
-<file path="README.md">
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
-
-## Getting Started
-
-First, run the development server:
-
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
-
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
-
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
-
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
-
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
-</file>
-
-<file path="tsconfig.json">
-{
-  "compilerOptions": {
-    "target": "ES2017",
-    "lib": ["dom", "dom.iterable", "esnext"],
-    "allowJs": true,
-    "skipLibCheck": true,
-    "strict": true,
-    "noEmit": true,
-    "esModuleInterop": true,
-    "module": "esnext",
-    "moduleResolution": "bundler",
-    "resolveJsonModule": true,
-    "isolatedModules": true,
-    "jsx": "react-jsx",
-    "incremental": true,
-    "plugins": [
-      {
-        "name": "next"
-      }
-    ],
-    "paths": {
-      "@/*": ["./*"]
-    }
-  },
-  "include": [
-    "next-env.d.ts",
-    "**/*.ts",
-    "**/*.tsx",
-    ".next/types/**/*.ts",
-    ".next/dev/types/**/*.ts",
-    "**/*.mts"
-  ],
-  "exclude": ["node_modules"]
-}
 </file>
 
 <file path="package.json">
@@ -1227,6 +1337,7 @@ import { useState } from 'react';
 import { useAuth } from '@/lib/AuthContext';
 import { db } from '@/lib/firebase';
 import { doc, setDoc, updateDoc, getDoc, increment } from 'firebase/firestore'; 
+import { useWishlists } from '@/hooks/useWishlists'; // <--- NOUVEL IMPORT
 import toast from 'react-hot-toast';
 
 // --- TYPES ---
@@ -1263,11 +1374,20 @@ const getCardImage = (card: ScryfallCard): string => {
   return CARD_BACK_URL;
 };
 
-// --- SOUS-COMPOSANT : Gère l'affichage d'une carte et ses versions ---
-const CardGroup = ({ name, versions }: { name: string, versions: ScryfallCard[] }) => {
+// --- SOUS-COMPOSANT : Gère l'affichage d'une carte ---
+// PROPS AJOUTÉE : targetListId
+const CardGroup = ({ 
+  name, 
+  versions, 
+  targetListId 
+}: { 
+  name: string, 
+  versions: ScryfallCard[], 
+  targetListId: string 
+}) => {
   const { user } = useAuth();
   
-  // Par défaut, on prend la première version de la liste
+  // Par défaut, on prend la première version
   const [selectedCard, setSelectedCard] = useState<ScryfallCard>(versions[0]);
 
   const handleVersionChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
@@ -1282,11 +1402,20 @@ const CardGroup = ({ name, versions }: { name: string, versions: ScryfallCard[] 
     }
 
     const card = selectedCard; 
-    const wishlistRef = doc(db, 'users', user.uid, 'wishlist', card.id);
+    
+    // --- LOGIQUE DE CHEMIN DYNAMIQUE ---
+    let collectionPath = '';
+    if (targetListId === 'default') {
+        collectionPath = `users/${user.uid}/wishlist`;
+    } else {
+        collectionPath = `users/${user.uid}/wishlists_data/${targetListId}/cards`;
+    }
+    
+    const wishlistRef = doc(db, collectionPath, card.id);
+    // ------------------------------------
+
     const validImageUrl = getCardImage(card);
     const priceNumber = card.prices?.eur ? parseFloat(card.prices.eur) : 0;
-    
-    // On nettoie le nom pour la sauvegarde (pour que "Sol Ring // Sol Ring" devienne "Sol Ring" dans ta liste)
     const cleanName = card.name.split(' // ')[0];
 
     try {
@@ -1294,12 +1423,12 @@ const CardGroup = ({ name, versions }: { name: string, versions: ScryfallCard[] 
       if (docSnap.exists()) {
         await updateDoc(wishlistRef, { 
           quantity: increment(1),
-          price: priceNumber
+          price: priceNumber // Mise à jour du prix au cas où il a changé
         });
         toast.success(`+1 exemplaire (${card.set_name})`);
       } else {
         await setDoc(wishlistRef, {
-          name: cleanName, // Nom propre
+          name: cleanName,
           imageUrl: validImageUrl,
           quantity: 1,
           price: priceNumber,
@@ -1311,13 +1440,13 @@ const CardGroup = ({ name, versions }: { name: string, versions: ScryfallCard[] 
       }
     } catch (error) {
       console.error(error);
-      toast.error("Erreur sauvegarde");
+      toast.error("Erreur lors de l'ajout.");
     }
   };
 
   return (
     <div className="relative group flex flex-col h-full bg-white dark:bg-gray-800 rounded-xl shadow-md border border-gray-100 dark:border-gray-700 overflow-hidden">
-      {/* Image qui change selon la sélection */}
+      {/* Image */}
       <div className="relative w-full min-h-[250px] bg-gray-200 dark:bg-gray-900 flex items-center justify-center p-2">
         <img
           src={getCardImage(selectedCard)}
@@ -1365,15 +1494,21 @@ const CardGroup = ({ name, versions }: { name: string, versions: ScryfallCard[] 
 
 // --- COMPOSANT PRINCIPAL ---
 export default function HomePage() {
+  const { user } = useAuth();
+  
+  // --- NOUVEAU HOOK POUR LES LISTES ---
+  const { lists, loading: listsLoading } = useWishlists();
+  const [selectedTargetList, setSelectedTargetList] = useState<string>('default');
+
   const [query, setQuery] = useState('');
   const [groupedResults, setGroupedResults] = useState<{ name: string, versions: ScryfallCard[] }[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
+  const [isSearching, setIsSearching] = useState(false);
 
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!query.trim()) return;
 
-    setIsLoading(true);
+    setIsSearching(true);
     setGroupedResults([]); 
 
     try {
@@ -1382,59 +1517,88 @@ export default function HomePage() {
       const data = await response.json();
       const rawCards: ScryfallCard[] = data.data || [];
 
-      // --- ALGORITHME DE GROUPEMENT PAR NOM NETTOYÉ ---
-      // On ignore oracle_id et on force le groupement par le nom (sans le " // ")
+      // Groupement
       const groups = new Map<string, ScryfallCard[]>();
-
       rawCards.forEach(card => {
-        // "Sol Ring // Sol Ring" -> devient "Sol Ring"
         const cleanName = card.name.split(' // ')[0];
-
-        if (!groups.has(cleanName)) {
-          groups.set(cleanName, []);
-        }
+        if (!groups.has(cleanName)) groups.set(cleanName, []);
         groups.get(cleanName)?.push(card);
       });
 
-      // On transforme le Map en tableau pour l'afficher
-      const resultsArray = Array.from(groups.entries()).map(([cleanName, versions]) => {
-        return {
-          name: cleanName, // On utilise le nom nettoyé pour l'affichage (ex: juste "Sol Ring")
-          versions: versions
-        };
-      });
+      const resultsArray = Array.from(groups.entries()).map(([cleanName, versions]) => ({
+        name: cleanName, 
+        versions: versions
+      }));
 
       setGroupedResults(resultsArray);
 
     } catch (err) {
       toast.error("Aucune carte trouvée.");
     } finally {
-      setIsLoading(false);
+      setIsSearching(false);
     }
   };
 
   return (
     <main className="container mx-auto p-4 max-w-7xl">
-      <h1 className="text-3xl font-bold mb-8 text-center mt-8">MagicWish ✨</h1>
+      <h1 className="text-3xl font-bold mb-8 text-center mt-8 text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-purple-600">
+        MagicWish ✨
+      </h1>
 
-      <form onSubmit={handleSearch} className="flex gap-2 mb-10 max-w-xl mx-auto">
-        <input
-          type="text"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Rechercher (ex: Sol Ring)..."
-          className="flex-grow p-3 border rounded-lg shadow-sm outline-none transition-colors
-            bg-white text-gray-900 border-gray-300 placeholder-gray-500
-            dark:bg-gray-800 dark:text-white dark:border-gray-600 dark:placeholder-gray-400"
-        />
-        <button 
-          type="submit" 
-          disabled={isLoading}
-          className="bg-blue-600 hover:bg-blue-700 text-white px-6 rounded-lg font-semibold disabled:opacity-50 transition"
-        >
-          {isLoading ? '...' : '🔍'}
-        </button>
-      </form>
+      <div className="max-w-xl mx-auto mb-10 space-y-3">
+        {/* FORMULAIRE DE RECHERCHE */}
+        <form onSubmit={handleSearch} className="flex gap-2">
+            <input
+            type="text"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Rechercher (ex: Black Lotus)..."
+            className="flex-grow p-3 border rounded-lg shadow-sm outline-none transition-colors
+                bg-white text-gray-900 border-gray-300 placeholder-gray-500
+                dark:bg-gray-800 dark:text-white dark:border-gray-600 dark:placeholder-gray-400 focus:border-blue-500"
+            />
+            <button 
+            type="submit" 
+            disabled={isSearching}
+            className="bg-blue-600 hover:bg-blue-700 text-white px-6 rounded-lg font-semibold disabled:opacity-50 transition shadow-sm"
+            >
+            {isSearching ? '...' : '🔍'}
+            </button>
+        </form>
+
+        {/* SÉLECTEUR DE LISTE CIBLE (Visible seulement si connecté) */}
+        {user && (
+            <div className="flex justify-end items-center gap-2 animate-in fade-in slide-in-from-top-1">
+                <label htmlFor="targetList" className="text-sm text-gray-500 dark:text-gray-400">
+                    Ajouter dans :
+                </label>
+                <div className="relative">
+                    <select
+                        id="targetList"
+                        value={selectedTargetList}
+                        onChange={(e) => setSelectedTargetList(e.target.value)}
+                        disabled={listsLoading}
+                        className="appearance-none bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 text-gray-700 dark:text-gray-200 py-1.5 pl-3 pr-8 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer shadow-sm"
+                    >
+                        {/* Si chargement ou vide, option par défaut */}
+                        {lists.length === 0 ? (
+                            <option value="default">Liste principale</option>
+                        ) : (
+                            lists.map((list) => (
+                                <option key={list.id} value={list.id}>
+                                    {list.name}
+                                </option>
+                            ))
+                        )}
+                    </select>
+                    {/* Petite flèche custom pour le style */}
+                    <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-gray-500">
+                        <svg className="fill-current h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><path d="M9.293 12.95l.707.707L15.657 8l-1.414-1.414L10 10.828 5.757 6.586 4.343 8z"/></svg>
+                    </div>
+                </div>
+            </div>
+        )}
+      </div>
 
       {/* GRILLE D'AFFICHAGE */}
       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
@@ -1443,6 +1607,7 @@ export default function HomePage() {
             key={group.name} 
             name={group.name} 
             versions={group.versions} 
+            targetListId={selectedTargetList} // <--- ON PASSE L'ID DE LA LISTE CHOISIE
           />
         ))}
       </div>
@@ -1455,123 +1620,164 @@ export default function HomePage() {
 // app/wishlist/page.tsx
 'use client';
 
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { useAuth } from '@/lib/AuthContext';
+import { useWishlists } from '@/hooks/useWishlists';
+import { useCardCollection, CardType } from '@/hooks/useCardCollection';
+import MagicCard from '@/components/MagicCard';
 import { db } from '@/lib/firebase';
-import { doc, runTransaction, increment } from 'firebase/firestore'; // Imports spécifiques pour le "Move"
-import { useCardCollection, CardType } from '@/hooks/useCardCollection'; // <--- IMPORT DU HOOK
+import { doc, runTransaction, increment } from 'firebase/firestore';
 import toast from 'react-hot-toast';
 
-import MagicCard from '@/components/MagicCard';
-import ImportModal from '@/components/ImportModal';
-import ConfirmModal from '@/components/ConfirmModal';
-import DeleteAllButton from '@/components/DeleteAllButton';
+// --- COMPOSANT INTERNE POUR AFFICHER UNE LISTE ---
+const SingleWishlistView = ({ listId, listName }: { listId: string, listName: string }) => {
+    const { cards, loading, updateQuantity, removeCard, totalPrice } = useCardCollection('wishlist', listId);
+    const { user } = useAuth();
+    
+    // Logique de déplacement vers Collection (inchangée mais adaptée au path)
+    const moveToCollection = async (card: CardType) => {
+        if (!user) return;
+        const toastId = toast.loading("Déplacement...");
+        try {
+            // Détermine le bon path source
+            const sourcePath = listId === 'default' ? 'wishlist' : `wishlists_data/${listId}/cards`;
+            const wishlistRef = doc(db, 'users', user.uid, sourcePath, card.id);
+            const collectionRef = doc(db, 'users', user.uid, 'collection', card.id);
+
+            await runTransaction(db, async (transaction) => {
+                const colDoc = await transaction.get(collectionRef);
+                if (colDoc.exists()) transaction.update(collectionRef, { quantity: increment(card.quantity) });
+                else transaction.set(collectionRef, {
+                    ...card,
+                    wishlistId: null, // Nettoyage
+                    addedAt: new Date()
+                });
+                transaction.delete(wishlistRef);
+            });
+            toast.success("Ajoutée à la collection !", { id: toastId });
+        } catch (error) {
+            console.error(error);
+            toast.error("Erreur", { id: toastId });
+        }
+    };
+
+    if (loading) return <div className="p-10 text-center">Chargement...</div>;
+
+    return (
+        <div className="animate-in fade-in duration-300">
+            <div className="flex justify-between items-end mb-4 border-b pb-2 dark:border-gray-700">
+                <h2 className="text-2xl font-bold">{listName}</h2>
+                <div className="text-right">
+                    <span className="text-sm text-gray-500">Total estimé</span>
+                    <p className="text-xl font-bold text-green-600">{totalPrice.toFixed(2)} €</p>
+                </div>
+            </div>
+            {cards.length === 0 ? (
+                <p className="text-gray-500 italic">Cette liste est vide.</p>
+            ) : (
+                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                    {cards.map(card => (
+                        <MagicCard 
+                            key={card.id} 
+                            {...card} 
+                            isWishlist={true}
+                            onIncrement={() => updateQuantity(card.id, 1, card.quantity)}
+                            onDecrement={() => {
+                                if(card.quantity === 1) {
+                                    if(confirm("Supprimer ?")) removeCard(card.id);
+                                } else {
+                                    updateQuantity(card.id, -1, card.quantity);
+                                }
+                            }}
+                            onDelete={() => { if(confirm("Supprimer ?")) removeCard(card.id); }}
+                            onMove={() => moveToCollection(card)}
+                        />
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+};
 
 export default function WishlistPage() {
   const { user } = useAuth();
+  const { lists, createList, deleteList } = useWishlists();
+  
+  const [selectedListId, setSelectedListId] = useState<string>('default');
+  const [newListName, setNewListName] = useState('');
 
-  // UTILISATION DU HOOK (Mode 'wishlist')
-  const { cards, loading, updateQuantity, removeCard, totalPrice } = useCardCollection('wishlist');
+  if (!user) return <p className="p-10 text-center">Connectez-vous.</p>;
 
-  const [isImportOpen, setIsImportOpen] = useState(false);
-  const [cardToDelete, setCardToDelete] = useState<string | null>(null);
-
-  const handleDecrement = async (cardId: string, currentQty: number) => {
-    const result = await updateQuantity(cardId, -1, currentQty);
-    if (result === 'shouldDelete') setCardToDelete(cardId);
-  };
-
-  // --- LOGIQUE SPÉCIFIQUE WISHLIST : DÉPLACER VERS COLLECTION ---
-  // On garde cette fonction ici car elle touche à deux collections différentes
-  const moveToCollection = async (card: CardType) => {
-    if (!user) return;
-    const toastId = toast.loading("Déplacement...");
-    
-    try {
-      const wishlistRef = doc(db, 'users', user.uid, 'wishlist', card.id);
-      const collectionRef = doc(db, 'users', user.uid, 'collection', card.id);
-
-      await runTransaction(db, async (transaction) => {
-        const collectionDoc = await transaction.get(collectionRef);
-        
-        // Si existe déjà dans la collection, on augmente la quantité
-        if (collectionDoc.exists()) {
-          transaction.update(collectionRef, { quantity: increment(card.quantity) });
-        } else {
-          // Sinon on crée la carte
-          transaction.set(collectionRef, {
-            name: card.name,
-            imageUrl: card.imageUrl,
-            imageBackUrl: card.imageBackUrl || null,
-            quantity: card.quantity,
-            price: card.price || 0,
-            setName: card.setName || null,
-            setCode: card.setCode || null,
-            addedAt: new Date()
-          });
-        }
-        // Et on supprime de la wishlist
-        transaction.delete(wishlistRef);
-      });
-      
-      toast.success("Ajoutée à la collection ! 📦", { id: toastId });
-    } catch (error) {
-      console.error(error);
-      toast.error("Erreur lors du déplacement", { id: toastId });
+  // Gestion de la création
+  const handleCreate = (e: React.FormEvent) => {
+    e.preventDefault();
+    if(newListName.trim()) {
+        createList(newListName);
+        setNewListName('');
     }
   };
 
-  if (loading) return <p className="text-center p-10 text-gray-500">Chargement de votre wishlist...</p>;
-  if (!user) return <p className="text-center p-10">Veuillez vous connecter.</p>;
-
   return (
-    <main className="container mx-auto p-4 pb-20">
-      <div className="flex flex-col md:flex-row justify-between items-center mb-8 gap-4">
-        <div className="flex items-center gap-4">
-          <h1 className="text-3xl font-bold">
-            Ma Wishlist <span className="ml-3 text-lg font-normal text-gray-500">({cards.reduce((acc, c) => acc + c.quantity, 0)})</span>
-          </h1>
-          <button onClick={() => setIsImportOpen(true)} className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition flex items-center gap-2 shadow-sm">
-            📂 Importer CSV
-          </button>
-        </div>
-        <div className="flex items-center gap-4">
-           <DeleteAllButton targetCollection="wishlist" />
-           <div className="bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-100 px-6 py-3 rounded-xl shadow-sm border border-green-200 dark:border-green-700">
-             <span className="text-sm uppercase tracking-wide opacity-80">Total</span>
-             <div className="text-2xl font-bold">{totalPrice.toFixed(2)} €</div>
-           </div>
-        </div>
-      </div>
+    <main className="container mx-auto p-4 flex flex-col md:flex-row gap-6 min-h-[80vh]">
+      
+      {/* SIDEBAR NAVIGATION */}
+      <aside className="w-full md:w-64 flex-none space-y-6">
+        <div className="bg-white dark:bg-gray-800 p-4 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700">
+            <h3 className="font-bold mb-4 text-gray-900 dark:text-white flex items-center gap-2">
+                📑 Mes Listes
+            </h3>
+            
+            <div className="flex flex-col gap-1">
+                {/* Bouton "Vue Globale" (Optionnel - voir note plus bas) */}
+                {/* Pour l'instant on liste les listes individuelles */}
+                
+                {lists.map(list => (
+                    <div key={list.id} className="group flex items-center">
+                        <button
+                            onClick={() => setSelectedListId(list.id)}
+                            className={`flex-grow text-left px-3 py-2 rounded-lg text-sm transition-colors ${
+                                selectedListId === list.id 
+                                ? 'bg-blue-100 text-blue-700 font-bold dark:bg-blue-900/40 dark:text-blue-300' 
+                                : 'hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300'
+                            }`}
+                        >
+                            {list.name}
+                        </button>
+                        {list.id !== 'default' && (
+                            <button 
+                                onClick={() => deleteList(list.id)}
+                                className="opacity-0 group-hover:opacity-100 p-2 text-red-400 hover:text-red-600 transition"
+                                title="Supprimer la liste"
+                            >
+                                ✕
+                            </button>
+                        )}
+                    </div>
+                ))}
+            </div>
 
-      {cards.length === 0 ? (
-        <div className="text-center py-20 bg-gray-50 dark:bg-gray-800/50 rounded-xl border-2 border-dashed border-gray-200 dark:border-gray-700">
-          <p className="text-xl text-gray-500 mb-4">Votre wishlist est vide.</p>
+            {/* Création nouvelle liste */}
+            <form onSubmit={handleCreate} className="mt-4 pt-4 border-t border-gray-100 dark:border-gray-700">
+                <input 
+                    type="text" 
+                    placeholder="+ Nouvelle liste..." 
+                    className="w-full text-sm p-2 border rounded mb-2 bg-transparent dark:border-gray-600"
+                    value={newListName}
+                    onChange={e => setNewListName(e.target.value)}
+                />
+            </form>
         </div>
-      ) : (
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-          {cards.map((card) => (
-            <MagicCard 
-              key={card.id}
-              {...card}
-              isWishlist={true}
-              onIncrement={() => updateQuantity(card.id, 1, card.quantity)}
-              onDecrement={() => handleDecrement(card.id, card.quantity)}
-              onDelete={() => setCardToDelete(card.id)}
-              onMove={() => moveToCollection(card)}
-            />
-          ))}
-        </div>
-      )}
+      </aside>
 
-      <ImportModal isOpen={isImportOpen} onClose={() => setIsImportOpen(false)} targetCollection="wishlist" />
-      <ConfirmModal 
-        isOpen={!!cardToDelete} 
-        onClose={() => setCardToDelete(null)} 
-        onConfirm={() => { if(cardToDelete) removeCard(cardToDelete); }} 
-        title="Supprimer ?" 
-        message="Voulez-vous retirer cette carte de la wishlist ?"
-      />
+      {/* CONTENU PRINCIPAL */}
+      <section className="flex-grow">
+          <SingleWishlistView 
+            key={selectedListId} // Force le remount quand on change de liste
+            listId={selectedListId} 
+            listName={lists.find(l => l.id === selectedListId)?.name || 'Liste'} 
+          />
+      </section>
+
     </main>
   );
 }

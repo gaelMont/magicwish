@@ -1,3 +1,4 @@
+// hooks/useCardCollection.ts
 import { useState, useEffect, useMemo } from 'react';
 import { db } from '@/lib/firebase';
 import { collection, onSnapshot, doc, updateDoc, deleteDoc, increment } from 'firebase/firestore';
@@ -13,26 +14,46 @@ export type CardType = {
   price?: number;
   setName?: string;
   setCode?: string;
+  wishlistId?: string; // Utile pour la vue globale
 };
 
-export function useCardCollection(collectionName: 'collection' | 'wishlist') {
+// MODIFICATION: On accepte maintenant un path explicite ou un listId
+export function useCardCollection(target: 'collection' | 'wishlist', listId: string = 'default') {
   const { user, loading: authLoading } = useAuth();
   const [cards, setCards] = useState<CardType[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // 1. ÉCOUTE TEMPS RÉEL
   useEffect(() => {
-    if (!user) {
-      if (!authLoading) setLoading(false);
-      return;
+    if (!user || authLoading) {
+        if (!authLoading) setLoading(false);
+        return;
     }
 
     setLoading(true);
-    const colRef = collection(db, 'users', user.uid, collectionName);
+
+    // LOGIQUE DE CHEMIN DYNAMIQUE
+    let collectionPath = '';
+    
+    if (target === 'collection') {
+        // La collection reste unique (pour l'instant)
+        collectionPath = `users/${user.uid}/collection`;
+    } else {
+        // Gestion des Wishlists
+        if (listId === 'default') {
+            // Rétro-compatibilité : l'ancienne wishlist
+            collectionPath = `users/${user.uid}/wishlist`;
+        } else {
+            // Nouvelles wishlists
+            collectionPath = `users/${user.uid}/wishlists_data/${listId}/cards`;
+        }
+    }
+
+    const colRef = collection(db, collectionPath);
 
     const unsubscribe = onSnapshot(colRef, (snapshot) => {
       const items = snapshot.docs.map((doc) => ({
         id: doc.id,
+        wishlistId: listId, // On marque l'origine
         ...doc.data(),
       })) as CardType[];
       
@@ -40,60 +61,55 @@ export function useCardCollection(collectionName: 'collection' | 'wishlist') {
       setLoading(false);
     }, (error) => {
       console.error("Erreur Firestore:", error);
-      toast.error("Impossible de charger la liste");
       setLoading(false);
     });
 
     return () => unsubscribe();
-  }, [user, collectionName, authLoading]);
+  }, [user, target, listId, authLoading]);
 
-  // OPTIMISATION : Tri calculé à la volée uniquement si 'cards' change
+  // Tri
   const sortedCards = useMemo(() => {
     return [...cards].sort((a, b) => a.name.localeCompare(b.name));
   }, [cards]);
 
-  // 2. MISE À JOUR
+  // Helpers pour retrouver le bon chemin pour les updates
+  const getDocRef = (cardId: string) => {
+      if (!user) return null;
+      let path = '';
+      if (target === 'collection') path = `users/${user.uid}/collection`;
+      else if (listId === 'default') path = `users/${user.uid}/wishlist`;
+      else path = `users/${user.uid}/wishlists_data/${listId}/cards`;
+      return doc(db, path, cardId);
+  };
+
   const updateQuantity = async (cardId: string, amount: number, currentQuantity: number) => {
     if (!user) return;
-    
-    // Si on descend à 0 ou moins, on signale qu'il faut supprimer
-    if (currentQuantity + amount <= 0) {
-      return 'shouldDelete'; 
-    }
+    const ref = getDocRef(cardId);
+    if (!ref) return;
+
+    if (currentQuantity + amount <= 0) return 'shouldDelete';
 
     try {
-      const cardRef = doc(db, 'users', user.uid, collectionName, cardId);
-      await updateDoc(cardRef, { quantity: increment(amount) });
+      await updateDoc(ref, { quantity: increment(amount) });
       return 'updated';
     } catch (err) {
-      console.error(err);
-      toast.error("Erreur de mise à jour");
+      toast.error("Erreur update");
       return 'error';
     }
   };
 
-  // 3. SUPPRESSION
   const removeCard = async (cardId: string) => {
     if (!user) return;
-    try {
-      await deleteDoc(doc(db, 'users', user.uid, collectionName, cardId));
-      toast.success('Carte retirée', { icon: '🗑️' });
-    } catch (err) {
-      console.error(err);
-      toast.error("Erreur lors de la suppression");
+    const ref = getDocRef(cardId);
+    if(ref) {
+        await deleteDoc(ref);
+        toast.success('Carte retirée', { icon: '🗑️' });
     }
   };
 
-  // 4. PRIX TOTAL (Mémorisé)
   const totalPrice = useMemo(() => {
     return cards.reduce((acc, card) => acc + (card.price || 0) * card.quantity, 0);
   }, [cards]);
 
-  return { 
-    cards: sortedCards, // On renvoie la liste triée
-    loading, 
-    updateQuantity, 
-    removeCard,
-    totalPrice
-  };
+  return { cards: sortedCards, loading, updateQuantity, removeCard, totalPrice };
 }
