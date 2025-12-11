@@ -149,10 +149,10 @@ export default function DashboardPage() {
               {/* Box Raccourcis */}
               <div className="bg-gradient-to-br from-purple-600 to-blue-600 rounded-xl p-6 text-white shadow-lg">
                   <h3 className="font-bold text-lg mb-2">Action Rapide</h3>
-                  {/* CORRECTION ICI : &apos; */}
                   <p className="text-white/80 text-sm mb-6">Vous revenez de tournoi ou d&apos;ouverture de boosters ?</p>
                   
-                  <Link href="/collection" className="block w-full bg-white text-blue-600 font-bold text-center py-3 rounded-lg hover:bg-gray-50 transition shadow-sm">
+                  {/* MODIFICATION ICI : Lien vers /search au lieu de /collection */}
+                  <Link href="/search" className="block w-full bg-white text-blue-600 font-bold text-center py-3 rounded-lg hover:bg-gray-50 transition shadow-sm">
                       + Ajouter des cartes
                   </Link>
                   <Link href="/trades/manual" className="block w-full mt-3 bg-blue-700 hover:bg-blue-800 text-white font-bold text-center py-3 rounded-lg border border-blue-500 transition">
