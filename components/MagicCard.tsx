@@ -29,6 +29,11 @@ type MagicCardProps = {
   readOnly?: boolean;
   isTradeView?: boolean;
   allowPriceEdit?: boolean;
+
+  // --- NOUVEAUX PROPS SÉLECTION ---
+  isSelectMode?: boolean;
+  isSelected?: boolean;
+  onSelect?: () => void;
 };
 
 const CARD_BACK_URL = "https://cards.scryfall.io/large/front/a/6/a6984342-f723-4e80-8e69-902d287a915f.jpg";
@@ -41,12 +46,12 @@ export default function MagicCard(props: MagicCardProps) {
       isTradeView, allowPriceEdit, 
       onEditPrice, onToggleAttribute, 
       readOnly, isWishlist,
-      onDelete, onIncrement, onDecrement, onMove
+      onDelete, onIncrement, onDecrement, onMove,
+      isSelectMode, isSelected, onSelect
   } = props;
   
   const [isFlipped, setIsFlipped] = useState(false);
   const [isEditingPrice, setIsEditingPrice] = useState(false);
-  
   const [tempPrice, setTempPrice] = useState(customPrice?.toString() || price?.toString() || "0");
 
   useEffect(() => {
@@ -66,6 +71,15 @@ export default function MagicCard(props: MagicCardProps) {
   };
 
   const currentImage = isFlipped && imageBackUrl ? imageBackUrl : imageUrl;
+
+  // --- COMPORTEMENT DU CLIC ---
+  const handleCardClick = () => {
+      if (isSelectMode && onSelect) {
+          onSelect();
+      } else if (imageBackUrl) {
+          setIsFlipped(!isFlipped);
+      }
+  };
 
   // --- VUE LISTE COMPACTE (TRADE) ---
   if (isTradeView) {
@@ -110,9 +124,44 @@ export default function MagicCard(props: MagicCardProps) {
 
   // --- VUE NORMALE (GRILLE) ---
   return (
-    <div className={`relative group flex flex-col bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden p-3 gap-2 border transition-colors h-full ${isFoil ? 'border-purple-300 dark:border-purple-800 shadow-purple-100 dark:shadow-none' : 'border-gray-100 dark:border-gray-700 hover:border-blue-300 dark:hover:border-blue-500'}`}>
+    <div 
+        onClick={handleCardClick}
+        className={`relative group flex flex-col bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden p-3 gap-2 border transition-all duration-200 h-full 
+        ${isSelected 
+            ? 'border-blue-500 ring-2 ring-blue-500 bg-blue-50 dark:bg-blue-900/20' 
+            : isFoil 
+                ? 'border-purple-300 dark:border-purple-800' 
+                : 'border-gray-100 dark:border-gray-700 hover:border-blue-300 dark:hover:border-blue-500'
+        }
+        ${isSelectMode ? 'cursor-pointer' : ''}
+        `}
+    >
       
-      {/* IMAGE (Sans boutons flottants) */}
+      {/* BOUTONS D'ACTION (Masqués en mode sélection) */}
+      {!readOnly && !isSelectMode && (
+        <div className="absolute top-2 left-2 right-2 flex justify-between z-20 pointer-events-none">
+            {isWishlist && onMove && (
+            <button onClick={(e) => { e.stopPropagation(); onMove(); }} className="pointer-events-auto p-1.5 bg-green-100 text-green-700 hover:bg-green-600 hover:text-white rounded-full transition opacity-100 md:opacity-0 md:group-hover:opacity-100 shadow-sm" title="Déplacer vers Collection">📦</button>
+            )}
+            
+            {!isWishlist && <div></div>} 
+
+            {onDelete && (
+            <button onClick={(e) => { e.stopPropagation(); onDelete(); }} className="pointer-events-auto p-1.5 bg-red-50 text-gray-400 hover:text-white hover:bg-red-600 rounded-full transition opacity-100 md:opacity-0 md:group-hover:opacity-100" title="Supprimer">🗑️</button>
+            )}
+        </div>
+      )}
+
+      {/* INDICATEUR DE SÉLECTION (CHECKBOX VISUELLE) */}
+      {isSelectMode && (
+          <div className="absolute top-2 right-2 z-30 pointer-events-none">
+              <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center transition-colors ${isSelected ? 'bg-blue-600 border-blue-600' : 'bg-white/80 border-gray-400'}`}>
+                  {isSelected && <span className="text-white text-sm font-bold">✓</span>}
+              </div>
+          </div>
+      )}
+
+      {/* IMAGE */}
       <div className="relative w-full aspect-[2.5/3.5] bg-gray-200 rounded-lg overflow-hidden shrink-0">
         <img
           src={currentImage || CARD_BACK_URL}
@@ -122,14 +171,15 @@ export default function MagicCard(props: MagicCardProps) {
         />
         {isFoil && <div className="absolute inset-0 bg-gradient-to-tr from-purple-500/20 to-transparent pointer-events-none mix-blend-overlay"></div>}
 
-        {imageBackUrl && (
-          <button onClick={() => setIsFlipped(!isFlipped)} className="absolute top-1/2 right-2 -translate-y-1/2 bg-black/50 hover:bg-black/80 text-white p-2 rounded-full backdrop-blur-sm transition-all shadow-lg border border-white/20 z-10 pointer-events-auto">
+        {/* Bouton Flip (Masqué en mode sélection pour éviter conflit de clic) */}
+        {imageBackUrl && !isSelectMode && (
+          <button onClick={(e) => { e.stopPropagation(); setIsFlipped(!isFlipped); }} className="absolute top-1/2 right-2 -translate-y-1/2 bg-black/50 hover:bg-black/80 text-white p-2 rounded-full backdrop-blur-sm transition-all shadow-lg border border-white/20 z-10 pointer-events-auto">
             🔄
           </button>
         )}
       </div>
       
-      {/* --- INFO CARTE --- */}
+      {/* INFO CARTE */}
       <div className="flex-1 flex flex-col min-w-0">
         <div className="flex justify-between items-start mb-1">
             <h3 className="font-bold text-sm md:text-base truncate flex-grow" title={name}>{name}</h3>
@@ -137,13 +187,13 @@ export default function MagicCard(props: MagicCardProps) {
         
         <p className="text-xs text-blue-600 dark:text-blue-400 truncate font-medium mb-2">{setName}</p>
 
-        {/* --- ZONE D'OPTIONS TEXTUELLES --- */}
-        <div className="flex flex-wrap gap-1.5 mb-2">
+        {/* OPTIONS TEXTUELLES (Désactivées en mode sélection) */}
+        <div className={`flex flex-wrap gap-1.5 mb-2 ${isSelectMode ? 'pointer-events-none opacity-50' : ''}`}>
             
-            {/* 1. TOGGLE FOIL */}
+            {/* FOIL */}
             {onToggleAttribute ? (
                 <button 
-                    onClick={() => onToggleAttribute('isFoil', !!isFoil)}
+                    onClick={(e) => { e.stopPropagation(); onToggleAttribute('isFoil', !!isFoil); }}
                     className={`text-[10px] px-2 py-0.5 rounded border transition-colors font-medium flex-1 text-center ${
                         isFoil 
                         ? 'bg-purple-100 text-purple-700 border-purple-200 hover:bg-purple-200 dark:bg-purple-900/30 dark:text-purple-300' 
@@ -152,70 +202,58 @@ export default function MagicCard(props: MagicCardProps) {
                 >
                     {isFoil ? '✨ Foil' : 'Normal'}
                 </button>
-            ) : isFoil && (
-                <span className="text-[10px] bg-purple-100 text-purple-700 px-2 py-0.5 rounded border border-purple-200 font-medium">✨ Foil</span>
-            )}
+            ) : isFoil && ( <span className="text-[10px] bg-purple-100 text-purple-700 px-2 py-0.5 rounded border border-purple-200 font-medium">✨ Foil</span> )}
 
-            {/* 2. WISHLIST : VERSION & ACHAT */}
-            {isWishlist && (
-                <>
-                    {/* Version */}
-                    {onToggleAttribute && (
-                        <button 
-                            onClick={() => onToggleAttribute('isSpecificVersion', !!isSpecificVersion)}
-                            className={`text-[10px] px-2 py-0.5 rounded border transition-colors font-medium flex-1 text-center ${
-                                isSpecificVersion 
-                                ? 'bg-blue-100 text-blue-700 border-blue-200 hover:bg-blue-200 dark:bg-blue-900/30 dark:text-blue-300' 
-                                : 'bg-gray-50 text-gray-400 border-gray-200 hover:bg-gray-100 dark:bg-gray-800 dark:border-gray-600'
-                            }`}
-                            title="Exiger cette version exacte"
-                        >
-                            {isSpecificVersion ? '🔒 Exact' : 'Auto'}
-                        </button>
-                    )}
-                    {/* BOUTON J'AI ACHETÉ */}
-                    {!readOnly && onMove && (
-                        <button 
-                            onClick={onMove}
-                            className="text-[10px] px-2 py-0.5 rounded border transition-colors font-bold flex-1 text-center bg-green-50 text-green-700 border-green-200 hover:bg-green-100 dark:bg-green-900/30 dark:text-green-300 dark:border-green-800"
-                            title="Déplacer vers Collection"
-                        >
-                            J&apos;ai acheté
-                        </button>
-                    )}
-                </>
-            )}
-
-            {/* 3. COLLECTION : ÉCHANGE */}
-            {!isWishlist && (
+            {/* VERSION / TRADE */}
+            {isWishlist ? (
+                // WISHLIST BUTTONS
                 onToggleAttribute ? (
                     <button 
-                        onClick={() => onToggleAttribute('isForTrade', !!isForTrade)}
+                        onClick={(e) => { e.stopPropagation(); onToggleAttribute('isSpecificVersion', !!isSpecificVersion); }}
+                        className={`text-[10px] px-2 py-0.5 rounded border transition-colors font-medium flex-1 text-center ${
+                            isSpecificVersion ? 'bg-blue-100 text-blue-700 border-blue-200' : 'bg-gray-50 text-gray-400 border-gray-200'
+                        }`}
+                    >
+                        {isSpecificVersion ? '🔒 Exact' : 'Auto'}
+                    </button>
+                ) : null
+            ) : (
+                // COLLECTION BUTTONS
+                onToggleAttribute ? (
+                    <button 
+                        onClick={(e) => { e.stopPropagation(); onToggleAttribute('isForTrade', !!isForTrade); }}
                         className={`text-[10px] px-2 py-0.5 rounded border transition-colors font-medium flex-1 text-center ${
                             isForTrade 
                             ? 'bg-green-100 text-green-700 border-green-200 hover:bg-green-200 dark:bg-green-900/30 dark:text-green-300' 
                             : 'bg-gray-50 text-gray-400 border-gray-200 hover:bg-gray-100 dark:bg-gray-800 dark:border-gray-600'
                         }`}
-                        title="Disponible dans les échanges ?"
                     >
                         {isForTrade ? '🤝 Échange' : 'Privé'}
                     </button>
-                ) : isForTrade && (
-                    <span className="text-[10px] bg-green-100 text-green-700 px-2 py-0.5 rounded border border-green-200 font-medium">🤝 Échange</span>
-                )
+                ) : null
+            )}
+            
+            {/* BOUTON J'AI ACHETÉ (Wishlist only) */}
+            {isWishlist && !readOnly && !isSelectMode && onMove && (
+                <button 
+                    onClick={(e) => { e.stopPropagation(); onMove(); }}
+                    className="text-[10px] px-2 py-0.5 rounded border transition-colors font-bold flex-1 text-center bg-green-50 text-green-700 border-green-200 hover:bg-green-100 dark:bg-green-900/30 dark:text-green-300 dark:border-green-800"
+                    title="Déplacer vers Collection"
+                >
+                    📥 J&apos;ai acheté
+                </button>
             )}
         </div>
         
-        {/* --- FOOTER (Quantité & Prix) --- */}
-        <div className="mt-auto flex justify-between items-end border-t border-gray-100 dark:border-gray-700 pt-2">
-          
+        {/* FOOTER QUANTITÉ (Désactivé en mode sélection) */}
+        <div className={`mt-auto flex justify-between items-end border-t border-gray-100 dark:border-gray-700 pt-2 ${isSelectMode ? 'pointer-events-none opacity-50' : ''}`}>
           <div className="flex items-center gap-1.5">
-            {!readOnly && <button onClick={onDecrement} className="bg-gray-200 dark:bg-gray-700 w-6 h-6 rounded hover:bg-gray-300 font-bold flex items-center justify-center text-sm">-</button>}
+            {!readOnly && <button onClick={(e) => {e.stopPropagation(); onDecrement?.()}} className="bg-gray-200 dark:bg-gray-700 w-6 h-6 rounded hover:bg-gray-300 font-bold flex items-center justify-center text-sm">-</button>}
             <span className={`font-mono text-base ${readOnly ? 'font-bold text-gray-800 dark:text-white' : 'w-4 text-center'}`}>{readOnly && "x"}{quantity}</span>
-            {!readOnly && <button onClick={onIncrement} className="bg-blue-100 dark:bg-blue-900 text-blue-600 font-bold w-6 h-6 rounded hover:bg-blue-200 flex items-center justify-center text-sm">+</button>}
+            {!readOnly && <button onClick={(e) => {e.stopPropagation(); onIncrement?.()}} className="bg-blue-100 dark:bg-blue-900 text-blue-600 font-bold w-6 h-6 rounded hover:bg-blue-200 flex items-center justify-center text-sm">+</button>}
           </div>
           
-          <div className="text-right cursor-help" title="Prix unitaire Scryfall ou Perso">
+          <div className="text-right">
              <p className="text-[10px] text-gray-400">Unit: {effectivePrice.toFixed(2)}€</p>
              <p className={`font-bold text-sm ${customPrice ? 'text-orange-600' : 'text-gray-700 dark:text-gray-200'}`}>
                  {(effectivePrice * quantity).toFixed(2)} €

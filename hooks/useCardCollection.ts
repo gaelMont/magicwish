@@ -192,7 +192,6 @@ export function useCardCollection(
           let newValue = false;
 
           if (action === 'reset') {
-              // On retire tout du trade
               if (card.isForTrade) {
                   shouldUpdate = true;
                   newValue = false;
@@ -200,7 +199,6 @@ export function useCardCollection(
               label = "Remise à zéro";
           } 
           else if (action === 'all') {
-              // On met tout en trade
               if (!card.isForTrade) {
                   shouldUpdate = true;
                   newValue = true;
@@ -208,8 +206,6 @@ export function useCardCollection(
               label = "Tout ajouter";
           } 
           else if (action === 'excess') {
-              // Règle du Playset : Si j'ai plus que X cartes, je mets la pile en échange
-              // Note: on met TOUTE la pile en isForTrade (le modèle actuel ne sépare pas les piles)
               if (card.quantity > threshold && !card.isForTrade) {
                   shouldUpdate = true;
                   newValue = true;
@@ -233,6 +229,34 @@ export function useCardCollection(
       }
   };
 
+  // --- NOUVEAU : ACTIONS DE SÉLECTION MULTIPLE ---
+
+  const bulkRemoveCards = async (cardIds: string[]) => {
+      if (!isOwner || cardIds.length === 0) return;
+      
+      const batch = writeBatch(db);
+      cardIds.forEach(id => {
+          const ref = getDocRef(id);
+          if (ref) batch.delete(ref);
+      });
+
+      await batch.commit();
+      toast.success(`${cardIds.length} cartes supprimées`);
+  };
+
+  const bulkUpdateAttribute = async (cardIds: string[], field: 'isForTrade' | 'isFoil', value: boolean) => {
+      if (!isOwner || cardIds.length === 0) return;
+
+      const batch = writeBatch(db);
+      cardIds.forEach(id => {
+          const ref = getDocRef(id);
+          if (ref) batch.update(ref, { [field]: value });
+      });
+
+      await batch.commit();
+      toast.success("Mise à jour effectuée");
+  };
+
   const totalPrice = useMemo(() => {
     return cards.reduce((acc, card) => {
         const effectivePrice = card.customPrice !== undefined ? card.customPrice : (card.price || 0);
@@ -243,6 +267,7 @@ export function useCardCollection(
   return { 
       cards, loading, isOwner, totalPrice,
       updateQuantity, removeCard, setCustomPrice, toggleAttribute,
-      refreshCollectionPrices, bulkSetTradeStatus 
+      refreshCollectionPrices, bulkSetTradeStatus,
+      bulkRemoveCards, bulkUpdateAttribute 
   };
 }
