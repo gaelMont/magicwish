@@ -54,6 +54,8 @@ components/DeleteAllButton.tsx
 components/Header.tsx
 components/ImportModal.tsx
 components/MagicCard.tsx
+components/wishlist/GlobalWishlistView.tsx
+components/wishlist/SingleWishlistView.tsx
 eslint.config.mjs
 hooks/useCardCollection.ts
 hooks/useWishlists.ts
@@ -75,96 +77,192 @@ tsconfig.json
 <files>
 This section contains the contents of the repository's files.
 
-<file path="hooks/useWishlists.ts">
-// hooks/useWishlists.ts
-import { useState, useEffect } from 'react';
-import { db } from '@/lib/firebase';
-import { collection, onSnapshot, addDoc, deleteDoc, doc, serverTimestamp, setDoc } from 'firebase/firestore';
+<file path="components/wishlist/GlobalWishlistView.tsx">
+'use client';
+
+import { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '@/lib/AuthContext';
+import { WishlistMeta } from '@/hooks/useWishlists';
+import { CardType } from '@/hooks/useCardCollection';
+import MagicCard from '@/components/MagicCard';
+import { db } from '@/lib/firebase';
+import { collection, getDocs } from 'firebase/firestore';
 import toast from 'react-hot-toast';
 
-export type WishlistMeta = {
-  id: string;
-  name: string;
-  isDefault?: boolean; // Pour identifier la liste principale historique
+type Props = {
+    lists: WishlistMeta[];
 };
 
-export function useWishlists() {
-  const { user } = useAuth();
-  const [lists, setLists] = useState<WishlistMeta[]>([]);
-  const [loading, setLoading] = useState(true);
+export default function GlobalWishlistView({ lists }: Props) {
+    const { user } = useAuth();
+    const [allCards, setAllCards] = useState<(CardType & { sourceListName: string })[]>([]);
+    const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    if (!user) {
-      setLists([]);
-      setLoading(false);
-      return;
-    }
+    useEffect(() => {
+        if (!user || lists.length === 0) return;
 
-    // On écoute la collection des métadonnées
-    const metaRef = collection(db, 'users', user.uid, 'wishlists_meta');
+        const fetchAll = async () => {
+            setLoading(true);
+            let combined: (CardType & { sourceListName: string })[] = [];
+
+            try {
+                // A. Liste par défaut
+                const defaultRef = collection(db, 'users', user.uid, 'wishlist');
+                const defaultSnap = await getDocs(defaultRef);
+                const defaultCards = defaultSnap.docs.map(d => ({ 
+                    ...d.data(), id: d.id, sourceListName: 'Liste principale' 
+                })) as (CardType & { sourceListName: string })[];
+                combined = [...defaultCards];
+
+                // B. Listes customs
+                const customLists = lists.filter(l => l.id !== 'default');
+                const promises = customLists.map(async (list) => {
+                    const colRef = collection(db, 'users', user.uid, 'wishlists_data', list.id, 'cards');
+                    const snap = await getDocs(colRef);
+                    return snap.docs.map(d => ({
+                        ...d.data(),
+                        id: d.id,
+                        sourceListName: list.name
+                    })) as (CardType & { sourceListName: string })[];
+                });
+
+                const results = await Promise.all(promises);
+                results.forEach(res => {
+                    combined = [...combined, ...res];
+                });
+
+                setAllCards(combined);
+            } catch (error) {
+                console.error("Erreur chargement global", error);
+                toast.error("Erreur chargement global");
+            } finally {
+                setLoading(false);
+            }
+        };
+
+        fetchAll();
+    }, [user, lists]);
+
+    const globalTotal = useMemo(() => {
+        return allCards.reduce((acc, card) => acc + (card.price || 0) * card.quantity, 0);
+    }, [allCards]);
+
+    if (loading) return <div className="p-10 text-center animate-pulse">Fusion des listes en cours...</div>;
+
+    return (
+        <div className="animate-in fade-in duration-300">
+             <div className="flex justify-between items-end mb-6 border-b pb-4 dark:border-gray-700 bg-gradient-to-r from-blue-50 to-transparent dark:from-blue-900/20 p-4 rounded-t-xl">
+                <div>
+                    <h2 className="text-2xl font-bold text-gray-800 dark:text-white flex items-center gap-2">
+                        🌍 Vue Globale
+                    </h2>
+                    <p className="text-sm text-gray-500 mt-1">
+                        Toutes vos cartes fusionnées ({allCards.length} cartes distinctes)
+                    </p>
+                </div>
+                <div className="text-right">
+                    <span className="text-xs text-gray-500 uppercase font-semibold">Valeur Totale</span>
+                    <p className="text-3xl font-bold text-blue-600 dark:text-blue-400">{globalTotal.toFixed(2)} €</p>
+                </div>
+            </div>
+
+            {allCards.length === 0 ? (
+                <div className="text-center py-12">
+                    <p className="text-gray-500 italic">Aucune carte trouvée.</p>
+                </div>
+            ) : (
+                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                    {allCards.map((card, idx) => (
+                        <div key={`${card.id}-${idx}`} className="relative group">
+                            <div className="absolute top-0 right-0 z-30 bg-black/70 text-white text-[10px] px-2 py-1 rounded-bl-lg backdrop-blur-sm pointer-events-none">
+                                {card.sourceListName}
+                            </div>
+                            <MagicCard {...card} isWishlist={false} />
+                        </div>
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+}
+</file>
+
+<file path="components/wishlist/SingleWishlistView.tsx">
+'use client';
+
+import { useAuth } from '@/lib/AuthContext';
+import { useCardCollection, CardType } from '@/hooks/useCardCollection';
+import MagicCard from '@/components/MagicCard';
+import { db } from '@/lib/firebase';
+import { doc, runTransaction, increment } from 'firebase/firestore';
+import toast from 'react-hot-toast';
+
+type Props = {
+    listId: string;
+    listName: string;
+};
+
+export default function SingleWishlistView({ listId, listName }: Props) {
+    const { cards, loading, updateQuantity, removeCard, totalPrice } = useCardCollection('wishlist', listId);
+    const { user } = useAuth();
     
-    const unsubscribe = onSnapshot(metaRef, (snapshot) => {
-      const fetchedLists = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as WishlistMeta[];
+    const moveToCollection = async (card: CardType) => {
+        if (!user) return;
+        const toastId = toast.loading("Déplacement...");
+        try {
+            const sourcePath = listId === 'default' ? 'wishlist' : `wishlists_data/${listId}/cards`;
+            const wishlistRef = doc(db, 'users', user.uid, sourcePath, card.id);
+            const collectionRef = doc(db, 'users', user.uid, 'collection', card.id);
 
-      // Si aucune liste n'existe (premier lancement V2), on crée la liste "Défaut"
-      // qui pointera conceptuellement vers ton ancienne collection
-      if (fetchedLists.length === 0 && !snapshot.metadata.fromCache) {
-        createList("Liste principale", "default");
-      } else {
-        // On trie : Défaut en premier, puis alphabétique
-        fetchedLists.sort((a, b) => {
-          if (a.id === 'default') return -1;
-          if (b.id === 'default') return 1;
-          return a.name.localeCompare(b.name);
-        });
-        setLists(fetchedLists);
-      }
-      setLoading(false);
-    });
+            await runTransaction(db, async (transaction) => {
+                const colDoc = await transaction.get(collectionRef);
+                if (colDoc.exists()) transaction.update(collectionRef, { quantity: increment(card.quantity) });
+                else transaction.set(collectionRef, { ...card, wishlistId: null, addedAt: new Date() });
+                transaction.delete(wishlistRef);
+            });
+            toast.success("Ajoutée à la collection !", { id: toastId });
+        } catch (error) {
+            console.error(error);
+            toast.error("Erreur", { id: toastId });
+        }
+    };
 
-    return () => unsubscribe();
-  }, [user]);
+    if (loading) return <div className="p-10 text-center text-gray-500">Chargement des cartes...</div>;
 
-  const createList = async (name: string, customId?: string) => {
-    if (!user) return;
-    try {
-      const data = { name, createdAt: serverTimestamp() };
-      if (customId) {
-        await setDoc(doc(db, 'users', user.uid, 'wishlists_meta', customId), { ...data, isDefault: true });
-      } else {
-        await addDoc(collection(db, 'users', user.uid, 'wishlists_meta'), data);
-      }
-      toast.success(`Liste "${name}" créée`);
-    } catch (err) {
-      console.error(err);
-      toast.error("Erreur création liste");
-    }
-  };
+    return (
+        <div className="animate-in fade-in duration-300">
+            <div className="flex justify-between items-end mb-6 border-b pb-4 dark:border-gray-700">
+                <h2 className="text-2xl font-bold text-gray-800 dark:text-white">{listName}</h2>
+                <div className="text-right">
+                    <span className="text-xs text-gray-500 uppercase font-semibold">Total estimé</span>
+                    <p className="text-2xl font-bold text-green-600 dark:text-green-400">{totalPrice.toFixed(2)} €</p>
+                </div>
+            </div>
 
-  const deleteList = async (listId: string) => {
-    if (!user || listId === 'default') return; // On protège la liste par défaut
-    if (!confirm("Supprimer cette liste et toutes ses cartes ?")) return;
-    
-    try {
-        // 1. Supprimer les métadonnées
-        await deleteDoc(doc(db, 'users', user.uid, 'wishlists_meta', listId));
-        
-        // 2. Note: Idéalement, il faudrait aussi supprimer la sous-collection 'cards'.
-        // C'est complexe côté client. Pour l'instant on supprime juste l'accès (meta).
-        // Une Cloud Function serait idéale ici pour le nettoyage complet.
-        
-        toast.success("Liste supprimée");
-    } catch (err) {
-        console.error(err);
-        toast.error("Erreur suppression");
-    }
-  };
-
-  return { lists, loading, createList, deleteList };
+            {cards.length === 0 ? (
+                <div className="text-center py-12 bg-gray-50 dark:bg-gray-800/50 rounded-xl border border-dashed border-gray-200 dark:border-gray-700">
+                    <p className="text-gray-500 italic">Cette liste est vide.</p>
+                </div>
+            ) : (
+                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                    {cards.map(card => (
+                        <MagicCard 
+                            key={card.id} 
+                            {...card} 
+                            isWishlist={true}
+                            onIncrement={() => updateQuantity(card.id, 1, card.quantity)}
+                            onDecrement={() => {
+                                if(card.quantity === 1) { if(confirm("Supprimer ?")) removeCard(card.id); } 
+                                else { updateQuantity(card.id, -1, card.quantity); }
+                            }}
+                            onDelete={() => { if(confirm("Supprimer ?")) removeCard(card.id); }}
+                            onMove={() => moveToCollection(card)}
+                        />
+                    ))}
+                </div>
+            )}
+        </div>
+    );
 }
 </file>
 
@@ -615,121 +713,96 @@ const eslintConfig = defineConfig([
 export default eslintConfig;
 </file>
 
-<file path="hooks/useCardCollection.ts">
-// hooks/useCardCollection.ts
-import { useState, useEffect, useMemo } from 'react';
+<file path="hooks/useWishlists.ts">
+// hooks/useWishlists.ts
+import { useState, useEffect } from 'react';
 import { db } from '@/lib/firebase';
-import { collection, onSnapshot, doc, updateDoc, deleteDoc, increment } from 'firebase/firestore';
+import { collection, onSnapshot, addDoc, deleteDoc, doc, serverTimestamp, setDoc } from 'firebase/firestore';
 import { useAuth } from '@/lib/AuthContext';
 import toast from 'react-hot-toast';
 
-export type CardType = {
+export type WishlistMeta = {
   id: string;
   name: string;
-  imageUrl: string;
-  imageBackUrl?: string;
-  quantity: number;
-  price?: number;
-  setName?: string;
-  setCode?: string;
-  wishlistId?: string; // Utile pour la vue globale
+  isDefault?: boolean; // Pour identifier la liste principale historique
 };
 
-// MODIFICATION: On accepte maintenant un path explicite ou un listId
-export function useCardCollection(target: 'collection' | 'wishlist', listId: string = 'default') {
-  const { user, loading: authLoading } = useAuth();
-  const [cards, setCards] = useState<CardType[]>([]);
+export function useWishlists() {
+  const { user } = useAuth();
+  const [lists, setLists] = useState<WishlistMeta[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (!user || authLoading) {
-        if (!authLoading) setLoading(false);
-        return;
-    }
-
-    setLoading(true);
-
-    // LOGIQUE DE CHEMIN DYNAMIQUE
-    let collectionPath = '';
-    
-    if (target === 'collection') {
-        // La collection reste unique (pour l'instant)
-        collectionPath = `users/${user.uid}/collection`;
-    } else {
-        // Gestion des Wishlists
-        if (listId === 'default') {
-            // Rétro-compatibilité : l'ancienne wishlist
-            collectionPath = `users/${user.uid}/wishlist`;
-        } else {
-            // Nouvelles wishlists
-            collectionPath = `users/${user.uid}/wishlists_data/${listId}/cards`;
-        }
-    }
-
-    const colRef = collection(db, collectionPath);
-
-    const unsubscribe = onSnapshot(colRef, (snapshot) => {
-      const items = snapshot.docs.map((doc) => ({
-        id: doc.id,
-        wishlistId: listId, // On marque l'origine
-        ...doc.data(),
-      })) as CardType[];
-      
-      setCards(items);
+    if (!user) {
+      setLists([]);
       setLoading(false);
-    }, (error) => {
-      console.error("Erreur Firestore:", error);
+      return;
+    }
+
+    // On écoute la collection des métadonnées
+    const metaRef = collection(db, 'users', user.uid, 'wishlists_meta');
+    
+    const unsubscribe = onSnapshot(metaRef, (snapshot) => {
+      const fetchedLists = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })) as WishlistMeta[];
+
+      // Si aucune liste n'existe (premier lancement V2), on crée la liste "Défaut"
+      // qui pointera conceptuellement vers ton ancienne collection
+      if (fetchedLists.length === 0 && !snapshot.metadata.fromCache) {
+        createList("Liste principale", "default");
+      } else {
+        // On trie : Défaut en premier, puis alphabétique
+        fetchedLists.sort((a, b) => {
+          if (a.id === 'default') return -1;
+          if (b.id === 'default') return 1;
+          return a.name.localeCompare(b.name);
+        });
+        setLists(fetchedLists);
+      }
       setLoading(false);
     });
 
     return () => unsubscribe();
-  }, [user, target, listId, authLoading]);
+  }, [user]);
 
-  // Tri
-  const sortedCards = useMemo(() => {
-    return [...cards].sort((a, b) => a.name.localeCompare(b.name));
-  }, [cards]);
-
-  // Helpers pour retrouver le bon chemin pour les updates
-  const getDocRef = (cardId: string) => {
-      if (!user) return null;
-      let path = '';
-      if (target === 'collection') path = `users/${user.uid}/collection`;
-      else if (listId === 'default') path = `users/${user.uid}/wishlist`;
-      else path = `users/${user.uid}/wishlists_data/${listId}/cards`;
-      return doc(db, path, cardId);
-  };
-
-  const updateQuantity = async (cardId: string, amount: number, currentQuantity: number) => {
+  const createList = async (name: string, customId?: string) => {
     if (!user) return;
-    const ref = getDocRef(cardId);
-    if (!ref) return;
-
-    if (currentQuantity + amount <= 0) return 'shouldDelete';
-
     try {
-      await updateDoc(ref, { quantity: increment(amount) });
-      return 'updated';
+      const data = { name, createdAt: serverTimestamp() };
+      if (customId) {
+        await setDoc(doc(db, 'users', user.uid, 'wishlists_meta', customId), { ...data, isDefault: true });
+      } else {
+        await addDoc(collection(db, 'users', user.uid, 'wishlists_meta'), data);
+      }
+      toast.success(`Liste "${name}" créée`);
     } catch (err) {
-      toast.error("Erreur update");
-      return 'error';
+      console.error(err);
+      toast.error("Erreur création liste");
     }
   };
 
-  const removeCard = async (cardId: string) => {
-    if (!user) return;
-    const ref = getDocRef(cardId);
-    if(ref) {
-        await deleteDoc(ref);
-        toast.success('Carte retirée', { icon: '🗑️' });
+  const deleteList = async (listId: string) => {
+    if (!user || listId === 'default') return; // On protège la liste par défaut
+    if (!confirm("Supprimer cette liste et toutes ses cartes ?")) return;
+    
+    try {
+        // 1. Supprimer les métadonnées
+        await deleteDoc(doc(db, 'users', user.uid, 'wishlists_meta', listId));
+        
+        // 2. Note: Idéalement, il faudrait aussi supprimer la sous-collection 'cards'.
+        // C'est complexe côté client. Pour l'instant on supprime juste l'accès (meta).
+        // Une Cloud Function serait idéale ici pour le nettoyage complet.
+        
+        toast.success("Liste supprimée");
+    } catch (err) {
+        console.error(err);
+        toast.error("Erreur suppression");
     }
   };
 
-  const totalPrice = useMemo(() => {
-    return cards.reduce((acc, card) => acc + (card.price || 0) * card.quantity, 0);
-  }, [cards]);
-
-  return { cards: sortedCards, loading, updateQuantity, removeCard, totalPrice };
+  return { lists, loading, createList, deleteList };
 }
 </file>
 
@@ -890,6 +963,124 @@ Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/bui
     "**/*.mts"
   ],
   "exclude": ["node_modules"]
+}
+</file>
+
+<file path="hooks/useCardCollection.ts">
+// hooks/useCardCollection.ts
+import { useState, useEffect, useMemo } from 'react';
+import { db } from '@/lib/firebase';
+import { collection, onSnapshot, doc, updateDoc, deleteDoc, increment } from 'firebase/firestore';
+import { useAuth } from '@/lib/AuthContext';
+import toast from 'react-hot-toast';
+
+export type CardType = {
+  id: string;
+  name: string;
+  imageUrl: string;
+  imageBackUrl?: string;
+  quantity: number;
+  price?: number;
+  setName?: string;
+  setCode?: string;
+  wishlistId?: string; // Utile pour la vue globale
+};
+
+// MODIFICATION: On accepte maintenant un path explicite ou un listId
+export function useCardCollection(target: 'collection' | 'wishlist', listId: string = 'default') {
+  const { user, loading: authLoading } = useAuth();
+  const [cards, setCards] = useState<CardType[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!user || authLoading) {
+        if (!authLoading) setLoading(false);
+        return;
+    }
+
+    setLoading(true);
+
+    // LOGIQUE DE CHEMIN DYNAMIQUE
+    let collectionPath = '';
+    
+    if (target === 'collection') {
+        // La collection reste unique (pour l'instant)
+        collectionPath = `users/${user.uid}/collection`;
+    } else {
+        // Gestion des Wishlists
+        if (listId === 'default') {
+            // Rétro-compatibilité : l'ancienne wishlist
+            collectionPath = `users/${user.uid}/wishlist`;
+        } else {
+            // Nouvelles wishlists
+            collectionPath = `users/${user.uid}/wishlists_data/${listId}/cards`;
+        }
+    }
+
+    const colRef = collection(db, collectionPath);
+
+    const unsubscribe = onSnapshot(colRef, (snapshot) => {
+      const items = snapshot.docs.map((doc) => ({
+        id: doc.id,
+        wishlistId: listId, // On marque l'origine
+        ...doc.data(),
+      })) as CardType[];
+      
+      setCards(items);
+      setLoading(false);
+    }, (error) => {
+      console.error("Erreur Firestore:", error);
+      setLoading(false);
+    });
+
+    return () => unsubscribe();
+  }, [user, target, listId, authLoading]);
+
+  // Tri
+  const sortedCards = useMemo(() => {
+    return [...cards].sort((a, b) => a.name.localeCompare(b.name));
+  }, [cards]);
+
+  // Helpers pour retrouver le bon chemin pour les updates
+  const getDocRef = (cardId: string) => {
+      if (!user) return null;
+      let path = '';
+      if (target === 'collection') path = `users/${user.uid}/collection`;
+      else if (listId === 'default') path = `users/${user.uid}/wishlist`;
+      else path = `users/${user.uid}/wishlists_data/${listId}/cards`;
+      return doc(db, path, cardId);
+  };
+
+  const updateQuantity = async (cardId: string, amount: number, currentQuantity: number) => {
+    if (!user) return;
+    const ref = getDocRef(cardId);
+    if (!ref) return;
+
+    if (currentQuantity + amount <= 0) return 'shouldDelete';
+
+    try {
+      await updateDoc(ref, { quantity: increment(amount) });
+      return 'updated';
+    } catch (err) {
+      toast.error("Erreur update");
+      return 'error';
+    }
+  };
+
+  const removeCard = async (cardId: string) => {
+    if (!user) return;
+    const ref = getDocRef(cardId);
+    if(ref) {
+        await deleteDoc(ref);
+        toast.success('Carte retirée', { icon: '🗑️' });
+    }
+  };
+
+  const totalPrice = useMemo(() => {
+    return cards.reduce((acc, card) => acc + (card.price || 0) * card.quantity, 0);
+  }, [cards]);
+
+  return { cards: sortedCards, loading, updateQuantity, removeCard, totalPrice };
 }
 </file>
 
@@ -1620,95 +1811,22 @@ export default function HomePage() {
 // app/wishlist/page.tsx
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState } from 'react';
 import { useAuth } from '@/lib/AuthContext';
 import { useWishlists } from '@/hooks/useWishlists';
-import { useCardCollection, CardType } from '@/hooks/useCardCollection';
-import MagicCard from '@/components/MagicCard';
-import { db } from '@/lib/firebase';
-import { doc, runTransaction, increment } from 'firebase/firestore';
-import toast from 'react-hot-toast';
-
-// --- COMPOSANT INTERNE POUR AFFICHER UNE LISTE ---
-const SingleWishlistView = ({ listId, listName }: { listId: string, listName: string }) => {
-    const { cards, loading, updateQuantity, removeCard, totalPrice } = useCardCollection('wishlist', listId);
-    const { user } = useAuth();
-    
-    // Logique de déplacement vers Collection (inchangée mais adaptée au path)
-    const moveToCollection = async (card: CardType) => {
-        if (!user) return;
-        const toastId = toast.loading("Déplacement...");
-        try {
-            // Détermine le bon path source
-            const sourcePath = listId === 'default' ? 'wishlist' : `wishlists_data/${listId}/cards`;
-            const wishlistRef = doc(db, 'users', user.uid, sourcePath, card.id);
-            const collectionRef = doc(db, 'users', user.uid, 'collection', card.id);
-
-            await runTransaction(db, async (transaction) => {
-                const colDoc = await transaction.get(collectionRef);
-                if (colDoc.exists()) transaction.update(collectionRef, { quantity: increment(card.quantity) });
-                else transaction.set(collectionRef, {
-                    ...card,
-                    wishlistId: null, // Nettoyage
-                    addedAt: new Date()
-                });
-                transaction.delete(wishlistRef);
-            });
-            toast.success("Ajoutée à la collection !", { id: toastId });
-        } catch (error) {
-            console.error(error);
-            toast.error("Erreur", { id: toastId });
-        }
-    };
-
-    if (loading) return <div className="p-10 text-center">Chargement...</div>;
-
-    return (
-        <div className="animate-in fade-in duration-300">
-            <div className="flex justify-between items-end mb-4 border-b pb-2 dark:border-gray-700">
-                <h2 className="text-2xl font-bold">{listName}</h2>
-                <div className="text-right">
-                    <span className="text-sm text-gray-500">Total estimé</span>
-                    <p className="text-xl font-bold text-green-600">{totalPrice.toFixed(2)} €</p>
-                </div>
-            </div>
-            {cards.length === 0 ? (
-                <p className="text-gray-500 italic">Cette liste est vide.</p>
-            ) : (
-                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-                    {cards.map(card => (
-                        <MagicCard 
-                            key={card.id} 
-                            {...card} 
-                            isWishlist={true}
-                            onIncrement={() => updateQuantity(card.id, 1, card.quantity)}
-                            onDecrement={() => {
-                                if(card.quantity === 1) {
-                                    if(confirm("Supprimer ?")) removeCard(card.id);
-                                } else {
-                                    updateQuantity(card.id, -1, card.quantity);
-                                }
-                            }}
-                            onDelete={() => { if(confirm("Supprimer ?")) removeCard(card.id); }}
-                            onMove={() => moveToCollection(card)}
-                        />
-                    ))}
-                </div>
-            )}
-        </div>
-    );
-};
+// Import des nouveaux composants
+import SingleWishlistView from '@/components/wishlist/SingleWishlistView';
+import GlobalWishlistView from '@/components/wishlist/GlobalWishlistView';
 
 export default function WishlistPage() {
   const { user } = useAuth();
-  const { lists, createList, deleteList } = useWishlists();
+  const { lists, createList, deleteList, loading: metaLoading } = useWishlists();
   
   const [selectedListId, setSelectedListId] = useState<string>('default');
   const [newListName, setNewListName] = useState('');
 
-  if (!user) return <p className="p-10 text-center">Connectez-vous.</p>;
+  if (!user) return <p className="p-10 text-center">Veuillez vous connecter.</p>;
 
-  // Gestion de la création
   const handleCreate = (e: React.FormEvent) => {
     e.preventDefault();
     if(newListName.trim()) {
@@ -1718,64 +1836,101 @@ export default function WishlistPage() {
   };
 
   return (
-    <main className="container mx-auto p-4 flex flex-col md:flex-row gap-6 min-h-[80vh]">
+    <main className="container mx-auto p-4 flex flex-col md:flex-row gap-8 min-h-[85vh]">
       
-      {/* SIDEBAR NAVIGATION */}
-      <aside className="w-full md:w-64 flex-none space-y-6">
-        <div className="bg-white dark:bg-gray-800 p-4 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700">
-            <h3 className="font-bold mb-4 text-gray-900 dark:text-white flex items-center gap-2">
+      {/* SIDEBAR */}
+      <aside className="w-full md:w-72 flex-none space-y-6">
+        <div className="bg-white dark:bg-gray-800 p-5 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 sticky top-24">
+            <h3 className="font-bold mb-4 text-gray-900 dark:text-white flex items-center gap-2 border-b border-gray-100 dark:border-gray-700 pb-2">
                 📑 Mes Listes
             </h3>
             
-            <div className="flex flex-col gap-1">
-                {/* Bouton "Vue Globale" (Optionnel - voir note plus bas) */}
-                {/* Pour l'instant on liste les listes individuelles */}
-                
-                {lists.map(list => (
-                    <div key={list.id} className="group flex items-center">
-                        <button
-                            onClick={() => setSelectedListId(list.id)}
-                            className={`flex-grow text-left px-3 py-2 rounded-lg text-sm transition-colors ${
-                                selectedListId === list.id 
-                                ? 'bg-blue-100 text-blue-700 font-bold dark:bg-blue-900/40 dark:text-blue-300' 
-                                : 'hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300'
-                            }`}
-                        >
-                            {list.name}
-                        </button>
-                        {list.id !== 'default' && (
-                            <button 
-                                onClick={() => deleteList(list.id)}
-                                className="opacity-0 group-hover:opacity-100 p-2 text-red-400 hover:text-red-600 transition"
-                                title="Supprimer la liste"
-                            >
-                                ✕
-                            </button>
-                        )}
-                    </div>
-                ))}
-            </div>
+            {metaLoading ? (
+                <p className="text-sm text-gray-400">Chargement...</p>
+            ) : (
+                <div className="flex flex-col gap-1 max-h-[60vh] overflow-y-auto pr-1 custom-scrollbar">
+                    
+                    {/* BOUTON VUE GLOBALE */}
+                    <button
+                        onClick={() => setSelectedListId('GLOBAL_VIEW')}
+                        className={`text-left px-3 py-2.5 rounded-lg text-sm transition-all duration-200 flex items-center gap-2 mb-2 ${
+                            selectedListId === 'GLOBAL_VIEW'
+                            ? 'bg-purple-600 text-white shadow-md font-medium' 
+                            : 'bg-purple-50 text-purple-700 hover:bg-purple-100 dark:bg-purple-900/20 dark:text-purple-300'
+                        }`}
+                    >
+                        <span>🌍</span> Tout voir (Fusionné)
+                    </button>
 
-            {/* Création nouvelle liste */}
-            <form onSubmit={handleCreate} className="mt-4 pt-4 border-t border-gray-100 dark:border-gray-700">
-                <input 
-                    type="text" 
-                    placeholder="+ Nouvelle liste..." 
-                    className="w-full text-sm p-2 border rounded mb-2 bg-transparent dark:border-gray-600"
-                    value={newListName}
-                    onChange={e => setNewListName(e.target.value)}
-                />
+                    <div className="border-t border-gray-100 dark:border-gray-700 my-2"></div>
+
+                    {lists.map(list => (
+                        <div key={list.id} className="group flex items-center relative">
+                            <button
+                                onClick={() => setSelectedListId(list.id)}
+                                className={`flex-grow text-left px-3 py-2.5 rounded-lg text-sm transition-all duration-200 ${
+                                    selectedListId === list.id 
+                                    ? 'bg-blue-600 text-white shadow-md font-medium' 
+                                    : 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300'
+                                }`}
+                            >
+                                {list.name}
+                            </button>
+                            
+                            {list.id !== 'default' && (
+                                <button 
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        deleteList(list.id);
+                                        if (selectedListId === list.id) setSelectedListId('default');
+                                    }}
+                                    className={`absolute right-2 p-1.5 rounded-md transition-opacity ${
+                                        selectedListId === list.id 
+                                        ? 'text-blue-200 hover:text-white hover:bg-blue-500' 
+                                        : 'opacity-0 group-hover:opacity-100 text-gray-400 hover:text-red-600 hover:bg-gray-200 dark:hover:bg-gray-600'
+                                    }`}
+                                    title="Supprimer"
+                                >
+                                    ✕
+                                </button>
+                            )}
+                        </div>
+                    ))}
+                </div>
+            )}
+
+            {/* Formulaire Création */}
+            <form onSubmit={handleCreate} className="mt-6 pt-4 border-t border-gray-100 dark:border-gray-700">
+                <div className="flex gap-2">
+                    <input 
+                        type="text" 
+                        placeholder="Nom nouvelle liste..." 
+                        className="w-full text-sm p-2 border rounded-lg bg-gray-50 dark:bg-gray-900 dark:border-gray-600 focus:ring-2 focus:ring-blue-500 outline-none"
+                        value={newListName}
+                        onChange={e => setNewListName(e.target.value)}
+                    />
+                    <button 
+                        type="submit"
+                        className="bg-blue-600 hover:bg-blue-700 text-white px-3 rounded-lg font-bold text-lg leading-none pb-1"
+                    >
+                        +
+                    </button>
+                </div>
             </form>
         </div>
       </aside>
 
       {/* CONTENU PRINCIPAL */}
-      <section className="flex-grow">
-          <SingleWishlistView 
-            key={selectedListId} // Force le remount quand on change de liste
-            listId={selectedListId} 
-            listName={lists.find(l => l.id === selectedListId)?.name || 'Liste'} 
-          />
+      <section className="flex-grow min-w-0">
+          {selectedListId === 'GLOBAL_VIEW' ? (
+              <GlobalWishlistView lists={lists} />
+          ) : (
+              <SingleWishlistView 
+                key={selectedListId} 
+                listId={selectedListId} 
+                listName={lists.find(l => l.id === selectedListId)?.name || 'Liste'} 
+              />
+          )}
       </section>
 
     </main>
