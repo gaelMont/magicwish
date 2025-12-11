@@ -1,7 +1,7 @@
 // components/ImportModal.tsx
 'use client';
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import Papa from 'papaparse';
 import { useAuth } from '@/lib/AuthContext';
 import { db } from '@/lib/firebase';
@@ -56,18 +56,23 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
   const { user } = useAuth();
   
   // États
-  const [inputType, setInputType] = useState<'file' | 'text'>('file'); // Onglets
-  const [textInput, setTextInput] = useState(''); // Contenu du textarea
+  const [inputType, setInputType] = useState<'file' | 'text'>('file');
+  const [textInput, setTextInput] = useState('');
   
   const [data, setData] = useState<ManaboxRow[]>([]);
   const [columns, setColumns] = useState<string[]>([]);
-  const [step, setStep] = useState<'upload' | 'preview' | 'importing'>('upload');
+  
+  // Ajout de l'étape 'success' pour la validation finale
+  const [step, setStep] = useState<'upload' | 'preview' | 'importing' | 'success'>('upload');
+  
   const [progress, setProgress] = useState(0);
   const [statusMsg, setStatusMsg] = useState('');
-  
   const [importMode, setImportMode] = useState<'add' | 'sync'>('add'); 
+  
+  // Stats pour l'écran de fin
+  const [resultStats, setResultStats] = useState({ success: 0, ignored: 0 });
 
-  // Map pour accès rapide aux cartes existantes
+  // Map pour accès rapide
   const existingMap = useMemo(() => {
     const map = new Map<string, ExistingCard>();
     currentCollection.forEach(card => {
@@ -76,6 +81,36 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
     });
     return map;
   }, [currentCollection]);
+
+  // --- GESTION DE LA FERMETURE (ECHAP + CLIC DEHORS) ---
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (isOpen && e.key === 'Escape' && step !== 'importing') {
+        handleClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, step]);
+
+  const handleClose = () => {
+    if (step === 'importing') return; // On bloque la fermeture pendant l'import
+    onClose();
+    // Reset différé pour éviter les glitchs visuels
+    setTimeout(() => {
+      setStep('upload');
+      setData([]);
+      setTextInput('');
+      setProgress(0);
+      setResultStats({ success: 0, ignored: 0 });
+    }, 300);
+  };
+
+  const handleBackdropClick = (e: React.MouseEvent) => {
+    if (e.target === e.currentTarget && step !== 'importing') {
+      handleClose();
+    }
+  };
 
   if (!isOpen) return null;
 
@@ -98,37 +133,32 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
     });
   };
 
-  // --- GESTION TEXTE (Archidekt style) ---
+  // --- GESTION TEXTE ---
   const handleTextParse = () => {
     if (!textInput.trim()) return;
 
     const rows: ManaboxRow[] = [];
     const lines = textInput.split('\n');
-
-    // Regex pour : "1 Name (SET) 123 *F*"
-    // Group 1: Qty, Group 2: Name, Group 3: Set, Group 4: CollectorNum, Group 5: Foil (*F*)
     const regex = /^(\d+)\s+(.+?)\s+\((\w+)\)\s+(\S+)(?:\s+\*(F)\*)?/;
 
     lines.forEach(line => {
         const cleanLine = line.trim();
         if (!cleanLine) return;
-
         const match = cleanLine.match(regex);
         if (match) {
             rows.push({
                 "Quantity": match[1],
-                "Name": match[2], // "The Legend of Yangchen // Avatar Yangchen"
-                "Set code": match[3].toLowerCase(), // "TLA" -> "tla"
+                "Name": match[2],
+                "Set code": match[3].toLowerCase(),
                 "Collector number": match[4],
                 "Foil": match[5] === 'F' ? "true" : "false",
-                // Champs vides (seront récupérés par Scryfall ou ignorés)
                 "Scryfall ID": "", 
                 "Binder Name": "Import Texte",
                 "Set name": "",
                 "Rarity": "",
                 "ManaBox ID": "",
                 "Purchase price": "0",
-                "Language": "en", // Défaut anglais pour import texte
+                "Language": "en",
                 "Condition": "Near Mint"
             });
         }
@@ -139,7 +169,7 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
         return;
     }
 
-    setColumns(["Name", "Set code", "Quantity", "Foil", "Collector number"]); // Colonnes pertinentes
+    setColumns(["Name", "Set code", "Quantity", "Foil", "Collector number"]);
     setData(rows);
     setStep('preview');
   };
@@ -185,9 +215,6 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
 
     data.forEach(row => {
         const scryfallId = row["Scryfall ID"];
-        // Pour le texte, scryfallId est vide, donc on ira toujours dans "rowsToFetch"
-        // C'est normal : on doit demander à l'API de trouver l'ID.
-        
         const csvQty = parseInt(row["Quantity"]) || 1;
         const csvFoil = row["Foil"] === "true";
         const existing = scryfallId ? existingMap.get(scryfallId) : undefined;
@@ -210,7 +237,7 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
     let processedCount = skippedCount; 
     let successCount = 0;
 
-    // 1. UPDATES RAPIDES (Seulement si ID connu -> CSV)
+    // 1. UPDATES RAPIDES
     if (rowsToUpdateDirectly.length > 0) {
         setStatusMsg("Mise à jour directe...");
         const updateChunks = chunkArray(rowsToUpdateDirectly, 400);
@@ -242,14 +269,13 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
         }
     }
 
-    // 2. RECUPERATION SCRYFALL (Pour Texte ET Nouvelles cartes CSV)
+    // 2. RECUPERATION SCRYFALL
     if (rowsToFetch.length > 0) {
         setStatusMsg("Identification des cartes...");
         const fetchChunks = chunkArray(rowsToFetch, 75);
 
         for (const chunk of fetchChunks) {
             try {
-                // Si pas d'ID (Import Texte), on envoie Nom + Set
                 const identifiers = chunk.map(row => {
                     if (row["Scryfall ID"]) return { id: row["Scryfall ID"] };
                     return { name: row["Name"], set: row["Set code"], collector_number: row["Collector number"] };
@@ -263,20 +289,9 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
 
                 const result = await response.json();
                 const foundCards: ScryfallCard[] = result.data || [];
-                
-                // On doit faire correspondre la réponse Scryfall à nos lignes
-                // Scryfall renvoie les cartes trouvées, mais pas forcément dans l'ordre exact si échec.
-                // Stratégie : On map par ID ou par Nom+Set
-                
                 const batch = writeBatch(db);
                 
-                // Pour chaque carte trouvée par Scryfall, on cherche la ligne correspondante dans notre chunk
-                // (Note: C'est une simplification, Scryfall /collection renvoie 'found' et 'not_found', 
-                // mais ici on itère sur les résultats trouvés)
-                
                 foundCards.forEach(scryfallData => {
-                    // On cherche la ligne qui correspond à cette carte trouvée
-                    // On cherche d'abord par ID si présent, sinon par set+collector number
                     const matchingRow = chunk.find(r => 
                         r["Scryfall ID"] === scryfallData.id || 
                         (r["Set code"] === scryfallData.set && (r["Name"] === scryfallData.name || r["Name"].startsWith(scryfallData.name.split(" //")[0])))
@@ -285,35 +300,21 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
                     if (matchingRow) {
                         const { name, imageUrl, imageBackUrl } = getCardInfo(scryfallData);
                         const cardRef = doc(db, 'users', user.uid, targetCollection, scryfallData.id);
-                        
-                        // Logique d'ajout/Sync pour les "nouvelles" cartes (ou celles identifiées via texte)
-                        // Si la carte existe DÉJÀ en base (mais qu'on l'a pas vue car pas d'ID dans le texte), 
-                        // Firebase merge ou écrase selon nos souhaits.
-                        // Pour faire simple : le texte agit comme un "Add" ou un "Sync" via le merge.
-                        
                         const qty = parseInt(matchingRow["Quantity"]);
 
+                        const cardData = {
+                            name, imageUrl, imageBackUrl,
+                            setName: scryfallData.set_name, setCode: scryfallData.set,
+                            scryfallId: scryfallData.id,
+                            price: parseFloat(scryfallData.prices?.eur || "0"),
+                            foil: matchingRow["Foil"] === "true",
+                            importedAt: new Date()
+                        };
+
                         if (importMode === 'add') {
-                             batch.set(cardRef, {
-                                name, imageUrl, imageBackUrl,
-                                setName: scryfallData.set_name, setCode: scryfallData.set,
-                                scryfallId: scryfallData.id,
-                                price: parseFloat(scryfallData.prices?.eur || "0"),
-                                quantity: increment(qty), // On incrémente si existe déjà
-                                foil: matchingRow["Foil"] === "true",
-                                importedAt: new Date()
-                            }, { merge: true });
+                             batch.set(cardRef, { ...cardData, quantity: increment(qty) }, { merge: true });
                         } else {
-                             // Sync : On force la valeur
-                             batch.set(cardRef, {
-                                name, imageUrl, imageBackUrl,
-                                setName: scryfallData.set_name, setCode: scryfallData.set,
-                                scryfallId: scryfallData.id,
-                                price: parseFloat(scryfallData.prices?.eur || "0"),
-                                quantity: qty, // On écrase
-                                foil: matchingRow["Foil"] === "true",
-                                importedAt: new Date()
-                            }, { merge: true });
+                             batch.set(cardRef, { ...cardData, quantity: qty }, { merge: true });
                         }
                         successCount++;
                     }
@@ -328,22 +329,33 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
         }
     }
 
-    toast.success(`${successCount} cartes traitées !`);
-    onClose();
-    setData([]);
-    setTextInput('');
-    setStep('upload');
+    // Affichage de l'écran de succès au lieu de fermer
+    setResultStats({ success: successCount, ignored: skippedCount });
+    setStep('success');
+    toast.success("Opération terminée !");
   };
 
+  // --- RENDER ---
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
-      <div className="bg-white dark:bg-gray-800 rounded-xl p-6 max-w-5xl w-full shadow-2xl border border-gray-100 dark:border-gray-700 flex flex-col max-h-[90vh]">
+    // CLIC SUR BACKDROP -> handleBackdropClick
+    <div 
+      className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 backdrop-blur-sm"
+      onClick={handleBackdropClick}
+    >
+      {/* CLIC SUR MODALE -> stopPropagation (pour ne pas fermer) */}
+      <div 
+        className="bg-white dark:bg-gray-800 rounded-xl p-6 max-w-5xl w-full shadow-2xl border border-gray-100 dark:border-gray-700 flex flex-col max-h-[90vh]"
+        onClick={(e) => e.stopPropagation()}
+      >
         
         {/* HEADER */}
         <div className="flex justify-between items-center mb-4 border-b border-gray-100 dark:border-gray-700 pb-3">
-          <h2 className="text-xl font-bold text-gray-900 dark:text-white">Ajouter des cartes</h2>
-          {!step.includes('importing') && (
-             <button onClick={onClose} className="text-gray-500 hover:text-gray-700">✕</button>
+          <h2 className="text-xl font-bold text-gray-900 dark:text-white">
+            {step === 'success' ? 'Résultat' : 'Ajouter des cartes'}
+          </h2>
+          {/* La croix ferme toujours (sauf pendant import) */}
+          {step !== 'importing' && (
+             <button onClick={handleClose} className="text-gray-500 hover:text-gray-700 text-lg p-2">✕</button>
           )}
         </div>
 
@@ -352,8 +364,6 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
             {/* ETAPE 1 : CHOIX INPUT */}
             {step === 'upload' && (
                 <div className="flex flex-col h-full">
-                    
-                    {/* ONGLETS */}
                     <div className="flex border-b border-gray-200 dark:border-gray-700 mb-4">
                         <button 
                             onClick={() => setInputType('file')}
@@ -376,12 +386,14 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
                             <p className="font-bold text-lg">Déposer CSV Manabox</p>
                         </div>
                     ) : (
-                        <div className="flex-grow flex flex-col">
+                        <div className="flex-grow flex flex-col h-full">
+                            {/* TEXTAREA AGRANDIE : h-full, rows=15 */}
                             <textarea 
                                 value={textInput}
                                 onChange={(e) => setTextInput(e.target.value)}
+                                rows={15} 
                                 placeholder={`Collez votre liste ici (Format Archidekt/Arena). Exemple :\n\n1 The Legend of Yangchen // Avatar Yangchen (TLA) 27\n1 Sol Ring (CMM) 410\n1 Suki, Courageous Rescuer (TLA) 37 *F*`}
-                                className="flex-grow w-full p-4 rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-900 font-mono text-xs focus:ring-2 focus:ring-blue-500 outline-none resize-none"
+                                className="w-full flex-grow p-4 rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-900 font-mono text-xs focus:ring-2 focus:ring-blue-500 outline-none resize-none min-h-[400px]"
                             />
                             <button 
                                 onClick={handleTextParse}
@@ -395,10 +407,9 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
                 </div>
             )}
 
-            {/* ETAPE 2 : PREVIEW & MODE (inchangé) */}
+            {/* ETAPE 2 : PREVIEW (inchangée dans la logique, mais bénéficie des fix de fermeture) */}
             {step === 'preview' && (
                 <div className="flex flex-col h-full">
-                    
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
                         <div 
                             onClick={() => setImportMode('add')}
@@ -461,7 +472,7 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
                 </div>
             )}
 
-            {/* ETAPE 3 : CHARGEMENT (inchangé) */}
+            {/* ETAPE 3 : CHARGEMENT */}
             {step === 'importing' && (
                 <div className="flex flex-col items-center justify-center h-full py-10">
                     <div className="text-5xl font-bold text-blue-600 mb-2">{progress}%</div>
@@ -469,6 +480,38 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
                     <div className="w-full bg-gray-200 rounded-full h-4 dark:bg-gray-700 overflow-hidden max-w-md">
                         <div className="bg-blue-600 h-full rounded-full transition-all duration-300 ease-out" style={{ width: `${progress}%` }}></div>
                     </div>
+                    <p className="text-xs text-gray-400 mt-4">Veuillez patienter...</p>
+                </div>
+            )}
+
+            {/* ETAPE 4 : SUCCÈS (NOUVEAU) */}
+            {step === 'success' && (
+                <div className="flex flex-col items-center justify-center h-full py-10 text-center animate-in zoom-in-95 duration-300">
+                    <div className="w-20 h-20 bg-green-100 text-green-600 rounded-full flex items-center justify-center text-4xl mb-6">
+                        ✅
+                    </div>
+                    <h3 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">Importation Terminée !</h3>
+                    <p className="text-gray-500 dark:text-gray-300 mb-8 max-w-md">
+                        Vos cartes ont été traitées avec succès. Voici le résumé de l'opération :
+                    </p>
+
+                    <div className="grid grid-cols-2 gap-4 w-full max-w-md mb-8">
+                        <div className="bg-green-50 dark:bg-green-900/20 p-4 rounded-xl border border-green-100 dark:border-green-800">
+                            <p className="text-sm text-green-600 dark:text-green-400 font-bold uppercase">Mises à jour / Ajoutées</p>
+                            <p className="text-3xl font-bold text-green-700 dark:text-green-300">{resultStats.success}</p>
+                        </div>
+                        <div className="bg-gray-50 dark:bg-gray-800 p-4 rounded-xl border border-gray-200 dark:border-gray-700">
+                            <p className="text-sm text-gray-500 dark:text-gray-400 font-bold uppercase">Ignorées (Identiques)</p>
+                            <p className="text-3xl font-bold text-gray-700 dark:text-gray-300">{resultStats.ignored}</p>
+                        </div>
+                    </div>
+
+                    <button 
+                        onClick={handleClose}
+                        className="bg-gray-900 hover:bg-black text-white px-8 py-3 rounded-xl font-bold shadow-lg transition transform hover:-translate-y-0.5"
+                    >
+                        Fermer et voir ma collection
+                    </button>
                 </div>
             )}
         </div>
