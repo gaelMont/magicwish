@@ -10,9 +10,9 @@ import toast from 'react-hot-toast';
 // Liste des Planeswalkers pour l'exemple aléatoire
 const PLANESWALKERS = [
   "Jace", "Liliana", "Chandra", "Ajani", "Garruk", 
-  "Teferi", "Nissa", "Gideon", "Nicol Bolas", "Ugin", 
+  "Teferi", "Nissa", "Gideon", "Nicol_Bolas", "Ugin", 
   "Karn", "Sorin", "Elspeth", "Tezzeret", "Sarkhan",
-  "Vraska", "Domri", "Ral Zarek", "Kaya", "Narset"
+  "Vraska", "Domri", "Ral_Zarek", "Kaya", "Narset"
 ];
 
 export default function ContactsPage() {
