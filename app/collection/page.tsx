@@ -12,10 +12,9 @@ import DeleteAllButton from '@/components/DeleteAllButton';
 export default function CollectionPage() {
   const { user } = useAuth();
   
-  // 1. On récupère setCustomPrice et toggleAttribute ici
   const { 
     cards, loading, updateQuantity, removeCard, 
-    setCustomPrice, toggleAttribute, // <--- Important
+    setCustomPrice, toggleAttribute, 
     totalPrice 
   } = useCardCollection('collection');
 
@@ -63,7 +62,8 @@ export default function CollectionPage() {
           <p className="text-xl text-gray-500 mb-4">Votre collection est vide.</p>
         </div>
       ) : (
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+        // --- MODIFICATION ICI : Ajout de xl:grid-cols-5 ---
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
           {cards.map((card) => (
             <MagicCard 
               key={card.id}
@@ -73,8 +73,7 @@ export default function CollectionPage() {
               onDecrement={() => handleDecrement(card.id, card.quantity)}
               onDelete={() => setCardToDelete(card.id)}
               
-              // C'EST ICI QUE LA MAGIE OPÈRE (Optimisation) :
-              // On connecte les fonctions du hook parent aux props de l'enfant
+              // Actions avancées (Prix & Toggle)
               onEditPrice={(newPrice) => setCustomPrice(card.id, newPrice)}
               onToggleAttribute={(field, val) => toggleAttribute(card.id, field, val)}
             />
