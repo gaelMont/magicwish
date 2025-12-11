@@ -112,22 +112,7 @@ export default function MagicCard(props: MagicCardProps) {
   return (
     <div className={`relative group flex flex-col bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden p-3 gap-2 border transition-colors h-full ${isFoil ? 'border-purple-300 dark:border-purple-800 shadow-purple-100 dark:shadow-none' : 'border-gray-100 dark:border-gray-700 hover:border-blue-300 dark:hover:border-blue-500'}`}>
       
-      {/* --- BOUTONS D'ACTION (Delete/Move) - Restent sur l'image --- */}
-      {!readOnly && (
-        <div className="absolute top-2 left-2 right-2 flex justify-between z-20 pointer-events-none">
-            {isWishlist && onMove && (
-            <button onClick={onMove} className="pointer-events-auto p-1.5 bg-green-100 text-green-700 hover:bg-green-600 hover:text-white rounded-full transition opacity-100 md:opacity-0 md:group-hover:opacity-100 shadow-sm" title="Déplacer vers Collection">📦</button>
-            )}
-            
-            {!isWishlist && <div></div>} 
-
-            {onDelete && (
-            <button onClick={onDelete} className="pointer-events-auto p-1.5 bg-red-50 text-gray-400 hover:text-white hover:bg-red-600 rounded-full transition opacity-100 md:opacity-0 md:group-hover:opacity-100" title="Supprimer">🗑️</button>
-            )}
-        </div>
-      )}
-
-      {/* --- IMAGE --- */}
+      {/* IMAGE (Sans boutons flottants) */}
       <div className="relative w-full aspect-[2.5/3.5] bg-gray-200 rounded-lg overflow-hidden shrink-0">
         <img
           src={currentImage || CARD_BACK_URL}
@@ -152,10 +137,10 @@ export default function MagicCard(props: MagicCardProps) {
         
         <p className="text-xs text-blue-600 dark:text-blue-400 truncate font-medium mb-2">{setName}</p>
 
-        {/* --- NOUVELLE ZONE D'OPTIONS (SOUS L'IMAGE) --- */}
+        {/* --- ZONE D'OPTIONS TEXTUELLES --- */}
         <div className="flex flex-wrap gap-1.5 mb-2">
             
-            {/* TOGGLE FOIL */}
+            {/* 1. TOGGLE FOIL */}
             {onToggleAttribute ? (
                 <button 
                     onClick={() => onToggleAttribute('isFoil', !!isFoil)}
@@ -171,27 +156,38 @@ export default function MagicCard(props: MagicCardProps) {
                 <span className="text-[10px] bg-purple-100 text-purple-700 px-2 py-0.5 rounded border border-purple-200 font-medium">✨ Foil</span>
             )}
 
-            {/* TOGGLE VERSION (Wishlist only) */}
-            {(isWishlist) && (
-                onToggleAttribute ? (
-                    <button 
-                        onClick={() => onToggleAttribute('isSpecificVersion', !!isSpecificVersion)}
-                        className={`text-[10px] px-2 py-0.5 rounded border transition-colors font-medium flex-1 text-center ${
-                            isSpecificVersion 
-                            ? 'bg-blue-100 text-blue-700 border-blue-200 hover:bg-blue-200 dark:bg-blue-900/30 dark:text-blue-300' 
-                            : 'bg-gray-50 text-gray-400 border-gray-200 hover:bg-gray-100 dark:bg-gray-800 dark:border-gray-600'
-                        }`}
-                        title="Exiger cette version exacte"
-                    >
-                        {isSpecificVersion ? '🔒 Exact' : 'Auto'}
-                    </button>
-                ) : isSpecificVersion && (
-                    <span className="text-[10px] bg-blue-100 text-blue-700 px-2 py-0.5 rounded border border-blue-200 font-medium">🔒 Exact</span>
-                )
+            {/* 2. WISHLIST : VERSION & ACHAT */}
+            {isWishlist && (
+                <>
+                    {/* Version */}
+                    {onToggleAttribute && (
+                        <button 
+                            onClick={() => onToggleAttribute('isSpecificVersion', !!isSpecificVersion)}
+                            className={`text-[10px] px-2 py-0.5 rounded border transition-colors font-medium flex-1 text-center ${
+                                isSpecificVersion 
+                                ? 'bg-blue-100 text-blue-700 border-blue-200 hover:bg-blue-200 dark:bg-blue-900/30 dark:text-blue-300' 
+                                : 'bg-gray-50 text-gray-400 border-gray-200 hover:bg-gray-100 dark:bg-gray-800 dark:border-gray-600'
+                            }`}
+                            title="Exiger cette version exacte"
+                        >
+                            {isSpecificVersion ? '🔒 Exact' : 'Auto'}
+                        </button>
+                    )}
+                    {/* BOUTON J'AI ACHETÉ */}
+                    {!readOnly && onMove && (
+                        <button 
+                            onClick={onMove}
+                            className="text-[10px] px-2 py-0.5 rounded border transition-colors font-bold flex-1 text-center bg-green-50 text-green-700 border-green-200 hover:bg-green-100 dark:bg-green-900/30 dark:text-green-300 dark:border-green-800"
+                            title="Déplacer vers Collection"
+                        >
+                            📥 J&apos;ai acheté
+                        </button>
+                    )}
+                </>
             )}
 
-            {/* TOGGLE TRADE (Collection only) */}
-            {(!isWishlist) && (
+            {/* 3. COLLECTION : ÉCHANGE */}
+            {!isWishlist && (
                 onToggleAttribute ? (
                     <button 
                         onClick={() => onToggleAttribute('isForTrade', !!isForTrade)}
