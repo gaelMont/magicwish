@@ -92,6 +92,50 @@ tsconfig.json
 <files>
 This section contains the contents of the repository's files.
 
+<file path=".gitignore">
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+/node_modules
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# testing
+/coverage
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# env files (can opt-in for committing if needed)
+.env*
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+</file>
+
 <file path="app/actions/trade.ts">
 // app/actions/trade.ts
 'use server';
@@ -201,291 +245,6 @@ export async function executeServerTrade(
 }
 </file>
 
-<file path="app/search/page.tsx">
-// app/search/page.tsx
-'use client';
-
-import { useState, useMemo } from 'react';
-import { useAuth } from '@/lib/AuthContext';
-import { db } from '@/lib/firebase';
-import { doc, setDoc, increment, serverTimestamp } from 'firebase/firestore';
-import { ScryfallRawData } from '@/lib/cardUtils';
-import { CardType } from '@/hooks/useCardCollection';
-import CardVersionPickerModal from '@/components/CardVersionPickerModal';
-import toast from 'react-hot-toast';
-
-export default function SearchPage() {
-  const { user } = useAuth();
-  
-  // États de recherche
-  const [query, setQuery] = useState('');
-  const [results, setResults] = useState<ScryfallRawData[]>([]);
-  const [isSearching, setIsSearching] = useState(false);
-  const [hasSearched, setHasSearched] = useState(false);
-
-  // États du Modal
-  const [modalOpen, setModalOpen] = useState(false);
-  const [selectedBaseCard, setSelectedBaseCard] = useState<ScryfallRawData | null>(null);
-  const [targetDestination, setTargetDestination] = useState<'collection' | 'wishlist'>('collection');
-
-  // --- 1. FONCTION DE RECHERCHE (API Next.js) ---
-  const handleSearch = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!query.trim()) return;
-
-    setIsSearching(true);
-    setHasSearched(true);
-    setResults([]);
-
-    try {
-        const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
-        const data = await res.json();
-        
-        if (data.data) {
-            setResults(data.data);
-        } else {
-            toast.error("Aucune carte trouvée.");
-        }
-    } catch (error) {
-        console.error(error);
-        toast.error("Erreur de recherche.");
-    } finally {
-        setIsSearching(false);
-    }
-  };
-
-  // --- 2. OUVERTURE DU MODAL ---
-  const openPicker = (card: ScryfallRawData, destination: 'collection' | 'wishlist') => {
-      setSelectedBaseCard(card);
-      setTargetDestination(destination);
-      setModalOpen(true);
-  };
-
-  // --- 3. SAUVEGARDE EN BASE ---
-  const handleConfirmAdd = async (card: CardType) => {
-      if (!user) return;
-
-      const toastId = toast.loading(`Ajout à la ${targetDestination === 'collection' ? 'Collection' : 'Wishlist'}...`);
-      
-      try {
-          // Chemin Firestore selon la destination
-          const collectionPath = targetDestination === 'collection' ? 'collection' : 'wishlist';
-          const cardRef = doc(db, 'users', user.uid, collectionPath, card.id);
-
-          // Construction de l'objet à sauvegarder
-          const dataToSave = {
-              ...card,
-              addedAt: serverTimestamp(),
-              // Si c'est wishlist, on s'assure que ces champs sont cohérents
-              wishlistId: targetDestination === 'wishlist' ? 'default' : null, 
-              isForTrade: false // Par défaut, on ne met pas en trade immédiatement
-          };
-
-          // Utilisation de setDoc avec { merge: true } pour incrémenter si existe déjà
-          await setDoc(cardRef, {
-              ...dataToSave,
-              quantity: increment(card.quantity) // Si existe, on ajoute la quantité choisie
-          }, { merge: true });
-
-          toast.success(`Ajouté avec succès !`, { id: toastId });
-
-      } catch (error) {
-          console.error(error);
-          toast.error("Erreur lors de l'ajout", { id: toastId });
-      }
-  };
-
-  // Filtre visuel pour éviter les doublons de noms dans les résultats initiaux
-  const uniqueResults = useMemo(() => {
-    const seen = new Set();
-    return results.filter(c => {
-        const name = c.name.split(' // ')[0];
-        if (seen.has(name)) return false;
-        seen.add(name);
-        return true;
-    });
-  }, [results]);
-
-  return (
-    <main className="container mx-auto p-4 max-w-5xl min-h-[85vh]">
-      
-      {/* HEADER */}
-      <div className="text-center mb-8 pt-4">
-          <h1 className="text-3xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent mb-2">
-              🔍 Centre de Recherche
-          </h1>
-          <p className="text-gray-500">
-              Trouvez n&apos;importe quelle carte et ajoutez-la à votre Collection ou votre Wishlist.
-          </p>
-      </div>
-
-      {/* BARRE DE RECHERCHE */}
-      <div className="max-w-2xl mx-auto mb-10 sticky top-4 z-20">
-          <form onSubmit={handleSearch} className="relative shadow-lg rounded-full">
-              <input 
-                  type="text" 
-                  className="w-full p-4 pl-6 pr-14 rounded-full border-2 border-transparent bg-white dark:bg-gray-800 dark:text-white focus:border-blue-500 outline-none transition text-lg"
-                  placeholder="Nom de la carte (ex: Black Lotus, Sol Ring...)"
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  autoFocus
-              />
-              <button 
-                  type="submit"
-                  disabled={isSearching || !query.trim()}
-                  className="absolute right-2 top-2 bottom-2 bg-blue-600 hover:bg-blue-700 text-white rounded-full w-12 flex items-center justify-center transition disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                  {isSearching ? '...' : '🔎'}
-              </button>
-          </form>
-      </div>
-
-      {/* RÉSULTATS */}
-      {isSearching ? (
-          <div className="text-center py-20">
-              <div className="inline-block w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mb-4"></div>
-              <p className="text-gray-400">Interrogation de Scryfall...</p>
-          </div>
-      ) : uniqueResults.length > 0 ? (
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-              {uniqueResults.map((card) => (
-                  <div key={card.id} className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden flex flex-col group hover:shadow-md transition">
-                      {/* Image */}
-                      <div className="relative aspect-[2.5/3.5] bg-gray-200 overflow-hidden">
-                          {card.image_uris?.normal ? (
-                              <img src={card.image_uris.normal} alt={card.name} className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110" loading="lazy" />
-                          ) : (
-                             <div className="flex items-center justify-center h-full text-gray-400 text-xs">Pas d&apos;image</div>
-                          )}
-                          
-                          {/* Overlay au survol (Desktop) ou toujours visible (Mobile) */}
-                          <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center gap-3 p-4">
-                              <button 
-                                  onClick={() => openPicker(card, 'collection')}
-                                  className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 rounded-lg text-sm shadow-lg transform translate-y-4 group-hover:translate-y-0 transition-transform duration-300"
-                              >
-                                  + Collection
-                              </button>
-                              <button 
-                                  onClick={() => openPicker(card, 'wishlist')}
-                                  className="w-full bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 rounded-lg text-sm shadow-lg transform translate-y-4 group-hover:translate-y-0 transition-transform duration-300 delay-75"
-                              >
-                                  + Wishlist
-                              </button>
-                          </div>
-                      </div>
-
-                      {/* Info Rapide */}
-                      <div className="p-3">
-                          <h3 className="font-bold text-gray-900 dark:text-white truncate" title={card.name}>{card.name}</h3>
-                          <p className="text-xs text-gray-500">{card.set_name}</p>
-                      </div>
-                  </div>
-              ))}
-          </div>
-      ) : hasSearched ? (
-          <div className="text-center py-20 bg-gray-50 dark:bg-gray-800/50 rounded-2xl border-2 border-dashed border-gray-200 dark:border-gray-700">
-              <p className="text-xl text-gray-500">Aucun résultat trouvé pour &quot;{query}&quot;.</p>
-              <p className="text-sm text-gray-400 mt-2">Essayez le nom anglais exact (ex: &quot;Swords to Plowshares&quot;).</p>
-          </div>
-      ) : (
-          // État vide initial (Suggestions)
-          <div className="grid md:grid-cols-2 gap-4 max-w-3xl mx-auto opacity-50 hover:opacity-100 transition-opacity">
-               <div className="p-6 border-2 border-dashed border-gray-200 dark:border-gray-700 rounded-xl text-center">
-                   <span className="text-4xl mb-2 block">📚</span>
-                   <h3 className="font-bold">Compléter ma Collection</h3>
-                   <p className="text-sm text-gray-500">Recherchez vos cartes physiques pour les ajouter à votre inventaire numérique.</p>
-               </div>
-               <div className="p-6 border-2 border-dashed border-gray-200 dark:border-gray-700 rounded-xl text-center">
-                   <span className="text-4xl mb-2 block">✨</span>
-                   <h3 className="font-bold">Remplir ma Wishlist</h3>
-                   <p className="text-sm text-gray-500">Trouvez les cartes qui vous manquent pour permettre au système de trouver des échanges.</p>
-               </div>
-          </div>
-      )}
-
-      {/* MODALE DE SÉLECTION */}
-      <CardVersionPickerModal 
-          isOpen={modalOpen}
-          onClose={() => setModalOpen(false)}
-          baseCard={selectedBaseCard}
-          onConfirm={handleConfirmAdd}
-      />
-
-    </main>
-  );
-}
-</file>
-
-<file path="lib/firebase-admin.ts">
-// lib/firebase-admin.ts
-import 'server-only';
-import * as admin from 'firebase-admin';
-
-// Fonction pour nettoyer la clé privée (problème fréquent avec les variables d'env)
-function formatPrivateKey(key: string) {
-  return key.replace(/\\n/g, '\n');
-}
-
-export function getAdminFirestore() {
-  // On vérifie si une instance existe déjà pour éviter les erreurs de hot-reload
-  if (admin.apps.length === 0) {
-    admin.initializeApp({
-      credential: admin.credential.cert({
-        projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
-        clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-        privateKey: formatPrivateKey(process.env.FIREBASE_PRIVATE_KEY || ""),
-      }),
-    });
-  }
-  return admin.firestore();
-}
-</file>
-
-<file path=".gitignore">
-# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
-
-# dependencies
-/node_modules
-/.pnp
-.pnp.*
-.yarn/*
-!.yarn/patches
-!.yarn/plugins
-!.yarn/releases
-!.yarn/versions
-
-# testing
-/coverage
-
-# next.js
-/.next/
-/out/
-
-# production
-/build
-
-# misc
-.DS_Store
-*.pem
-
-# debug
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-.pnpm-debug.log*
-
-# env files (can opt-in for committing if needed)
-.env*
-
-# vercel
-.vercel
-
-# typescript
-*.tsbuildinfo
-next-env.d.ts
-</file>
-
 <file path="app/globals.css">
 @import "tailwindcss";
 
@@ -555,6 +314,231 @@ export default function LoginPage() {
           Se connecter avec Google
         </button>
       </div>
+    </main>
+  );
+}
+</file>
+
+<file path="app/search/page.tsx">
+// app/search/page.tsx
+'use client';
+
+import { useState, useMemo } from 'react';
+import { useAuth } from '@/lib/AuthContext';
+import { db } from '@/lib/firebase';
+import { doc, setDoc, increment, serverTimestamp } from 'firebase/firestore';
+import { ScryfallRawData } from '@/lib/cardUtils';
+import { CardType } from '@/hooks/useCardCollection';
+import { useWishlists } from '@/hooks/useWishlists'; // IMPORT AJOUTÉ
+import CardVersionPickerModal from '@/components/CardVersionPickerModal';
+import toast from 'react-hot-toast';
+
+export default function SearchPage() {
+  const { user } = useAuth();
+  const { lists } = useWishlists(); // RÉCUPÉRATION DES LISTES
+  
+  // États de recherche
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState<ScryfallRawData[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [hasSearched, setHasSearched] = useState(false);
+
+  // États du Modal
+  const [modalOpen, setModalOpen] = useState(false);
+  const [selectedBaseCard, setSelectedBaseCard] = useState<ScryfallRawData | null>(null);
+  const [targetDestination, setTargetDestination] = useState<'collection' | 'wishlist'>('collection');
+
+  // --- 1. FONCTION DE RECHERCHE ---
+  const handleSearch = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!query.trim()) return;
+
+    setIsSearching(true);
+    setHasSearched(true);
+    setResults([]);
+
+    try {
+        const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
+        const data = await res.json();
+        
+        if (data.data) {
+            setResults(data.data);
+        } else {
+            toast.error("Aucune carte trouvée.");
+        }
+    } catch (error) {
+        console.error(error);
+        toast.error("Erreur de recherche.");
+    } finally {
+        setIsSearching(false);
+    }
+  };
+
+  // --- 2. OUVERTURE DU MODAL ---
+  const openPicker = (card: ScryfallRawData, destination: 'collection' | 'wishlist') => {
+      setSelectedBaseCard(card);
+      setTargetDestination(destination);
+      setModalOpen(true);
+  };
+
+  // --- 3. SAUVEGARDE EN BASE (LOGIQUE CORRIGÉE) ---
+  const handleConfirmAdd = async (card: CardType, targetListId: string = 'default') => {
+      if (!user) return;
+
+      const destLabel = targetDestination === 'collection' ? 'Collection' : 'Wishlist';
+      const toastId = toast.loading(`Ajout à : ${destLabel}...`);
+      
+      try {
+          // --- LOGIQUE DE CHEMIN FIRESTORE DYNAMIQUE ---
+          let collectionPath = 'collection';
+          
+          if (targetDestination === 'wishlist') {
+              if (targetListId === 'default') {
+                  collectionPath = 'wishlist';
+              } else {
+                  collectionPath = `wishlists_data/${targetListId}/cards`;
+              }
+          }
+
+          const cardRef = doc(db, 'users', user.uid, collectionPath, card.id);
+
+          // Construction de l'objet à sauvegarder
+          const dataToSave = {
+              ...card,
+              addedAt: serverTimestamp(),
+              // On force le bon ID de liste ou null
+              wishlistId: targetDestination === 'wishlist' ? targetListId : null, 
+              isForTrade: false 
+          };
+
+          // On utilise setDoc avec merge pour gérer l'incrément ou la création
+          await setDoc(cardRef, {
+              ...dataToSave,
+              quantity: increment(card.quantity)
+          }, { merge: true });
+
+          toast.success(`Ajouté avec succès !`, { id: toastId });
+
+      } catch (error) {
+          console.error(error);
+          toast.error("Erreur lors de l'ajout", { id: toastId });
+      }
+  };
+
+  // Filtre visuel pour éviter les doublons de noms
+  const uniqueResults = useMemo(() => {
+    const seen = new Set();
+    return results.filter(c => {
+        const name = c.name.split(' // ')[0];
+        if (seen.has(name)) return false;
+        seen.add(name);
+        return true;
+    });
+  }, [results]);
+
+  return (
+    <main className="container mx-auto p-4 max-w-5xl min-h-[85vh]">
+      
+      {/* HEADER */}
+      <div className="text-center mb-8 pt-4">
+          <h1 className="text-3xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent mb-2">
+              🔍 Centre de Recherche
+          </h1>
+          <p className="text-gray-500">
+              Trouvez n&apos;importe quelle carte et ajoutez-la à votre Collection ou votre Wishlist.
+          </p>
+      </div>
+
+      {/* BARRE DE RECHERCHE */}
+      <div className="max-w-2xl mx-auto mb-10 sticky top-4 z-20">
+          <form onSubmit={handleSearch} className="relative shadow-lg rounded-full">
+              <input 
+                  type="text" 
+                  className="w-full p-4 pl-6 pr-14 rounded-full border-2 border-transparent bg-white dark:bg-gray-800 dark:text-white focus:border-blue-500 outline-none transition text-lg"
+                  placeholder="Nom de la carte (ex: Black Lotus, Sol Ring...)"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  autoFocus
+              />
+              <button 
+                  type="submit"
+                  disabled={isSearching || !query.trim()}
+                  className="absolute right-2 top-2 bottom-2 bg-blue-600 hover:bg-blue-700 text-white rounded-full w-12 flex items-center justify-center transition disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                  {isSearching ? '...' : '🔎'}
+              </button>
+          </form>
+      </div>
+
+      {/* RÉSULTATS */}
+      {isSearching ? (
+          <div className="text-center py-20">
+              <div className="inline-block w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mb-4"></div>
+              <p className="text-gray-400">Interrogation de Scryfall...</p>
+          </div>
+      ) : uniqueResults.length > 0 ? (
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+              {uniqueResults.map((card) => (
+                  <div key={card.id} className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden flex flex-col group hover:shadow-md transition">
+                      {/* Image */}
+                      <div className="relative aspect-[2.5/3.5] bg-gray-200 overflow-hidden">
+                          {card.image_uris?.normal ? (
+                              <img src={card.image_uris.normal} alt={card.name} className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110" loading="lazy" />
+                          ) : (
+                             <div className="flex items-center justify-center h-full text-gray-400 text-xs">Pas d&apos;image</div>
+                          )}
+                          
+                          {/* Overlay au survol */}
+                          <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center gap-3 p-4">
+                              <button 
+                                  onClick={() => openPicker(card, 'collection')}
+                                  className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 rounded-lg text-sm shadow-lg transform translate-y-4 group-hover:translate-y-0 transition-transform duration-300"
+                              >
+                                  + Collection
+                              </button>
+                              <button 
+                                  onClick={() => openPicker(card, 'wishlist')}
+                                  className="w-full bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 rounded-lg text-sm shadow-lg transform translate-y-4 group-hover:translate-y-0 transition-transform duration-300 delay-75"
+                              >
+                                  + Wishlist
+                              </button>
+                          </div>
+                      </div>
+
+                      <div className="p-3">
+                          <h3 className="font-bold text-gray-900 dark:text-white truncate" title={card.name}>{card.name}</h3>
+                          <p className="text-xs text-gray-500">{card.set_name}</p>
+                      </div>
+                  </div>
+              ))}
+          </div>
+      ) : hasSearched ? (
+          <div className="text-center py-20 bg-gray-50 dark:bg-gray-800/50 rounded-2xl border-2 border-dashed border-gray-200 dark:border-gray-700">
+              <p className="text-xl text-gray-500">Aucun résultat trouvé pour &quot;{query}&quot;.</p>
+          </div>
+      ) : (
+          <div className="grid md:grid-cols-2 gap-4 max-w-3xl mx-auto opacity-50 hover:opacity-100 transition-opacity">
+               <div className="p-6 border-2 border-dashed border-gray-200 dark:border-gray-700 rounded-xl text-center">
+                   <span className="text-4xl mb-2 block">📚</span>
+                   <h3 className="font-bold">Compléter ma Collection</h3>
+               </div>
+               <div className="p-6 border-2 border-dashed border-gray-200 dark:border-gray-700 rounded-xl text-center">
+                   <span className="text-4xl mb-2 block">✨</span>
+                   <h3 className="font-bold">Remplir ma Wishlist</h3>
+               </div>
+          </div>
+      )}
+
+      {/* MODALE DE SÉLECTION */}
+      <CardVersionPickerModal 
+          isOpen={modalOpen}
+          onClose={() => setModalOpen(false)}
+          baseCard={selectedBaseCard}
+          onConfirm={handleConfirmAdd}
+          destination={targetDestination} // On passe la destination
+          availableLists={lists} // On passe la liste des wishlists
+      />
+
     </main>
   );
 }
@@ -1287,6 +1271,31 @@ export function useWishlists() {
 }
 </file>
 
+<file path="lib/firebase-admin.ts">
+// lib/firebase-admin.ts
+import 'server-only';
+import * as admin from 'firebase-admin';
+
+// Fonction pour nettoyer la clé privée (problème fréquent avec les variables d'env)
+function formatPrivateKey(key: string) {
+  return key.replace(/\\n/g, '\n');
+}
+
+export function getAdminFirestore() {
+  // On vérifie si une instance existe déjà pour éviter les erreurs de hot-reload
+  if (admin.apps.length === 0) {
+    admin.initializeApp({
+      credential: admin.credential.cert({
+        projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
+        clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+        privateKey: formatPrivateKey(process.env.FIREBASE_PRIVATE_KEY || ""),
+      }),
+    });
+  }
+  return admin.firestore();
+}
+</file>
+
 <file path="postcss.config.mjs">
 const config = {
   plugins: {
@@ -1428,6 +1437,323 @@ export default function RootLayout({
         </AuthProvider>
       </body>
     </html>
+  );
+}
+</file>
+
+<file path="lib/firebase.ts">
+import { initializeApp, getApps, getApp } from 'firebase/app';
+import { getAuth } from 'firebase/auth';
+import { getFirestore } from 'firebase/firestore';
+
+const firebaseConfig = {
+  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
+  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
+  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
+  storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
+  appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
+};
+
+// Initialisation unique (évite les erreurs de re-init en dev)
+const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
+
+export const auth = getAuth(app);
+export const db = getFirestore(app);
+</file>
+
+<file path="next.config.ts">
+import type { NextConfig } from 'next';
+
+const nextConfig: NextConfig = {
+  // Mode strict pour détecter les bugs en dev
+  reactStrictMode: true,
+
+  // Optimisation des images
+  images: {
+    formats: ['image/avif', 'image/webp'],
+    remotePatterns: [
+      {
+        protocol: 'https',
+        hostname: 'cards.scryfall.io', // Indispensable pour tes cartes
+        port: '',
+        pathname: '/**',
+      },
+      {
+        protocol: 'https',
+        hostname: '*.googleusercontent.com', // Indispensable pour les avatars Google Auth
+        port: '',
+        pathname: '/**',
+      },
+    ],
+  },
+
+  // Sécurité (Headers HTTP)
+  async headers() {
+    return [
+      {
+        source: '/(.*)',
+        headers: [
+          { key: 'X-Content-Type-Options', value: 'nosniff' },
+          { key: 'X-Frame-Options', value: 'DENY' },
+          { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
+        ],
+      },
+    ];
+  },
+};
+
+export default nextConfig;
+</file>
+
+<file path="app/trades/new/[uid]/page.tsx">
+// app/trades/new/[uid]/page.tsx
+'use client';
+
+import { useState, use, useEffect } from 'react';
+import { useAuth } from '@/lib/AuthContext';
+import { useCardCollection, CardType } from '@/hooks/useCardCollection';
+import { useTradeSystem } from '@/hooks/useTradeSystem';
+import { db } from '@/lib/firebase';
+import { doc, getDoc } from 'firebase/firestore';
+import { useRouter } from 'next/navigation';
+import toast from 'react-hot-toast';
+
+export default function DirectTradePage({ params }: { params: Promise<{ uid: string }> }) {
+  const unwrappedParams = use(params);
+  const targetUid = unwrappedParams.uid;
+
+  const { user } = useAuth();
+  const router = useRouter();
+  const { proposeTrade } = useTradeSystem();
+
+  // --- CHARGEMENT ---
+  const { cards: myCollection, loading: loadingMe } = useCardCollection('collection');
+  const { cards: friendCollection, loading: loadingHim } = useCardCollection('collection', 'default', targetUid);
+
+  // --- ÉTATS ---
+  const [targetName, setTargetName] = useState('L\'ami');
+  const [toGive, setToGive] = useState<CardType[]>([]);
+  const [toReceive, setToReceive] = useState<CardType[]>([]);
+  const [searchMe, setSearchMe] = useState('');
+  const [searchHim, setSearchHim] = useState('');
+
+  useEffect(() => {
+    const fetchName = async () => {
+        try {
+            const snap = await getDoc(doc(db, 'users', targetUid, 'public_profile', 'info'));
+            if(snap.exists()) setTargetName(snap.data().displayName || snap.data().username);
+        } catch(e) { console.error(e); }
+    };
+    if (targetUid) fetchName();
+  }, [targetUid]);
+
+  // --- ACTIONS ---
+  const handleSelectCard = (card: CardType, listType: 'give' | 'receive') => {
+    const targetList = listType === 'give' ? toGive : toReceive;
+    const setTarget = listType === 'give' ? setToGive : setToReceive;
+    const existing = targetList.find(c => c.id === card.id);
+    const maxStock = card.quantity;
+    const currentSelected = existing ? existing.quantity : 0;
+
+    if (currentSelected < maxStock) {
+        if (existing) {
+            setTarget(prev => prev.map(c => c.id === card.id ? { ...c, quantity: c.quantity + 1 } : c));
+        } else {
+            setTarget(prev => [...prev, { ...card, quantity: 1 }]);
+        }
+    } else {
+        toast.error("Stock maximum atteint");
+    }
+  };
+
+  const handleRemoveCard = (cardId: string, listType: 'give' | 'receive') => {
+    const setTarget = listType === 'give' ? setToGive : setToReceive;
+    setTarget(prev => prev.filter(c => c.id !== cardId));
+  };
+
+  const handlePropose = async () => {
+    if (toGive.length === 0 && toReceive.length === 0) return;
+    const success = await proposeTrade(targetUid, targetName, toGive, toReceive);
+    if (success) router.push('/trades'); 
+  };
+
+  // CALCULS
+  const valGive = toGive.reduce((acc, c) => acc + (c.customPrice ?? c.price ?? 0) * c.quantity, 0);
+  const valReceive = toReceive.reduce((acc, c) => acc + (c.customPrice ?? c.price ?? 0) * c.quantity, 0);
+  const balance = valGive - valReceive;
+
+  if (!user) return <div className="p-10 text-center">Connexion requise.</div>;
+
+  return (
+    <div className="container mx-auto p-4 h-[calc(100vh-64px)] flex flex-col">
+        
+        {/* HEADER */}
+        <div className="flex-none flex items-center gap-4 mb-4">
+            <button onClick={() => router.back()} className="text-gray-500 hover:text-gray-700 bg-gray-100 px-3 py-1 rounded-lg text-sm">
+                ← Retour
+            </button>
+            <h1 className="text-2xl font-bold truncate">
+                Échange avec <span className="text-blue-600">{targetName}</span>
+            </h1>
+        </div>
+
+        {/* GRILLE PRINCIPALE */}
+        <div className="grid lg:grid-cols-2 gap-6 grow overflow-hidden pb-24">
+            
+            {/* --- COLONNE GAUCHE (MOI) --- */}
+            <div className="flex flex-col h-full bg-red-50/50 dark:bg-red-900/10 rounded-xl border border-red-100 dark:border-red-900 overflow-hidden relative shadow-sm">
+                <div className="p-4 pb-0 flex-none">
+                     <h2 className="font-bold text-red-600 mb-2">📤 Je donne (Ma Collection)</h2>
+                     <input 
+                        type="text" 
+                        placeholder="Filtrer ma collection..." 
+                        className="w-full p-2 mb-2 rounded border dark:bg-gray-800 dark:text-white dark:border-gray-600 text-sm"
+                        value={searchMe}
+                        onChange={e => setSearchMe(e.target.value)}
+                    />
+                </div>
+                
+                {/* LISTE DÉFILANTE UNIQUE (Sélectionnés en haut, Dispos en bas) */}
+                <div className="grow overflow-y-auto custom-scrollbar p-4 pt-0 space-y-4">
+                    
+                    {/* SÉLECTIONNÉS */}
+                    {toGive.length > 0 && (
+                        <div className="bg-white dark:bg-gray-800 rounded-lg border border-red-200 dark:border-red-800 overflow-hidden">
+                            <div className="bg-red-100 dark:bg-red-900/30 px-3 py-1 text-xs font-bold text-red-700 dark:text-red-300">
+                                SÉLECTION ({toGive.reduce((a,c)=>a+c.quantity,0)})
+                            </div>
+                            {toGive.map(card => (
+                                <div key={card.id} className="flex justify-between items-center text-sm p-2 border-b dark:border-gray-700 last:border-0 hover:bg-gray-50 dark:hover:bg-gray-700/50">
+                                    <span className="truncate">{card.quantity}x {card.name}</span>
+                                    <button onClick={() => handleRemoveCard(card.id, 'give')} className="text-red-500 hover:bg-red-50 rounded px-2">✕</button>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+
+                    {/* DISPONIBLES */}
+                    <div className="space-y-1">
+                        <p className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Mon Classeur d&apos;échange</p>
+                        {loadingMe ? <p className="text-sm">Chargement...</p> : 
+                            myCollection
+                                .filter(c => c.isForTrade) // <--- FILTRE AJOUTÉ ICI
+                                .filter(c => c.name.toLowerCase().includes(searchMe.toLowerCase()))
+                                .slice(0, 50) 
+                                .map(card => (
+                                    <div key={card.id} onClick={() => handleSelectCard(card, 'give')} className="cursor-pointer bg-white dark:bg-gray-800/50 hover:bg-red-100 dark:hover:bg-red-900/30 p-2 rounded flex items-center gap-2 border border-transparent hover:border-red-200 transition shadow-sm group">
+                                        <div className="w-8 h-11 bg-gray-200 rounded shrink-0 overflow-hidden relative">
+                                            <img src={card.imageUrl} className="w-full h-full object-cover" alt="" />
+                                            {card.isForTrade && <div className="absolute bottom-0 right-0 bg-green-500 text-white text-[8px] px-1">🤝</div>}
+                                        </div>
+                                        <div className="grow min-w-0">
+                                            <p className="font-bold text-xs truncate dark:text-gray-200">{card.name}</p>
+                                            <p className="text-[10px] text-gray-500">{card.setName} - Dispo: {card.quantity}</p>
+                                        </div>
+                                        <span className="text-xs font-bold text-gray-400 group-hover:text-red-500 transition-colors shrink-0">+</span>
+                                    </div>
+                                ))
+                        }
+                    </div>
+                </div>
+
+                {/* TOTAL COLONNE GAUCHE (Fixe en bas de colonne) */}
+                <div className="flex-none bg-red-50 dark:bg-red-900/20 p-3 border-t border-red-100 dark:border-red-900 text-center">
+                    <span className="text-xs text-red-600 dark:text-red-400 font-bold uppercase">Total Donné</span>
+                    <div className="text-xl font-bold text-red-700 dark:text-red-300">{valGive.toFixed(2)} €</div>
+                </div>
+            </div>
+
+            {/* --- COLONNE DROITE (AMI) --- */}
+            <div className="flex flex-col h-full bg-blue-50/50 dark:bg-blue-900/10 rounded-xl border border-blue-100 dark:border-blue-900 overflow-hidden relative shadow-sm">
+                <div className="p-4 pb-0 flex-none">
+                    <h2 className="font-bold text-blue-600 mb-2">📥 Je reçois (Sa Collection)</h2>
+                    <input 
+                        type="text" 
+                        placeholder={`Filtrer chez ${targetName}...`}
+                        className="w-full p-2 mb-2 rounded border dark:bg-gray-800 dark:text-white dark:border-gray-600 text-sm"
+                        value={searchHim}
+                        onChange={e => setSearchHim(e.target.value)}
+                    />
+                </div>
+
+                {/* LISTE DÉFILANTE UNIQUE */}
+                <div className="grow overflow-y-auto custom-scrollbar p-4 pt-0 space-y-4">
+                     {/* SÉLECTIONNÉS */}
+                     {toReceive.length > 0 && (
+                        <div className="bg-white dark:bg-gray-800 rounded-lg border border-blue-200 dark:border-blue-800 overflow-hidden">
+                            <div className="bg-blue-100 dark:bg-blue-900/30 px-3 py-1 text-xs font-bold text-blue-700 dark:text-blue-300">
+                                SÉLECTION ({toReceive.reduce((a,c)=>a+c.quantity,0)})
+                            </div>
+                            {toReceive.map(card => (
+                                <div key={card.id} className="flex justify-between items-center text-sm p-2 border-b dark:border-gray-700 last:border-0 hover:bg-gray-50 dark:hover:bg-gray-700/50">
+                                    <span className="truncate">{card.quantity}x {card.name}</span>
+                                    <button onClick={() => handleRemoveCard(card.id, 'receive')} className="text-red-500 hover:bg-red-50 rounded px-2">✕</button>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+
+                    {/* DISPONIBLES */}
+                    <div className="space-y-1">
+                        <p className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Son Classeur d&apos;échange</p>
+                        {loadingHim ? <p className="text-sm">Chargement...</p> : 
+                            friendCollection
+                                .filter(c => c.isForTrade) // FILTRE DÉJÀ PRÉSENT
+                                .filter(c => c.name.toLowerCase().includes(searchHim.toLowerCase()))
+                                .slice(0, 50)
+                                .map(card => (
+                                    <div key={card.id} onClick={() => handleSelectCard(card, 'receive')} className="cursor-pointer bg-white dark:bg-gray-800/50 hover:bg-blue-100 dark:hover:bg-blue-900/30 p-2 rounded flex items-center gap-2 border border-transparent hover:border-blue-200 transition shadow-sm group">
+                                        <div className="w-8 h-11 bg-gray-200 rounded shrink-0 overflow-hidden relative">
+                                            <img src={card.imageUrl} className="w-full h-full object-cover" alt="" />
+                                            <div className="absolute bottom-0 right-0 bg-green-500 text-white text-[8px] px-1">🤝</div>
+                                        </div>
+                                        <div className="grow min-w-0">
+                                            <p className="font-bold text-xs truncate dark:text-gray-200">{card.name}</p>
+                                            <p className="text-[10px] text-gray-500">{card.setName} - Dispo: {card.quantity}</p>
+                                        </div>
+                                        <span className="text-xs font-bold text-gray-400 group-hover:text-blue-500 transition-colors shrink-0">+</span>
+                                    </div>
+                                ))
+                        }
+                    </div>
+                </div>
+
+                {/* TOTAL COLONNE DROITE (Fixe en bas de colonne) */}
+                <div className="flex-none bg-blue-50 dark:bg-blue-900/20 p-3 border-t border-blue-100 dark:border-blue-900 text-center">
+                    <span className="text-xs text-blue-600 dark:text-blue-400 font-bold uppercase">Total Reçu</span>
+                    <div className="text-xl font-bold text-blue-700 dark:text-blue-300">{valReceive.toFixed(2)} €</div>
+                </div>
+            </div>
+        </div>
+
+        {/* FOOTER PRINCIPAL AVEC BALANCE CENTRÉE */}
+        <div className="fixed bottom-0 left-0 right-0 h-20 bg-white dark:bg-gray-900 border-t dark:border-gray-800 flex items-center px-6 z-40 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)]">
+            
+            {/* Espace vide à gauche pour l'équilibre */}
+            <div className="flex-1"></div>
+
+            {/* BALANCE CENTRALE */}
+            <div className="flex-1 flex flex-col items-center justify-center">
+                <span className="text-xs text-gray-400 font-bold uppercase tracking-widest">Valeur Résiduelle</span>
+                <div className={`text-2xl font-black ${balance >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                    {balance > 0 ? '+' : ''}{balance.toFixed(2)} €
+                </div>
+            </div>
+
+            {/* BOUTON D'ACTION À DROITE */}
+            <div className="flex-1 flex justify-end">
+                <button 
+                    onClick={handlePropose}
+                    disabled={toGive.length === 0 && toReceive.length === 0}
+                    className="bg-purple-600 hover:bg-purple-700 text-white px-8 py-3 rounded-xl font-bold disabled:opacity-50 transition shadow-lg transform active:scale-95 flex items-center gap-2"
+                >
+                    <span>🚀</span> Proposer
+                </button>
+            </div>
+        </div>
+
+    </div>
   );
 }
 </file>
@@ -1714,7 +2040,8 @@ import {
 } from 'firebase/firestore';
 import { useAuth } from '@/lib/AuthContext';
 import { CardType } from './useCardCollection';
-import { useTradeTransaction } from './useTradeTransaction';
+// ON IMPORTE L'ACTION SERVEUR
+import { executeServerTrade } from '@/app/actions/trade'; 
 import toast from 'react-hot-toast';
 
 export type TradeStatus = 'pending' | 'completed' | 'rejected' | 'cancelled';
@@ -1731,19 +2058,13 @@ export type TradeRequest = {
   createdAt: Timestamp;
 };
 
-// --- UTILITAIRE DE NETTOYAGE ---
-// Firestore déteste les valeurs "undefined". On les convertit en JSON "propre".
+// Utilitaire de nettoyage pour Firestore
 const cleanCardsForFirestore = (cards: CardType[]) => {
     return cards.map(card => {
-        // On crée une copie superficielle
         const clean = { ...card };
-        // On parcourt toutes les clés
         Object.keys(clean).forEach(key => {
             const k = key as keyof CardType;
-            // Si une valeur est undefined, on supprime la clé
-            if (clean[k] === undefined) {
-                delete clean[k];
-            }
+            if (clean[k] === undefined) delete clean[k];
         });
         return clean;
     });
@@ -1751,11 +2072,11 @@ const cleanCardsForFirestore = (cards: CardType[]) => {
 
 export function useTradeSystem() {
   const { user, username } = useAuth();
-  const { executeTrade, isProcessing: isTransactionProcessing } = useTradeTransaction();
   
   const [incomingTrades, setIncomingTrades] = useState<TradeRequest[]>([]);
   const [outgoingTrades, setOutgoingTrades] = useState<TradeRequest[]>([]);
   const [loading, setLoading] = useState(true);
+  const [isProcessing, setIsProcessing] = useState(false); // État local
 
   // 1. Écouter les échanges
   useEffect(() => {
@@ -1787,13 +2108,12 @@ export function useTradeSystem() {
     return () => { unsubIn(); unsubOut(); };
   }, [user]);
 
-  // 2. Proposer (CORRIGÉ)
+  // 2. Proposer
   const proposeTrade = async (receiverUid: string, receiverName: string, toGive: CardType[], toReceive: CardType[]) => {
     if (!user) return;
     const toastId = toast.loading("Envoi de la proposition...");
 
     try {
-      // NETTOYAGE DES DONNÉES AVANT ENVOI
       const cleanGiven = cleanCardsForFirestore(toGive);
       const cleanReceived = cleanCardsForFirestore(toReceive);
 
@@ -1802,33 +2122,51 @@ export function useTradeSystem() {
         senderName: username || user.displayName || 'Inconnu',
         receiverUid,
         receiverName,
-        itemsGiven: cleanGiven,    // <--- Utilisation des versions nettoyées
-        itemsReceived: cleanReceived, // <--- Utilisation des versions nettoyées
+        itemsGiven: cleanGiven,    
+        itemsReceived: cleanReceived, 
         status: 'pending',
         createdAt: serverTimestamp()
       });
       toast.success("Proposition envoyée !", { id: toastId });
       return true;
     } catch (e) {
-      console.error("Erreur Firestore:", e); // Ajout d'un log plus clair
-      toast.error("Erreur envoi (voir console)", { id: toastId });
+      console.error("Erreur Firestore:", e);
+      toast.error("Erreur envoi", { id: toastId });
       return false;
     }
   };
 
-  // 3. Accepter
+  // 3. Accepter (C'EST ICI QUE C'ÉTAIT FAUX DANS TON FICHIER ACTUEL)
   const acceptTrade = async (trade: TradeRequest) => {
     if (!user) return;
     
-    // Inversion Sender/Receiver pour l'exécution
-    const success = await executeTrade(
-        trade.itemsReceived, 
-        trade.itemsGiven,    
-        trade.senderUid      
-    );
+    setIsProcessing(true);
+    const toastId = toast.loading("Validation sécurisée en cours...");
 
-    if (success) {
-      await updateDoc(doc(db, 'trades', trade.id), { status: 'completed' });
+    try {
+        // APPEL DE L'ACTION SERVEUR (Admin Mode)
+        // Note: trade.itemsGiven = Ce que l'expéditeur donne
+        // Note: trade.itemsReceived = Ce que l'expéditeur reçoit
+        const result = await executeServerTrade(
+            trade.senderUid,
+            user.uid, // Je suis le receveur
+            trade.itemsGiven,
+            trade.itemsReceived
+        );
+
+        if (result.success) {
+            // Si le serveur dit OK, on marque l'échange comme fini
+            await updateDoc(doc(db, 'trades', trade.id), { status: 'completed' });
+            toast.success("Échange terminé avec succès !", { id: toastId });
+        } else {
+            throw new Error(result.error || "Erreur serveur inconnue");
+        }
+
+    } catch (error: any) { 
+        console.error("Erreur Accept Trade:", error);
+        toast.error(error.message || "Échec de l'échange", { id: toastId });
+    } finally {
+        setIsProcessing(false);
     }
   };
 
@@ -1848,74 +2186,9 @@ export function useTradeSystem() {
   return { 
     incomingTrades, outgoingTrades, loading, 
     proposeTrade, acceptTrade, rejectTrade, cancelTrade,
-    isProcessing: isTransactionProcessing 
+    isProcessing 
   };
 }
-</file>
-
-<file path="lib/firebase.ts">
-import { initializeApp, getApps, getApp } from 'firebase/app';
-import { getAuth } from 'firebase/auth';
-import { getFirestore } from 'firebase/firestore';
-
-const firebaseConfig = {
-  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
-  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
-  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
-  storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
-  appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
-};
-
-// Initialisation unique (évite les erreurs de re-init en dev)
-const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
-
-export const auth = getAuth(app);
-export const db = getFirestore(app);
-</file>
-
-<file path="next.config.ts">
-import type { NextConfig } from 'next';
-
-const nextConfig: NextConfig = {
-  // Mode strict pour détecter les bugs en dev
-  reactStrictMode: true,
-
-  // Optimisation des images
-  images: {
-    formats: ['image/avif', 'image/webp'],
-    remotePatterns: [
-      {
-        protocol: 'https',
-        hostname: 'cards.scryfall.io', // Indispensable pour tes cartes
-        port: '',
-        pathname: '/**',
-      },
-      {
-        protocol: 'https',
-        hostname: '*.googleusercontent.com', // Indispensable pour les avatars Google Auth
-        port: '',
-        pathname: '/**',
-      },
-    ],
-  },
-
-  // Sécurité (Headers HTTP)
-  async headers() {
-    return [
-      {
-        source: '/(.*)',
-        headers: [
-          { key: 'X-Content-Type-Options', value: 'nosniff' },
-          { key: 'X-Frame-Options', value: 'DENY' },
-          { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
-        ],
-      },
-    ];
-  },
-};
-
-export default nextConfig;
 </file>
 
 <file path="package.json">
@@ -1953,466 +2226,165 @@ export default nextConfig;
 }
 </file>
 
-<file path="app/trades/new/[uid]/page.tsx">
-// app/trades/new/[uid]/page.tsx
-'use client';
+<file path="app/api/search/route.ts">
+// app/api/search/route.ts
+import { NextResponse } from 'next/server';
 
-import { useState, use, useEffect } from 'react';
-import { useAuth } from '@/lib/AuthContext';
-import { useCardCollection, CardType } from '@/hooks/useCardCollection';
-import { useTradeSystem } from '@/hooks/useTradeSystem';
-import { db } from '@/lib/firebase';
-import { doc, getDoc } from 'firebase/firestore';
-import { useRouter } from 'next/navigation';
-import toast from 'react-hot-toast';
+export async function GET(request: Request) {
+  const { searchParams } = new URL(request.url);
+  const query = searchParams.get('q'); 
 
-export default function DirectTradePage({ params }: { params: Promise<{ uid: string }> }) {
-  const unwrappedParams = use(params);
-  const targetUid = unwrappedParams.uid;
+  if (!query) {
+    return NextResponse.json(
+      { error: 'Aucun terme de recherche fourni.' }, 
+      { status: 400 } 
+    );
+  }
 
-  const { user } = useAuth();
-  const router = useRouter();
-  const { proposeTrade } = useTradeSystem();
+  // --- CORRECTION : Suppression des guillemets pour permettre la recherche partielle ---
+  // On utilise encodeURIComponent pour gérer proprement les espaces et caractères spéciaux
+  const scryfallUrl = `https://api.scryfall.com/cards/search?q=${encodeURIComponent(query)}&unique=prints`;
 
-  // --- CHARGEMENT ---
-  const { cards: myCollection, loading: loadingMe } = useCardCollection('collection');
-  const { cards: friendCollection, loading: loadingHim } = useCardCollection('collection', 'default', targetUid);
+  try {
+    const scryfallResponse = await fetch(scryfallUrl);
 
-  // --- ÉTATS ---
-  const [targetName, setTargetName] = useState('L\'ami');
-  const [toGive, setToGive] = useState<CardType[]>([]);
-  const [toReceive, setToReceive] = useState<CardType[]>([]);
-  const [searchMe, setSearchMe] = useState('');
-  const [searchHim, setSearchHim] = useState('');
-
-  useEffect(() => {
-    const fetchName = async () => {
-        try {
-            const snap = await getDoc(doc(db, 'users', targetUid, 'public_profile', 'info'));
-            if(snap.exists()) setTargetName(snap.data().displayName || snap.data().username);
-        } catch(e) { console.error(e); }
-    };
-    if (targetUid) fetchName();
-  }, [targetUid]);
-
-  // --- ACTIONS ---
-  const handleSelectCard = (card: CardType, listType: 'give' | 'receive') => {
-    const targetList = listType === 'give' ? toGive : toReceive;
-    const setTarget = listType === 'give' ? setToGive : setToReceive;
-    const existing = targetList.find(c => c.id === card.id);
-    const maxStock = card.quantity;
-    const currentSelected = existing ? existing.quantity : 0;
-
-    if (currentSelected < maxStock) {
-        if (existing) {
-            setTarget(prev => prev.map(c => c.id === card.id ? { ...c, quantity: c.quantity + 1 } : c));
-        } else {
-            setTarget(prev => [...prev, { ...card, quantity: 1 }]);
-        }
-    } else {
-        toast.error("Stock maximum atteint");
+    if (!scryfallResponse.ok) {
+      const errorData = await scryfallResponse.json();
+      console.error('Erreur Scryfall:', errorData);
+      return NextResponse.json(
+        { error: errorData.details || 'Carte non trouvée' }, 
+        { status: scryfallResponse.status }
+      );
     }
-  };
 
-  const handleRemoveCard = (cardId: string, listType: 'give' | 'receive') => {
-    const setTarget = listType === 'give' ? setToGive : setToReceive;
-    setTarget(prev => prev.filter(c => c.id !== cardId));
-  };
+    const data = await scryfallResponse.json();
+    return NextResponse.json(data);
 
-  const handlePropose = async () => {
-    if (toGive.length === 0 && toReceive.length === 0) return;
-    const success = await proposeTrade(targetUid, targetName, toGive, toReceive);
-    if (success) router.push('/trades'); 
-  };
-
-  // CALCULS
-  const valGive = toGive.reduce((acc, c) => acc + (c.customPrice ?? c.price ?? 0) * c.quantity, 0);
-  const valReceive = toReceive.reduce((acc, c) => acc + (c.customPrice ?? c.price ?? 0) * c.quantity, 0);
-  const balance = valGive - valReceive;
-
-  if (!user) return <div className="p-10 text-center">Connexion requise.</div>;
-
-  return (
-    <div className="container mx-auto p-4 h-[calc(100vh-64px)] flex flex-col">
-        
-        {/* HEADER */}
-        <div className="flex-none flex items-center gap-4 mb-4">
-            <button onClick={() => router.back()} className="text-gray-500 hover:text-gray-700 bg-gray-100 px-3 py-1 rounded-lg text-sm">
-                ← Retour
-            </button>
-            <h1 className="text-2xl font-bold truncate">
-                Échange avec <span className="text-blue-600">{targetName}</span>
-            </h1>
-        </div>
-
-        {/* GRILLE PRINCIPALE */}
-        <div className="grid lg:grid-cols-2 gap-6 grow overflow-hidden pb-24">
-            
-            {/* --- COLONNE GAUCHE (MOI) --- */}
-            <div className="flex flex-col h-full bg-red-50/50 dark:bg-red-900/10 rounded-xl border border-red-100 dark:border-red-900 overflow-hidden relative shadow-sm">
-                <div className="p-4 pb-0 flex-none">
-                     <h2 className="font-bold text-red-600 mb-2">📤 Je donne (Ma Collection)</h2>
-                     <input 
-                        type="text" 
-                        placeholder="Filtrer ma collection..." 
-                        className="w-full p-2 mb-2 rounded border dark:bg-gray-800 dark:text-white dark:border-gray-600 text-sm"
-                        value={searchMe}
-                        onChange={e => setSearchMe(e.target.value)}
-                    />
-                </div>
-                
-                {/* LISTE DÉFILANTE UNIQUE (Sélectionnés en haut, Dispos en bas) */}
-                <div className="grow overflow-y-auto custom-scrollbar p-4 pt-0 space-y-4">
-                    
-                    {/* SÉLECTIONNÉS */}
-                    {toGive.length > 0 && (
-                        <div className="bg-white dark:bg-gray-800 rounded-lg border border-red-200 dark:border-red-800 overflow-hidden">
-                            <div className="bg-red-100 dark:bg-red-900/30 px-3 py-1 text-xs font-bold text-red-700 dark:text-red-300">
-                                SÉLECTION ({toGive.reduce((a,c)=>a+c.quantity,0)})
-                            </div>
-                            {toGive.map(card => (
-                                <div key={card.id} className="flex justify-between items-center text-sm p-2 border-b dark:border-gray-700 last:border-0 hover:bg-gray-50 dark:hover:bg-gray-700/50">
-                                    <span className="truncate">{card.quantity}x {card.name}</span>
-                                    <button onClick={() => handleRemoveCard(card.id, 'give')} className="text-red-500 hover:bg-red-50 rounded px-2">✕</button>
-                                </div>
-                            ))}
-                        </div>
-                    )}
-
-                    {/* DISPONIBLES */}
-                    <div className="space-y-1">
-                        <p className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Mon Classeur d&apos;échange</p>
-                        {loadingMe ? <p className="text-sm">Chargement...</p> : 
-                            myCollection
-                                .filter(c => c.isForTrade) // <--- FILTRE AJOUTÉ ICI
-                                .filter(c => c.name.toLowerCase().includes(searchMe.toLowerCase()))
-                                .slice(0, 50) 
-                                .map(card => (
-                                    <div key={card.id} onClick={() => handleSelectCard(card, 'give')} className="cursor-pointer bg-white dark:bg-gray-800/50 hover:bg-red-100 dark:hover:bg-red-900/30 p-2 rounded flex items-center gap-2 border border-transparent hover:border-red-200 transition shadow-sm group">
-                                        <div className="w-8 h-11 bg-gray-200 rounded shrink-0 overflow-hidden relative">
-                                            <img src={card.imageUrl} className="w-full h-full object-cover" alt="" />
-                                            {card.isForTrade && <div className="absolute bottom-0 right-0 bg-green-500 text-white text-[8px] px-1">🤝</div>}
-                                        </div>
-                                        <div className="grow min-w-0">
-                                            <p className="font-bold text-xs truncate dark:text-gray-200">{card.name}</p>
-                                            <p className="text-[10px] text-gray-500">{card.setName} - Dispo: {card.quantity}</p>
-                                        </div>
-                                        <span className="text-xs font-bold text-gray-400 group-hover:text-red-500 transition-colors shrink-0">+</span>
-                                    </div>
-                                ))
-                        }
-                    </div>
-                </div>
-
-                {/* TOTAL COLONNE GAUCHE (Fixe en bas de colonne) */}
-                <div className="flex-none bg-red-50 dark:bg-red-900/20 p-3 border-t border-red-100 dark:border-red-900 text-center">
-                    <span className="text-xs text-red-600 dark:text-red-400 font-bold uppercase">Total Donné</span>
-                    <div className="text-xl font-bold text-red-700 dark:text-red-300">{valGive.toFixed(2)} €</div>
-                </div>
-            </div>
-
-            {/* --- COLONNE DROITE (AMI) --- */}
-            <div className="flex flex-col h-full bg-blue-50/50 dark:bg-blue-900/10 rounded-xl border border-blue-100 dark:border-blue-900 overflow-hidden relative shadow-sm">
-                <div className="p-4 pb-0 flex-none">
-                    <h2 className="font-bold text-blue-600 mb-2">📥 Je reçois (Sa Collection)</h2>
-                    <input 
-                        type="text" 
-                        placeholder={`Filtrer chez ${targetName}...`}
-                        className="w-full p-2 mb-2 rounded border dark:bg-gray-800 dark:text-white dark:border-gray-600 text-sm"
-                        value={searchHim}
-                        onChange={e => setSearchHim(e.target.value)}
-                    />
-                </div>
-
-                {/* LISTE DÉFILANTE UNIQUE */}
-                <div className="grow overflow-y-auto custom-scrollbar p-4 pt-0 space-y-4">
-                     {/* SÉLECTIONNÉS */}
-                     {toReceive.length > 0 && (
-                        <div className="bg-white dark:bg-gray-800 rounded-lg border border-blue-200 dark:border-blue-800 overflow-hidden">
-                            <div className="bg-blue-100 dark:bg-blue-900/30 px-3 py-1 text-xs font-bold text-blue-700 dark:text-blue-300">
-                                SÉLECTION ({toReceive.reduce((a,c)=>a+c.quantity,0)})
-                            </div>
-                            {toReceive.map(card => (
-                                <div key={card.id} className="flex justify-between items-center text-sm p-2 border-b dark:border-gray-700 last:border-0 hover:bg-gray-50 dark:hover:bg-gray-700/50">
-                                    <span className="truncate">{card.quantity}x {card.name}</span>
-                                    <button onClick={() => handleRemoveCard(card.id, 'receive')} className="text-red-500 hover:bg-red-50 rounded px-2">✕</button>
-                                </div>
-                            ))}
-                        </div>
-                    )}
-
-                    {/* DISPONIBLES */}
-                    <div className="space-y-1">
-                        <p className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Son Classeur d&apos;échange</p>
-                        {loadingHim ? <p className="text-sm">Chargement...</p> : 
-                            friendCollection
-                                .filter(c => c.isForTrade) // FILTRE DÉJÀ PRÉSENT
-                                .filter(c => c.name.toLowerCase().includes(searchHim.toLowerCase()))
-                                .slice(0, 50)
-                                .map(card => (
-                                    <div key={card.id} onClick={() => handleSelectCard(card, 'receive')} className="cursor-pointer bg-white dark:bg-gray-800/50 hover:bg-blue-100 dark:hover:bg-blue-900/30 p-2 rounded flex items-center gap-2 border border-transparent hover:border-blue-200 transition shadow-sm group">
-                                        <div className="w-8 h-11 bg-gray-200 rounded shrink-0 overflow-hidden relative">
-                                            <img src={card.imageUrl} className="w-full h-full object-cover" alt="" />
-                                            <div className="absolute bottom-0 right-0 bg-green-500 text-white text-[8px] px-1">🤝</div>
-                                        </div>
-                                        <div className="grow min-w-0">
-                                            <p className="font-bold text-xs truncate dark:text-gray-200">{card.name}</p>
-                                            <p className="text-[10px] text-gray-500">{card.setName} - Dispo: {card.quantity}</p>
-                                        </div>
-                                        <span className="text-xs font-bold text-gray-400 group-hover:text-blue-500 transition-colors shrink-0">+</span>
-                                    </div>
-                                ))
-                        }
-                    </div>
-                </div>
-
-                {/* TOTAL COLONNE DROITE (Fixe en bas de colonne) */}
-                <div className="flex-none bg-blue-50 dark:bg-blue-900/20 p-3 border-t border-blue-100 dark:border-blue-900 text-center">
-                    <span className="text-xs text-blue-600 dark:text-blue-400 font-bold uppercase">Total Reçu</span>
-                    <div className="text-xl font-bold text-blue-700 dark:text-blue-300">{valReceive.toFixed(2)} €</div>
-                </div>
-            </div>
-        </div>
-
-        {/* FOOTER PRINCIPAL AVEC BALANCE CENTRÉE */}
-        <div className="fixed bottom-0 left-0 right-0 h-20 bg-white dark:bg-gray-900 border-t dark:border-gray-800 flex items-center px-6 z-40 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)]">
-            
-            {/* Espace vide à gauche pour l'équilibre */}
-            <div className="flex-1"></div>
-
-            {/* BALANCE CENTRALE */}
-            <div className="flex-1 flex flex-col items-center justify-center">
-                <span className="text-xs text-gray-400 font-bold uppercase tracking-widest">Valeur Résiduelle</span>
-                <div className={`text-2xl font-black ${balance >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                    {balance > 0 ? '+' : ''}{balance.toFixed(2)} €
-                </div>
-            </div>
-
-            {/* BOUTON D'ACTION À DROITE */}
-            <div className="flex-1 flex justify-end">
-                <button 
-                    onClick={handlePropose}
-                    disabled={toGive.length === 0 && toReceive.length === 0}
-                    className="bg-purple-600 hover:bg-purple-700 text-white px-8 py-3 rounded-xl font-bold disabled:opacity-50 transition shadow-lg transform active:scale-95 flex items-center gap-2"
-                >
-                    <span>🚀</span> Proposer
-                </button>
-            </div>
-        </div>
-
-    </div>
-  );
+  } catch (error) {
+    console.error('Erreur interne du serveur:', error);
+    return NextResponse.json(
+      { error: 'Une erreur est survenue sur le serveur.' }, 
+      { status: 500 }
+    );
+  }
 }
 </file>
 
-<file path="components/CardVersionPickerModal.tsx">
-// components/CardVersionPickerModal.tsx
+<file path="lib/AuthContext.tsx">
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
-import { CardType } from '@/hooks/useCardCollection';
-import { normalizeCardData, ScryfallRawData } from '@/lib/cardUtils'; // <--- On utilise l'utilitaire
+import { createContext, useContext, useEffect, useState, useMemo } from 'react';
+import { 
+  onAuthStateChanged, 
+  signInWithPopup, 
+  GoogleAuthProvider, 
+  signOut, 
+  User 
+} from 'firebase/auth';
+import { doc, onSnapshot, collection } from 'firebase/firestore'; 
+import { auth, db } from './firebase'; 
 import toast from 'react-hot-toast';
 
-// On utilise le type brut défini dans utils
-type Props = {
-  isOpen: boolean;
-  onClose: () => void;
-  baseCard: ScryfallRawData | null; 
-  onConfirm: (card: CardType) => void;
+type AuthContextType = {
+  user: User | null;
+  username: string | null;
+  loading: boolean;
+  friendRequestCount: number; // Compteur pour les notifications
+  signInWithGoogle: () => Promise<void>;
+  logOut: () => Promise<void>;
 };
 
-export default function CardVersionPickerModal({ isOpen, onClose, baseCard, onConfirm }: Props) {
-  const [versions, setVersions] = useState<ScryfallRawData[]>([]);
-  const [loading, setLoading] = useState(false);
-  
-  const [selectedVersionId, setSelectedVersionId] = useState<string>('');
-  const [isFoil, setIsFoil] = useState(false);
-  const [quantity, setQuantity] = useState(1);
-  const [isFlipped, setIsFlipped] = useState(false); // Pour prévisualiser le verso
+const AuthContext = createContext<AuthContextType>({
+  user: null,
+  username: null,
+  loading: true,
+  friendRequestCount: 0,
+  signInWithGoogle: async () => {},
+  logOut: async () => {},
+});
+
+export const useAuth = () => useContext(AuthContext);
+
+export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
+  const [user, setUser] = useState<User | null>(null);
+  const [username, setUsername] = useState<string | null>(null);
+  const [friendRequestCount, setFriendRequestCount] = useState(0);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const fetchVersions = async (oracleId: string) => {
-        setLoading(true);
-        try {
-          const res = await fetch(`https://api.scryfall.com/cards/search?q=oracle_id:${oracleId}&unique=prints&order=released`);
-          const data = await res.json();
-          
-          if (data.data && data.data.length > 0) {
-            setVersions(data.data); 
-            
-            const defaultVer = data.data.find((c: ScryfallRawData) => c.id === baseCard?.id) || data.data[0];
-            setSelectedVersionId(defaultVer.id);
+    const unsubscribeAuth = onAuthStateChanged(auth, (currentUser) => {
+      setUser(currentUser);
+
+      if (currentUser) {
+        // 1. Écoute du Pseudo (Profil Public)
+        const profileRef = doc(db, 'users', currentUser.uid, 'public_profile', 'info');
+        const unsubProfile = onSnapshot(profileRef, (docSnap) => {
+          if (docSnap.exists()) {
+            setUsername(docSnap.data().username);
+          } else {
+            setUsername(null);
           }
-        } catch (e) {
-          console.error(e);
-          toast.error("Impossible de charger les versions");
-        } finally {
+          // On ne met loading à false qu'ici pour être sûr d'avoir le username
           setLoading(false);
-        }
-    };
+        });
 
-    if (isOpen && baseCard?.oracle_id) {
-      // CORRECTION ICI : as string
-      fetchVersions(baseCard.oracle_id as string);
+        // 2. Écoute des Demandes d'amis (Notifications)
+        const requestsRef = collection(db, 'users', currentUser.uid, 'friend_requests_received');
+        const unsubRequests = onSnapshot(requestsRef, (snap) => {
+          setFriendRequestCount(snap.docs.length);
+        });
+
+        // Nettoyage quand l'utilisateur change ou se déconnecte
+        return () => {
+          unsubProfile();
+          unsubRequests();
+        };
+      } else {
+        setUsername(null);
+        setFriendRequestCount(0);
+        setLoading(false);
+      }
+    });
+
+    return () => unsubscribeAuth();
+  }, []);
+
+  const signInWithGoogle = async () => {
+    try {
+      const provider = new GoogleAuthProvider();
+      await signInWithPopup(auth, provider);
+      toast.success('Connexion réussie !');
+    } catch (error) {
+      console.error(error);
+      toast.error("Erreur lors de la connexion Google");
     }
-
-    setQuantity(1);
-    setIsFoil(false);
-    setIsFlipped(false);
-  }, [isOpen, baseCard]); 
-
-  const currentCardRaw = useMemo(() => {
-    return versions.find(v => v.id === selectedVersionId) || baseCard;
-  }, [versions, selectedVersionId, baseCard]);
-
-  if (!isOpen || !currentCardRaw) return null;
-
-  // UTILISATION DE LA FONCTION NORMALISÉE POUR AVOIR LES BONNES IMAGES
-  const { imageUrl, imageBackUrl, name, setName, setCode, price } = normalizeCardData(currentCardRaw);
-  
-  // Prix
-  const priceNormal = parseFloat(currentCardRaw.prices?.eur || "0");
-  const priceFoil = parseFloat(currentCardRaw.prices?.eur_foil || "0");
-  const currentPrice = isFoil ? (priceFoil || priceNormal) : (priceNormal || priceFoil);
-  
-  // Disponibilité Foil
-  const hasFoilVersion = currentCardRaw.finishes?.includes('foil') || !!currentCardRaw.prices?.eur_foil;
-  const hasNonFoilVersion = currentCardRaw.finishes?.includes('nonfoil') || !!currentCardRaw.prices?.eur;
-
-  const handleConfirm = () => {
-    const finalCard: CardType = {
-        id: currentCardRaw.id,
-        name: name,
-        imageUrl: imageUrl,
-        imageBackUrl: imageBackUrl || undefined, // undefined est accepté par le type CardType, mais null par Firestore
-        quantity: quantity,
-        price: currentPrice,
-        setName: setName,
-        setCode: setCode,
-        isFoil: isFoil,
-        isSpecificVersion: true,
-        scryfallData: currentCardRaw
-    };
-    onConfirm(finalCard);
-    onClose();
   };
 
+  const logOut = async () => {
+    try {
+      await signOut(auth);
+      toast.success('Déconnecté');
+    } catch (error) {
+      console.error(error);
+      toast.error("Erreur déconnexion");
+    }
+  };
+
+  const value = useMemo(() => ({
+    user,
+    username,
+    friendRequestCount,
+    loading,
+    signInWithGoogle,
+    logOut
+  }), [user, username, loading, friendRequestCount]);
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 backdrop-blur-sm animate-in fade-in duration-200">
-      <div className="bg-gray-900 w-full max-w-md rounded-2xl overflow-hidden shadow-2xl border border-gray-700 flex flex-col max-h-[90vh]">
-        
-        {/* HEADER */}
-        <div className="p-4 flex justify-between items-center border-b border-gray-800">
-            <h3 className="text-white font-bold truncate pr-4">{name}</h3>
-            <button onClick={onClose} className="text-gray-400 hover:text-white px-2 text-xl">✕</button>
-        </div>
-
-        {/* CONTENU SCROLLABLE */}
-        <div className="overflow-y-auto p-6 flex flex-col items-center space-y-6 custom-scrollbar">
-            
-            {/* 1. IMAGE DISPLAY AVEC FLIP */}
-            <div 
-                className="relative w-64 aspect-[2.5/3.5] rounded-xl overflow-hidden shadow-lg ring-1 ring-white/10 group cursor-pointer"
-                onClick={() => imageBackUrl && setIsFlipped(!isFlipped)}
-            >
-                {loading ? (
-                    <div className="w-full h-full bg-gray-800 animate-pulse flex items-center justify-center text-gray-500">Chargement...</div>
-                ) : (
-                    <img 
-                        src={isFlipped && imageBackUrl ? imageBackUrl : imageUrl} 
-                        alt="" 
-                        className="w-full h-full object-cover transition-transform duration-300" 
-                    />
-                )}
-                
-                {isFoil && <div className="absolute inset-0 bg-gradient-to-tr from-purple-500/30 to-transparent mix-blend-overlay pointer-events-none" />}
-                
-                {imageBackUrl && (
-                    <div className="absolute bottom-2 right-2 bg-black/60 text-white p-1.5 rounded-full backdrop-blur-md">
-                        🔄
-                    </div>
-                )}
-            </div>
-
-            {/* 2. SÉLECTEUR D'ÉDITION */}
-            <div className="w-full space-y-2">
-                <label className="text-xs text-gray-400 uppercase font-bold tracking-wider">Édition / Set</label>
-                <div className="relative">
-                    <select 
-                        className="w-full bg-gray-800 text-white border border-gray-700 rounded-xl p-3 appearance-none focus:ring-2 focus:ring-blue-500 outline-none text-sm"
-                        value={selectedVersionId}
-                        onChange={(e) => {
-                            setSelectedVersionId(e.target.value);
-                            setIsFoil(false);
-                            setIsFlipped(false);
-                        }}
-                    >
-                        {versions.map((v) => (
-                            <option key={v.id} value={v.id}>
-                                {v.set_name} ({v.set.toUpperCase()}) #{v.collector_number}
-                            </option>
-                        ))}
-                    </select>
-                    <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-gray-400">▼</div>
-                </div>
-            </div>
-
-            {/* 3. CONTROLES */}
-            <div className="grid grid-cols-2 gap-4 w-full">
-                <div className="bg-gray-800 rounded-xl p-3 flex flex-col items-center justify-center gap-2 border border-gray-700">
-                    <span className="text-xs text-gray-400 font-bold">FINITION</span>
-                    <div className="flex bg-gray-900 rounded-lg p-1 w-full">
-                        <button 
-                            onClick={() => setIsFoil(false)}
-                            disabled={!hasNonFoilVersion}
-                            className={`flex-1 text-xs py-1.5 rounded-md transition ${!isFoil ? 'bg-gray-700 text-white font-bold' : 'text-gray-500 hover:text-gray-300'} ${!hasNonFoilVersion && 'opacity-30 cursor-not-allowed'}`}
-                        >
-                            Normal
-                        </button>
-                        <button 
-                            onClick={() => setIsFoil(true)}
-                            disabled={!hasFoilVersion}
-                            className={`flex-1 text-xs py-1.5 rounded-md transition ${isFoil ? 'bg-purple-600 text-white font-bold' : 'text-gray-500 hover:text-purple-400'} ${!hasFoilVersion && 'opacity-30 cursor-not-allowed'}`}
-                        >
-                            Foil
-                        </button>
-                    </div>
-                </div>
-
-                <div className="bg-gray-800 rounded-xl p-3 flex flex-col items-center justify-center gap-2 border border-gray-700">
-                     <span className="text-xs text-gray-400 font-bold">QUANTITÉ</span>
-                     <div className="flex items-center gap-3">
-                        <button onClick={() => setQuantity(Math.max(1, quantity - 1))} className="w-8 h-8 rounded-full bg-gray-700 text-white hover:bg-gray-600 font-bold">-</button>
-                        <span className="text-xl font-bold text-white w-6 text-center">{quantity}</span>
-                        <button onClick={() => setQuantity(quantity + 1)} className="w-8 h-8 rounded-full bg-blue-600 text-white hover:bg-blue-500 font-bold">+</button>
-                     </div>
-                </div>
-            </div>
-        </div>
-
-        {/* FOOTER */}
-        <div className="p-4 bg-gray-800 border-t border-gray-700">
-            <div className="flex justify-between items-center mb-4">
-                 <div className="text-gray-400 text-sm">Prix unitaire</div>
-                 <div className="text-2xl font-bold text-white">
-                    {currentPrice > 0 ? `${currentPrice.toFixed(2)} €` : <span className="text-gray-500 text-lg">N/A</span>}
-                 </div>
-            </div>
-            
-            <button 
-                onClick={handleConfirm}
-                className="w-full bg-amber-500 hover:bg-amber-400 text-black font-bold py-4 rounded-xl text-lg transition shadow-lg transform active:scale-95 flex justify-center items-center gap-2"
-            >
-                <span>+ Ajouter</span>
-                {quantity > 1 && <span className="bg-black/20 px-2 py-0.5 rounded text-sm">{quantity}</span>}
-            </button>
-        </div>
-
-      </div>
-    </div>
+    <AuthContext.Provider value={value}>
+      {children}
+    </AuthContext.Provider>
   );
-}
+};
 </file>
 
 <file path="lib/cardUtils.ts">
@@ -2493,47 +2465,216 @@ export const normalizeCardData = (data: ScryfallRawData) => {
 };
 </file>
 
-<file path="app/api/search/route.ts">
-// app/api/search/route.ts
-import { NextResponse } from 'next/server';
+<file path="components/CardVersionPickerModal.tsx">
+'use client';
 
-export async function GET(request: Request) {
-  const { searchParams } = new URL(request.url);
-  const query = searchParams.get('q'); 
+import { useState, useEffect, useMemo } from 'react';
+import { CardType } from '@/hooks/useCardCollection';
+import { normalizeCardData, ScryfallRawData } from '@/lib/cardUtils'; 
+import { WishlistMeta } from '@/hooks/useWishlists'; // Import du type
+import toast from 'react-hot-toast';
 
-  if (!query) {
-    return NextResponse.json(
-      { error: 'Aucun terme de recherche fourni.' }, 
-      { status: 400 } 
-    );
-  }
+type Props = {
+  isOpen: boolean;
+  onClose: () => void;
+  baseCard: ScryfallRawData | null; 
+  onConfirm: (card: CardType, targetListId?: string) => void; // On ajoute targetListId
+  destination?: 'collection' | 'wishlist'; // Pour savoir si on affiche le selecteur
+  availableLists?: WishlistMeta[]; // La liste des wishlists dispos
+};
 
-  // --- CORRECTION : Suppression des guillemets pour permettre la recherche partielle ---
-  // On utilise encodeURIComponent pour gérer proprement les espaces et caractères spéciaux
-  const scryfallUrl = `https://api.scryfall.com/cards/search?q=${encodeURIComponent(query)}&unique=prints`;
+export default function CardVersionPickerModal({ 
+  isOpen, onClose, baseCard, onConfirm, destination, availableLists 
+}: Props) {
+  const [versions, setVersions] = useState<ScryfallRawData[]>([]);
+  const [loading, setLoading] = useState(false);
+  
+  const [selectedVersionId, setSelectedVersionId] = useState<string>('');
+  const [isFoil, setIsFoil] = useState(false);
+  const [quantity, setQuantity] = useState(1);
+  const [isFlipped, setIsFlipped] = useState(false); 
+  const [anyVersion, setAnyVersion] = useState(false);
+  
+  // État pour la wishlist sélectionnée
+  const [selectedListId, setSelectedListId] = useState<string>('default');
 
-  try {
-    const scryfallResponse = await fetch(scryfallUrl);
+  useEffect(() => {
+    const fetchVersions = async (oracleId: string) => {
+        setLoading(true);
+        try {
+          const res = await fetch(`https://api.scryfall.com/cards/search?q=oracle_id:${oracleId}&unique=prints&order=released`);
+          const data = await res.json();
+          
+          if (data.data && data.data.length > 0) {
+            setVersions(data.data); 
+            const defaultVer = data.data.find((c: ScryfallRawData) => c.id === baseCard?.id) || data.data[0];
+            setSelectedVersionId(defaultVer.id);
+          }
+        } catch (e) {
+          console.error(e);
+          toast.error("Impossible de charger les versions");
+        } finally {
+          setLoading(false);
+        }
+    };
 
-    if (!scryfallResponse.ok) {
-      const errorData = await scryfallResponse.json();
-      console.error('Erreur Scryfall:', errorData);
-      return NextResponse.json(
-        { error: errorData.details || 'Carte non trouvée' }, 
-        { status: scryfallResponse.status }
-      );
+    if (isOpen && baseCard?.oracle_id) {
+      fetchVersions(baseCard.oracle_id as string);
     }
 
-    const data = await scryfallResponse.json();
-    return NextResponse.json(data);
+    setQuantity(1);
+    setIsFoil(false);
+    setIsFlipped(false);
+    setAnyVersion(false);
+    setSelectedListId('default'); // Reset wishlist par défaut
+  }, [isOpen, baseCard]); 
 
-  } catch (error) {
-    console.error('Erreur interne du serveur:', error);
-    return NextResponse.json(
-      { error: 'Une erreur est survenue sur le serveur.' }, 
-      { status: 500 }
-    );
-  }
+  const currentCardRaw = useMemo(() => {
+    return versions.find(v => v.id === selectedVersionId) || baseCard;
+  }, [versions, selectedVersionId, baseCard]);
+
+  if (!isOpen || !currentCardRaw) return null;
+
+  const { imageUrl, imageBackUrl, name, setName, setCode, price } = normalizeCardData(currentCardRaw);
+  
+  const priceNormal = parseFloat(currentCardRaw.prices?.eur || "0");
+  const priceFoil = parseFloat(currentCardRaw.prices?.eur_foil || "0");
+  const currentPrice = isFoil ? (priceFoil || priceNormal) : (priceNormal || priceFoil);
+  
+  const hasFoilVersion = currentCardRaw.finishes?.includes('foil') || !!currentCardRaw.prices?.eur_foil;
+  const hasNonFoilVersion = currentCardRaw.finishes?.includes('nonfoil') || !!currentCardRaw.prices?.eur;
+
+  const handleConfirm = () => {
+    const finalCard: CardType = {
+        id: currentCardRaw.id,
+        name: name,
+        imageUrl: imageUrl,
+        imageBackUrl: imageBackUrl || undefined,
+        quantity: quantity,
+        price: currentPrice,
+        setName: setName,
+        setCode: setCode,
+        isFoil: isFoil,
+        isSpecificVersion: !anyVersion, // Si AnyVersion est true, Specific est false
+        scryfallData: currentCardRaw,
+        // On attache l'ID de la wishlist sélectionnée
+        wishlistId: destination === 'wishlist' ? selectedListId : null 
+    };
+    
+    // On renvoie la carte ET l'ID de la liste cible
+    onConfirm(finalCard, selectedListId);
+    onClose();
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 backdrop-blur-sm animate-in fade-in duration-200">
+      <div className="bg-gray-900 w-full max-w-md rounded-2xl overflow-hidden shadow-2xl border border-gray-700 flex flex-col max-h-[90vh]">
+        
+        {/* HEADER */}
+        <div className="p-4 flex justify-between items-center border-b border-gray-800">
+            <h3 className="text-white font-bold truncate pr-4">{name}</h3>
+            <button onClick={onClose} className="text-gray-400 hover:text-white px-2 text-xl">✕</button>
+        </div>
+
+        {/* CONTENU */}
+        <div className="overflow-y-auto p-6 flex flex-col items-center space-y-6 custom-scrollbar">
+            
+            {/* IMAGE */}
+            <div className="relative w-64 aspect-[2.5/3.5] rounded-xl overflow-hidden shadow-lg ring-1 ring-white/10 group cursor-pointer" onClick={() => imageBackUrl && setIsFlipped(!isFlipped)}>
+                {loading ? (
+                    <div className="w-full h-full bg-gray-800 animate-pulse flex items-center justify-center text-gray-500">Chargement...</div>
+                ) : (
+                    <img src={isFlipped && imageBackUrl ? imageBackUrl : imageUrl} alt="" className={`w-full h-full object-cover transition-transform duration-300 ${anyVersion ? 'opacity-80 grayscale-[50%]' : ''}`} />
+                )}
+                {anyVersion && (
+                    <div className="absolute inset-0 flex items-center justify-center bg-black/40 backdrop-blur-[2px]">
+                        <span className="bg-blue-600 text-white font-bold px-3 py-1 rounded-full text-sm shadow-lg border border-white/20">✨ Générique</span>
+                    </div>
+                )}
+                {isFoil && !anyVersion && <div className="absolute inset-0 bg-gradient-to-tr from-purple-500/30 to-transparent mix-blend-overlay pointer-events-none" />}
+            </div>
+
+            {/* SÉLECTION WISHLIST (Si mode wishlist) */}
+            {destination === 'wishlist' && availableLists && availableLists.length > 0 && (
+                <div className="w-full space-y-1 bg-purple-900/20 p-3 rounded-xl border border-purple-500/30">
+                    <label className="text-xs text-purple-300 font-bold uppercase tracking-wider">Ajouter à la liste :</label>
+                    <select 
+                        value={selectedListId}
+                        onChange={(e) => setSelectedListId(e.target.value)}
+                        className="w-full bg-gray-800 text-white border border-gray-600 rounded-lg p-2 text-sm focus:ring-2 focus:ring-purple-500 outline-none"
+                    >
+                        {availableLists.map(list => (
+                            <option key={list.id} value={list.id}>{list.name}</option>
+                        ))}
+                    </select>
+                </div>
+            )}
+
+            {/* ÉDITION (Masquée si Generic) */}
+            <div className={`w-full space-y-2 transition-opacity ${anyVersion ? 'opacity-50 pointer-events-none' : 'opacity-100'}`}>
+                <label className="text-xs text-gray-400 uppercase font-bold tracking-wider">Édition / Set</label>
+                <div className="relative">
+                    <select 
+                        className="w-full bg-gray-800 text-white border border-gray-700 rounded-xl p-3 appearance-none focus:ring-2 focus:ring-blue-500 outline-none text-sm"
+                        value={selectedVersionId}
+                        onChange={(e) => { setSelectedVersionId(e.target.value); setIsFoil(false); setIsFlipped(false); }}
+                    >
+                        {versions.map((v) => (
+                            <option key={v.id} value={v.id}>{v.set_name} ({v.set.toUpperCase()}) #{v.collector_number}</option>
+                        ))}
+                    </select>
+                    <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-gray-400">▼</div>
+                </div>
+            </div>
+
+            {/* OPTIONS */}
+            <div className="w-full space-y-4">
+                {/* Switch Generic */}
+                <label className="flex items-center justify-between bg-blue-900/20 p-3 rounded-xl border border-blue-900/50 cursor-pointer hover:bg-blue-900/30 transition">
+                    <div className="flex flex-col">
+                        <span className="text-sm font-bold text-blue-100">Peu importe l&apos;édition</span>
+                        <span className="text-[10px] text-blue-300">Le scanner cherchera juste le nom &quot;{name}&quot;</span>
+                    </div>
+                    <div className="relative inline-flex items-center cursor-pointer">
+                        <input type="checkbox" className="sr-only peer" checked={anyVersion} onChange={(e) => setAnyVersion(e.target.checked)} />
+                        <div className="w-11 h-6 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                    </div>
+                </label>
+
+                {/* Finition & Quantité */}
+                <div className="flex gap-4">
+                    <div className={`flex-1 bg-gray-800 rounded-xl p-2 flex flex-col items-center justify-center gap-1 border border-gray-700 transition-opacity ${anyVersion ? 'opacity-30 pointer-events-none' : ''}`}>
+                        <span className="text-[10px] text-gray-400 font-bold uppercase">Finition</span>
+                        <div className="flex bg-gray-900 rounded-lg p-1 w-full">
+                            <button onClick={() => setIsFoil(false)} disabled={!hasNonFoilVersion} className={`flex-1 text-[10px] py-1 rounded transition ${!isFoil ? 'bg-gray-700 text-white font-bold' : 'text-gray-500'} ${!hasNonFoilVersion && 'opacity-30'}`}>Normal</button>
+                            <button onClick={() => setIsFoil(true)} disabled={!hasFoilVersion} className={`flex-1 text-[10px] py-1 rounded transition ${isFoil ? 'bg-purple-600 text-white font-bold' : 'text-gray-500'} ${!hasFoilVersion && 'opacity-30'}`}>Foil</button>
+                        </div>
+                    </div>
+                    <div className="flex-1 bg-gray-800 rounded-xl p-2 flex flex-col items-center justify-center gap-1 border border-gray-700">
+                         <span className="text-[10px] text-gray-400 font-bold uppercase">Quantité</span>
+                         <div className="flex items-center gap-3">
+                            <button onClick={() => setQuantity(Math.max(1, quantity - 1))} className="w-6 h-6 rounded-full bg-gray-700 text-white font-bold">-</button>
+                            <span className="text-lg font-bold text-white w-4 text-center">{quantity}</span>
+                            <button onClick={() => setQuantity(quantity + 1)} className="w-6 h-6 rounded-full bg-blue-600 text-white font-bold">+</button>
+                         </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        {/* FOOTER */}
+        <div className="p-4 bg-gray-800 border-t border-gray-700">
+            <button 
+                onClick={handleConfirm}
+                className={`w-full font-bold py-4 rounded-xl text-lg transition shadow-lg transform active:scale-95 flex justify-center items-center gap-2 ${anyVersion ? 'bg-blue-600 hover:bg-blue-500 text-white' : 'bg-amber-500 hover:bg-amber-400 text-black'}`}
+            >
+                <span>{anyVersion ? '✨ Ajouter (Générique)' : '+ Ajouter (Exact)'}</span>
+                {quantity > 1 && <span className="bg-black/20 px-2 py-0.5 rounded text-sm">{quantity}</span>}
+            </button>
+        </div>
+      </div>
+    </div>
+  );
 }
 </file>
 
@@ -2960,272 +3101,6 @@ export function useTradeTransaction() {
   };
 
   return { executeTrade, isProcessing };
-}
-</file>
-
-<file path="lib/AuthContext.tsx">
-'use client';
-
-import { createContext, useContext, useEffect, useState, useMemo } from 'react';
-import { 
-  onAuthStateChanged, 
-  signInWithPopup, 
-  GoogleAuthProvider, 
-  signOut, 
-  User 
-} from 'firebase/auth';
-import { doc, onSnapshot, collection } from 'firebase/firestore'; 
-import { auth, db } from './firebase'; 
-import toast from 'react-hot-toast';
-
-type AuthContextType = {
-  user: User | null;
-  username: string | null;
-  loading: boolean;
-  friendRequestCount: number; // Compteur pour les notifications
-  signInWithGoogle: () => Promise<void>;
-  logOut: () => Promise<void>;
-};
-
-const AuthContext = createContext<AuthContextType>({
-  user: null,
-  username: null,
-  loading: true,
-  friendRequestCount: 0,
-  signInWithGoogle: async () => {},
-  logOut: async () => {},
-});
-
-export const useAuth = () => useContext(AuthContext);
-
-export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
-  const [user, setUser] = useState<User | null>(null);
-  const [username, setUsername] = useState<string | null>(null);
-  const [friendRequestCount, setFriendRequestCount] = useState(0);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    const unsubscribeAuth = onAuthStateChanged(auth, (currentUser) => {
-      setUser(currentUser);
-
-      if (currentUser) {
-        // 1. Écoute du Pseudo (Profil Public)
-        const profileRef = doc(db, 'users', currentUser.uid, 'public_profile', 'info');
-        const unsubProfile = onSnapshot(profileRef, (docSnap) => {
-          if (docSnap.exists()) {
-            setUsername(docSnap.data().username);
-          } else {
-            setUsername(null);
-          }
-          // On ne met loading à false qu'ici pour être sûr d'avoir le username
-          setLoading(false);
-        });
-
-        // 2. Écoute des Demandes d'amis (Notifications)
-        const requestsRef = collection(db, 'users', currentUser.uid, 'friend_requests_received');
-        const unsubRequests = onSnapshot(requestsRef, (snap) => {
-          setFriendRequestCount(snap.docs.length);
-        });
-
-        // Nettoyage quand l'utilisateur change ou se déconnecte
-        return () => {
-          unsubProfile();
-          unsubRequests();
-        };
-      } else {
-        setUsername(null);
-        setFriendRequestCount(0);
-        setLoading(false);
-      }
-    });
-
-    return () => unsubscribeAuth();
-  }, []);
-
-  const signInWithGoogle = async () => {
-    try {
-      const provider = new GoogleAuthProvider();
-      await signInWithPopup(auth, provider);
-      toast.success('Connexion réussie !');
-    } catch (error) {
-      console.error(error);
-      toast.error("Erreur lors de la connexion Google");
-    }
-  };
-
-  const logOut = async () => {
-    try {
-      await signOut(auth);
-      toast.success('Déconnecté');
-    } catch (error) {
-      console.error(error);
-      toast.error("Erreur déconnexion");
-    }
-  };
-
-  const value = useMemo(() => ({
-    user,
-    username,
-    friendRequestCount,
-    loading,
-    signInWithGoogle,
-    logOut
-  }), [user, username, loading, friendRequestCount]);
-
-  return (
-    <AuthContext.Provider value={value}>
-      {children}
-    </AuthContext.Provider>
-  );
-};
-</file>
-
-<file path="components/Header.tsx">
-// components/Header.tsx
-'use client';
-
-import { useState } from 'react';
-import Link from 'next/link';
-import { useAuth } from '@/lib/AuthContext';
-import { usePathname } from 'next/navigation';
-
-export default function Header() {
-  const { user, logOut, friendRequestCount } = useAuth();
-  const pathname = usePathname();
-  const [isMenuOpen, setIsMenuOpen] = useState(false);
-
-  // Petite fonction pour styliser le lien actif
-  const linkClass = (path: string) => `
-    font-medium transition-colors block py-2 md:py-0
-    ${pathname === path 
-      ? 'text-blue-600 dark:text-blue-400 font-bold' 
-      : 'text-gray-700 dark:text-gray-200 hover:text-blue-600 dark:hover:text-blue-400'}
-  `;
-
-  return (
-    <header className="bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-700 p-4 shadow-sm sticky top-0 z-40">
-      <div className="container mx-auto">
-        <div className="flex justify-between items-center">
-          {/* LOGO */}
-          <Link 
-            href="/" 
-            className="text-xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-purple-600 hover:opacity-80 transition"
-            onClick={() => setIsMenuOpen(false)}
-          >
-            ✨ MagicWish
-          </Link>
-
-          <div className="flex items-center gap-4">
-            {user ? (
-              <>
-                {/* NAVIGATION DESKTOP (Cachée sur mobile) */}
-                <nav className="hidden md:flex gap-6 mr-4 items-center">
-                  {/* MODIFICATION ICI : Lien vers /search */}
-                  <Link href="/search" className={linkClass('/search')}>🔍 Recherche</Link> 
-                  
-                  <Link href="/wishlist" className={linkClass('/wishlist')}>Ma Wishlist</Link>
-                  <Link href="/collection" className={linkClass('/collection')}>Ma Collection</Link>
-                  
-                  <Link href="/trades" className={linkClass('/trades')}>🤝 Échanges</Link>
-
-                  <Link href="/contacts" className={`${linkClass('/contacts')} relative flex items-center gap-1`}>
-                    👥 Contacts
-                    {friendRequestCount > 0 && (
-                      <span className="absolute -top-2 -right-3 bg-red-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full animate-bounce">
-                        {friendRequestCount}
-                      </span>
-                    )}
-                  </Link>
-                </nav>
-
-                <div className="h-6 w-px bg-gray-300 dark:bg-gray-600 hidden md:block"></div>
-
-                {/* AVATAR + LOGOUT */}
-                <div className="flex items-center gap-3">
-                  {user.photoURL && (
-                    <img 
-                      src={user.photoURL} 
-                      alt="Avatar" 
-                      className="w-8 h-8 rounded-full border border-gray-300"
-                      title={user.displayName || ''}
-                    />
-                  )}
-                  <button
-                    onClick={logOut}
-                    className="hidden md:block text-sm text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 px-3 py-1 rounded transition"
-                  >
-                    Déconnexion
-                  </button>
-
-                  {/* BOUTON BURGER MOBILE */}
-                  <button 
-                    onClick={() => setIsMenuOpen(!isMenuOpen)}
-                    className="md:hidden p-2 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg focus:outline-none"
-                  >
-                    {isMenuOpen ? (
-                      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6">
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                      </svg>
-                    ) : (
-                      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6">
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" />
-                      </svg>
-                    )}
-                  </button>
-                </div>
-              </>
-            ) : (
-              <Link
-                href="/login"
-                className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 transition"
-              >
-                Se connecter
-              </Link>
-            )}
-          </div>
-        </div>
-        
-        {/* MENU MOBILE */}
-        {user && isMenuOpen && (
-          <div className="md:hidden mt-4 pt-4 border-t border-gray-100 dark:border-gray-800 animate-in slide-in-from-top-2 duration-200">
-             <nav className="flex flex-col space-y-2">
-               {/* MODIFICATION ICI : Lien vers /search */}
-               <Link href="/search" className={linkClass('/search')} onClick={() => setIsMenuOpen(false)}>
-                 🔍 Recherche
-               </Link>
-               
-               <Link href="/wishlist" className={linkClass('/wishlist')} onClick={() => setIsMenuOpen(false)}>
-                 ✨ Ma Wishlist
-               </Link>
-               <Link href="/collection" className={linkClass('/collection')} onClick={() => setIsMenuOpen(false)}>
-                 📚 Ma Collection
-               </Link>
-               
-               <Link href="/trades" className={linkClass('/trades')} onClick={() => setIsMenuOpen(false)}>
-                 🤝 Centre d&apos;Échanges
-               </Link>
-
-               <Link href="/contacts" className={`${linkClass('/contacts')} flex items-center justify-between`} onClick={() => setIsMenuOpen(false)}>
-                 <span>👥 Mes Contacts</span>
-                 {friendRequestCount > 0 && (
-                    <span className="bg-red-500 text-white text-xs font-bold px-2 py-0.5 rounded-full">
-                        {friendRequestCount}
-                    </span>
-                 )}
-               </Link>
-
-               <button 
-                 onClick={() => { logOut(); setIsMenuOpen(false); }}
-                 className="text-left py-2 text-red-600 font-medium hover:bg-red-50 dark:hover:bg-red-900/10 rounded"
-               >
-                 🚪 Déconnexion
-               </button>
-             </nav>
-          </div>
-        )}
-      </div>
-    </header>
-  );
 }
 </file>
 
@@ -4006,6 +3881,155 @@ export default function TradesPage() {
         </div>
 
     </main>
+  );
+}
+</file>
+
+<file path="components/Header.tsx">
+// components/Header.tsx
+'use client';
+
+import { useState } from 'react';
+import Link from 'next/link';
+import { useAuth } from '@/lib/AuthContext';
+import { usePathname } from 'next/navigation';
+
+export default function Header() {
+  const { user, logOut, friendRequestCount } = useAuth();
+  const pathname = usePathname();
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+
+  // Petite fonction pour styliser le lien actif
+  const linkClass = (path: string) => `
+    font-medium transition-colors block py-2 md:py-0
+    ${pathname === path 
+      ? 'text-blue-600 dark:text-blue-400 font-bold' 
+      : 'text-gray-700 dark:text-gray-200 hover:text-blue-600 dark:hover:text-blue-400'}
+  `;
+
+  return (
+    <header className="bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-700 p-4 shadow-sm sticky top-0 z-40">
+      <div className="container mx-auto">
+        <div className="flex justify-between items-center">
+          {/* LOGO */}
+          <Link 
+            href="/" 
+            className="text-xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-purple-600 hover:opacity-80 transition"
+            onClick={() => setIsMenuOpen(false)}
+          >
+            ✨ MagicWish
+          </Link>
+
+          <div className="flex items-center gap-4">
+            {user ? (
+              <>
+                {/* NAVIGATION DESKTOP (Cachée sur mobile) */}
+                <nav className="hidden md:flex gap-6 mr-4 items-center">
+                  {/* MODIFICATION ICI : Lien vers /search */}
+                  <Link href="/search" className={linkClass('/search')}>🔍 Recherche</Link> 
+                  
+                  <Link href="/wishlist" className={linkClass('/wishlist')}>Ma Wishlist</Link>
+                  <Link href="/collection" className={linkClass('/collection')}>Ma Collection</Link>
+                  
+                  <Link href="/trades" className={linkClass('/trades')}>🤝 Échanges</Link>
+
+                  <Link href="/contacts" className={`${linkClass('/contacts')} relative flex items-center gap-1`}>
+                    👥 Contacts
+                    {friendRequestCount > 0 && (
+                      <span className="absolute -top-2 -right-3 bg-red-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full animate-bounce">
+                        {friendRequestCount}
+                      </span>
+                    )}
+                  </Link>
+                </nav>
+
+                <div className="h-6 w-px bg-gray-300 dark:bg-gray-600 hidden md:block"></div>
+
+                {/* AVATAR + LOGOUT */}
+                <div className="flex items-center gap-3">
+                  {user.photoURL && (
+                    <img 
+                      src={user.photoURL} 
+                      alt="Avatar" 
+                      className="w-8 h-8 rounded-full border border-gray-300"
+                      title={user.displayName || ''}
+                    />
+                  )}
+                  <button
+                    onClick={logOut}
+                    className="hidden md:block text-sm text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 px-3 py-1 rounded transition"
+                  >
+                    Déconnexion
+                  </button>
+
+                  {/* BOUTON BURGER MOBILE */}
+                  <button 
+                    onClick={() => setIsMenuOpen(!isMenuOpen)}
+                    className="md:hidden p-2 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg focus:outline-none"
+                  >
+                    {isMenuOpen ? (
+                      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    ) : (
+                      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" />
+                      </svg>
+                    )}
+                  </button>
+                </div>
+              </>
+            ) : (
+              <Link
+                href="/login"
+                className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 transition"
+              >
+                Se connecter
+              </Link>
+            )}
+          </div>
+        </div>
+        
+        {/* MENU MOBILE */}
+        {user && isMenuOpen && (
+          <div className="md:hidden mt-4 pt-4 border-t border-gray-100 dark:border-gray-800 animate-in slide-in-from-top-2 duration-200">
+             <nav className="flex flex-col space-y-2">
+               {/* MODIFICATION ICI : Lien vers /search */}
+               <Link href="/search" className={linkClass('/search')} onClick={() => setIsMenuOpen(false)}>
+                 🔍 Recherche
+               </Link>
+               
+               <Link href="/wishlist" className={linkClass('/wishlist')} onClick={() => setIsMenuOpen(false)}>
+                 ✨ Ma Wishlist
+               </Link>
+               <Link href="/collection" className={linkClass('/collection')} onClick={() => setIsMenuOpen(false)}>
+                 📚 Ma Collection
+               </Link>
+               
+               <Link href="/trades" className={linkClass('/trades')} onClick={() => setIsMenuOpen(false)}>
+                 🤝 Centre d&apos;Échanges
+               </Link>
+
+               <Link href="/contacts" className={`${linkClass('/contacts')} flex items-center justify-between`} onClick={() => setIsMenuOpen(false)}>
+                 <span>👥 Mes Contacts</span>
+                 {friendRequestCount > 0 && (
+                    <span className="bg-red-500 text-white text-xs font-bold px-2 py-0.5 rounded-full">
+                        {friendRequestCount}
+                    </span>
+                 )}
+               </Link>
+
+               <button 
+                 onClick={() => { logOut(); setIsMenuOpen(false); }}
+                 className="text-left py-2 text-red-600 font-medium hover:bg-red-50 dark:hover:bg-red-900/10 rounded"
+               >
+                 🚪 Déconnexion
+               </button>
+             </nav>
+          </div>
+        )}
+      </div>
+    </header>
   );
 }
 </file>
@@ -4828,6 +4852,137 @@ export default function CollectionPage() {
 }
 </file>
 
+<file path="app/wishlist/page.tsx">
+// app/wishlist/page.tsx
+'use client';
+
+import { useState } from 'react';
+import { useAuth } from '@/lib/AuthContext';
+import { useWishlists } from '@/hooks/useWishlists';
+// Import des nouveaux composants
+import SingleWishlistView from '@/components/wishlist/SingleWishlistView';
+import GlobalWishlistView from '@/components/wishlist/GlobalWishlistView';
+
+export default function WishlistPage() {
+  const { user } = useAuth();
+  const { lists, createList, deleteList, loading: metaLoading } = useWishlists();
+  
+  const [selectedListId, setSelectedListId] = useState<string>('default');
+  const [newListName, setNewListName] = useState('');
+
+  if (!user) return <p className="p-10 text-center">Veuillez vous connecter.</p>;
+
+  const handleCreate = (e: React.FormEvent) => {
+    e.preventDefault();
+    if(newListName.trim()) {
+        createList(newListName);
+        setNewListName('');
+    }
+  };
+
+  return (
+    <main className="container mx-auto p-4 flex flex-col md:flex-row gap-8 min-h-[85vh]">
+      
+      {/* SIDEBAR */}
+      <aside className="w-full md:w-72 flex-none space-y-6">
+        <div className="bg-white dark:bg-gray-800 p-5 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 sticky top-24">
+            <h3 className="font-bold mb-4 text-gray-900 dark:text-white flex items-center gap-2 border-b border-gray-100 dark:border-gray-700 pb-2">
+                📑 Mes Listes
+            </h3>
+            
+            {metaLoading ? (
+                <p className="text-sm text-gray-400">Chargement...</p>
+            ) : (
+                <div className="flex flex-col gap-1 max-h-[60vh] overflow-y-auto pr-1 custom-scrollbar">
+                    
+                    {/* BOUTON VUE GLOBALE */}
+                    <button
+                        onClick={() => setSelectedListId('GLOBAL_VIEW')}
+                        className={`text-left px-3 py-2.5 rounded-lg text-sm transition-all duration-200 flex items-center gap-2 mb-2 ${
+                            selectedListId === 'GLOBAL_VIEW'
+                            ? 'bg-purple-600 text-white shadow-md font-medium' 
+                            : 'bg-purple-50 text-purple-700 hover:bg-purple-100 dark:bg-purple-900/20 dark:text-purple-300'
+                        }`}
+                    >
+                        <span>🌍</span> Tout voir (Fusionné)
+                    </button>
+
+                    <div className="border-t border-gray-100 dark:border-gray-700 my-2"></div>
+
+                    {lists.map(list => (
+                        <div key={list.id} className="group flex items-center relative">
+                            <button
+                                onClick={() => setSelectedListId(list.id)}
+                                className={`flex-grow text-left px-3 py-2.5 rounded-lg text-sm transition-all duration-200 ${
+                                    selectedListId === list.id 
+                                    ? 'bg-blue-600 text-white shadow-md font-medium' 
+                                    : 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300'
+                                }`}
+                            >
+                                {list.name}
+                            </button>
+                            
+                            {list.id !== 'default' && (
+                                <button 
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        deleteList(list.id);
+                                        if (selectedListId === list.id) setSelectedListId('default');
+                                    }}
+                                    className={`absolute right-2 p-1.5 rounded-md transition-opacity ${
+                                        selectedListId === list.id 
+                                        ? 'text-blue-200 hover:text-white hover:bg-blue-500' 
+                                        : 'opacity-0 group-hover:opacity-100 text-gray-400 hover:text-red-600 hover:bg-gray-200 dark:hover:bg-gray-600'
+                                    }`}
+                                    title="Supprimer"
+                                >
+                                    ✕
+                                </button>
+                            )}
+                        </div>
+                    ))}
+                </div>
+            )}
+
+            {/* Formulaire Création */}
+            <form onSubmit={handleCreate} className="mt-6 pt-4 border-t border-gray-100 dark:border-gray-700">
+                <div className="flex gap-2">
+                    <input 
+                        type="text" 
+                        placeholder="Nom nouvelle liste..." 
+                        className="w-full text-sm p-2 border rounded-lg bg-gray-50 dark:bg-gray-900 dark:border-gray-600 focus:ring-2 focus:ring-blue-500 outline-none"
+                        value={newListName}
+                        onChange={e => setNewListName(e.target.value)}
+                    />
+                    <button 
+                        type="submit"
+                        className="bg-blue-600 hover:bg-blue-700 text-white px-3 rounded-lg font-bold text-lg leading-none pb-1"
+                    >
+                        +
+                    </button>
+                </div>
+            </form>
+        </div>
+      </aside>
+
+      {/* CONTENU PRINCIPAL */}
+      <section className="flex-grow min-w-0">
+          {selectedListId === 'GLOBAL_VIEW' ? (
+              <GlobalWishlistView lists={lists} />
+          ) : (
+              <SingleWishlistView 
+                key={selectedListId} 
+                listId={selectedListId} 
+                listName={lists.find(l => l.id === selectedListId)?.name || 'Liste'} 
+              />
+          )}
+      </section>
+
+    </main>
+  );
+}
+</file>
+
 <file path="app/page.tsx">
 'use client';
 
@@ -4980,10 +5135,10 @@ export default function DashboardPage() {
               {/* Box Raccourcis */}
               <div className="bg-gradient-to-br from-purple-600 to-blue-600 rounded-xl p-6 text-white shadow-lg">
                   <h3 className="font-bold text-lg mb-2">Action Rapide</h3>
-                  {/* CORRECTION ICI : &apos; */}
                   <p className="text-white/80 text-sm mb-6">Vous revenez de tournoi ou d&apos;ouverture de boosters ?</p>
                   
-                  <Link href="/collection" className="block w-full bg-white text-blue-600 font-bold text-center py-3 rounded-lg hover:bg-gray-50 transition shadow-sm">
+                  {/* MODIFICATION ICI : Lien vers /search au lieu de /collection */}
+                  <Link href="/search" className="block w-full bg-white text-blue-600 font-bold text-center py-3 rounded-lg hover:bg-gray-50 transition shadow-sm">
                       + Ajouter des cartes
                   </Link>
                   <Link href="/trades/manual" className="block w-full mt-3 bg-blue-700 hover:bg-blue-800 text-white font-bold text-center py-3 rounded-lg border border-blue-500 transition">
@@ -5004,137 +5159,6 @@ export default function DashboardPage() {
 
           </div>
       </div>
-    </main>
-  );
-}
-</file>
-
-<file path="app/wishlist/page.tsx">
-// app/wishlist/page.tsx
-'use client';
-
-import { useState } from 'react';
-import { useAuth } from '@/lib/AuthContext';
-import { useWishlists } from '@/hooks/useWishlists';
-// Import des nouveaux composants
-import SingleWishlistView from '@/components/wishlist/SingleWishlistView';
-import GlobalWishlistView from '@/components/wishlist/GlobalWishlistView';
-
-export default function WishlistPage() {
-  const { user } = useAuth();
-  const { lists, createList, deleteList, loading: metaLoading } = useWishlists();
-  
-  const [selectedListId, setSelectedListId] = useState<string>('default');
-  const [newListName, setNewListName] = useState('');
-
-  if (!user) return <p className="p-10 text-center">Veuillez vous connecter.</p>;
-
-  const handleCreate = (e: React.FormEvent) => {
-    e.preventDefault();
-    if(newListName.trim()) {
-        createList(newListName);
-        setNewListName('');
-    }
-  };
-
-  return (
-    <main className="container mx-auto p-4 flex flex-col md:flex-row gap-8 min-h-[85vh]">
-      
-      {/* SIDEBAR */}
-      <aside className="w-full md:w-72 flex-none space-y-6">
-        <div className="bg-white dark:bg-gray-800 p-5 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 sticky top-24">
-            <h3 className="font-bold mb-4 text-gray-900 dark:text-white flex items-center gap-2 border-b border-gray-100 dark:border-gray-700 pb-2">
-                📑 Mes Listes
-            </h3>
-            
-            {metaLoading ? (
-                <p className="text-sm text-gray-400">Chargement...</p>
-            ) : (
-                <div className="flex flex-col gap-1 max-h-[60vh] overflow-y-auto pr-1 custom-scrollbar">
-                    
-                    {/* BOUTON VUE GLOBALE */}
-                    <button
-                        onClick={() => setSelectedListId('GLOBAL_VIEW')}
-                        className={`text-left px-3 py-2.5 rounded-lg text-sm transition-all duration-200 flex items-center gap-2 mb-2 ${
-                            selectedListId === 'GLOBAL_VIEW'
-                            ? 'bg-purple-600 text-white shadow-md font-medium' 
-                            : 'bg-purple-50 text-purple-700 hover:bg-purple-100 dark:bg-purple-900/20 dark:text-purple-300'
-                        }`}
-                    >
-                        <span>🌍</span> Tout voir (Fusionné)
-                    </button>
-
-                    <div className="border-t border-gray-100 dark:border-gray-700 my-2"></div>
-
-                    {lists.map(list => (
-                        <div key={list.id} className="group flex items-center relative">
-                            <button
-                                onClick={() => setSelectedListId(list.id)}
-                                className={`flex-grow text-left px-3 py-2.5 rounded-lg text-sm transition-all duration-200 ${
-                                    selectedListId === list.id 
-                                    ? 'bg-blue-600 text-white shadow-md font-medium' 
-                                    : 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300'
-                                }`}
-                            >
-                                {list.name}
-                            </button>
-                            
-                            {list.id !== 'default' && (
-                                <button 
-                                    onClick={(e) => {
-                                        e.stopPropagation();
-                                        deleteList(list.id);
-                                        if (selectedListId === list.id) setSelectedListId('default');
-                                    }}
-                                    className={`absolute right-2 p-1.5 rounded-md transition-opacity ${
-                                        selectedListId === list.id 
-                                        ? 'text-blue-200 hover:text-white hover:bg-blue-500' 
-                                        : 'opacity-0 group-hover:opacity-100 text-gray-400 hover:text-red-600 hover:bg-gray-200 dark:hover:bg-gray-600'
-                                    }`}
-                                    title="Supprimer"
-                                >
-                                    ✕
-                                </button>
-                            )}
-                        </div>
-                    ))}
-                </div>
-            )}
-
-            {/* Formulaire Création */}
-            <form onSubmit={handleCreate} className="mt-6 pt-4 border-t border-gray-100 dark:border-gray-700">
-                <div className="flex gap-2">
-                    <input 
-                        type="text" 
-                        placeholder="Nom nouvelle liste..." 
-                        className="w-full text-sm p-2 border rounded-lg bg-gray-50 dark:bg-gray-900 dark:border-gray-600 focus:ring-2 focus:ring-blue-500 outline-none"
-                        value={newListName}
-                        onChange={e => setNewListName(e.target.value)}
-                    />
-                    <button 
-                        type="submit"
-                        className="bg-blue-600 hover:bg-blue-700 text-white px-3 rounded-lg font-bold text-lg leading-none pb-1"
-                    >
-                        +
-                    </button>
-                </div>
-            </form>
-        </div>
-      </aside>
-
-      {/* CONTENU PRINCIPAL */}
-      <section className="flex-grow min-w-0">
-          {selectedListId === 'GLOBAL_VIEW' ? (
-              <GlobalWishlistView lists={lists} />
-          ) : (
-              <SingleWishlistView 
-                key={selectedListId} 
-                listId={selectedListId} 
-                listName={lists.find(l => l.id === selectedListId)?.name || 'Liste'} 
-              />
-          )}
-      </section>
-
     </main>
   );
 }

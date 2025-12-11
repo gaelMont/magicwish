@@ -1,48 +1,48 @@
+// components/CardVersionPickerModal.tsx
 'use client';
 
 import { useState, useEffect, useMemo } from 'react';
 import { CardType } from '@/hooks/useCardCollection';
 import { normalizeCardData, ScryfallRawData } from '@/lib/cardUtils'; 
+import { WishlistMeta } from '@/hooks/useWishlists'; 
 import toast from 'react-hot-toast';
 
 type Props = {
   isOpen: boolean;
   onClose: () => void;
   baseCard: ScryfallRawData | null; 
-  onConfirm: (card: CardType) => void;
+  onConfirm: (card: CardType, targetListId?: string) => void;
+  destination?: 'collection' | 'wishlist'; 
+  availableLists?: WishlistMeta[];
 };
 
-export default function CardVersionPickerModal({ isOpen, onClose, baseCard, onConfirm }: Props) {
+export default function CardVersionPickerModal({ 
+  isOpen, onClose, baseCard, onConfirm, destination, availableLists 
+}: Props) {
+  // ... (états inchangés : versions, loading, selectedVersionId, etc.) ...
   const [versions, setVersions] = useState<ScryfallRawData[]>([]);
   const [loading, setLoading] = useState(false);
-  
   const [selectedVersionId, setSelectedVersionId] = useState<string>('');
   const [isFoil, setIsFoil] = useState(false);
   const [quantity, setQuantity] = useState(1);
   const [isFlipped, setIsFlipped] = useState(false); 
-  
-  // NOUVEAU : État pour "N'importe quelle version"
   const [anyVersion, setAnyVersion] = useState(false);
+  const [selectedListId, setSelectedListId] = useState<string>('default');
 
+  // ... (useEffect de chargement inchangé) ...
   useEffect(() => {
     const fetchVersions = async (oracleId: string) => {
         setLoading(true);
         try {
           const res = await fetch(`https://api.scryfall.com/cards/search?q=oracle_id:${oracleId}&unique=prints&order=released`);
           const data = await res.json();
-          
           if (data.data && data.data.length > 0) {
             setVersions(data.data); 
-            
             const defaultVer = data.data.find((c: ScryfallRawData) => c.id === baseCard?.id) || data.data[0];
             setSelectedVersionId(defaultVer.id);
           }
-        } catch (e) {
-          console.error(e);
-          toast.error("Impossible de charger les versions");
-        } finally {
-          setLoading(false);
-        }
+        } catch (e) { console.error(e); toast.error("Erreur versions"); } 
+        finally { setLoading(false); }
     };
 
     if (isOpen && baseCard?.oracle_id) {
@@ -52,9 +52,11 @@ export default function CardVersionPickerModal({ isOpen, onClose, baseCard, onCo
     setQuantity(1);
     setIsFoil(false);
     setIsFlipped(false);
-    setAnyVersion(false); // Reset à chaque ouverture
+    setAnyVersion(false);
+    setSelectedListId('default'); 
   }, [isOpen, baseCard]); 
 
+  // ... (currentCardRaw, currentPrice, etc. inchangés) ...
   const currentCardRaw = useMemo(() => {
     return versions.find(v => v.id === selectedVersionId) || baseCard;
   }, [versions, selectedVersionId, baseCard]);
@@ -70,6 +72,7 @@ export default function CardVersionPickerModal({ isOpen, onClose, baseCard, onCo
   const hasFoilVersion = currentCardRaw.finishes?.includes('foil') || !!currentCardRaw.prices?.eur_foil;
   const hasNonFoilVersion = currentCardRaw.finishes?.includes('nonfoil') || !!currentCardRaw.prices?.eur;
 
+  // --- CORRECTION ICI ---
   const handleConfirm = () => {
     const finalCard: CardType = {
         id: currentCardRaw.id,
@@ -81,12 +84,14 @@ export default function CardVersionPickerModal({ isOpen, onClose, baseCard, onCo
         setName: setName,
         setCode: setCode,
         isFoil: isFoil,
-        // ICI : Si "anyVersion" est coché, on met isSpecificVersion à false
-        // Le matcher utilisera alors le NOM de la carte au lieu de l'ID exact.
         isSpecificVersion: !anyVersion, 
-        scryfallData: currentCardRaw
+        scryfallData: currentCardRaw,
+        // CORRECTION TYPE : undefined au lieu de null
+        wishlistId: destination === 'wishlist' ? selectedListId : undefined 
     };
-    onConfirm(finalCard);
+    
+    // On passe l'ID de la liste pour que SearchPage sache où écrire
+    onConfirm(finalCard, selectedListId);
     onClose();
   };
 
@@ -100,62 +105,60 @@ export default function CardVersionPickerModal({ isOpen, onClose, baseCard, onCo
             <button onClick={onClose} className="text-gray-400 hover:text-white px-2 text-xl">✕</button>
         </div>
 
-        {/* CONTENU SCROLLABLE */}
+        {/* CONTENU */}
         <div className="overflow-y-auto p-6 flex flex-col items-center space-y-6 custom-scrollbar">
             
             {/* IMAGE */}
-            <div 
-                className="relative w-64 aspect-[2.5/3.5] rounded-xl overflow-hidden shadow-lg ring-1 ring-white/10 group cursor-pointer"
-                onClick={() => imageBackUrl && setIsFlipped(!isFlipped)}
-            >
+            <div className="relative w-64 aspect-[2.5/3.5] rounded-xl overflow-hidden shadow-lg ring-1 ring-white/10 group cursor-pointer" onClick={() => imageBackUrl && setIsFlipped(!isFlipped)}>
                 {loading ? (
                     <div className="w-full h-full bg-gray-800 animate-pulse flex items-center justify-center text-gray-500">Chargement...</div>
                 ) : (
-                    <img 
-                        src={isFlipped && imageBackUrl ? imageBackUrl : imageUrl} 
-                        alt="" 
-                        className={`w-full h-full object-cover transition-transform duration-300 ${anyVersion ? 'opacity-80 grayscale-[50%]' : ''}`} 
-                    />
+                    <img src={isFlipped && imageBackUrl ? imageBackUrl : imageUrl} alt="" className={`w-full h-full object-cover transition-transform duration-300 ${anyVersion ? 'opacity-80 grayscale-[50%]' : ''}`} />
                 )}
-                {/* Overlay visuel si "Any Version" est actif */}
                 {anyVersion && (
                     <div className="absolute inset-0 flex items-center justify-center bg-black/40 backdrop-blur-[2px]">
-                        <span className="bg-blue-600 text-white font-bold px-3 py-1 rounded-full text-sm shadow-lg border border-white/20">
-                            ✨ Générique
-                        </span>
+                        <span className="bg-blue-600 text-white font-bold px-3 py-1 rounded-full text-sm shadow-lg border border-white/20">✨ Générique</span>
                     </div>
                 )}
-                
                 {isFoil && !anyVersion && <div className="absolute inset-0 bg-gradient-to-tr from-purple-500/30 to-transparent mix-blend-overlay pointer-events-none" />}
             </div>
 
-            {/* SÉLECTEUR D'ÉDITION */}
+            {/* SÉLECTION WISHLIST (Seulement si mode wishlist) */}
+            {destination === 'wishlist' && availableLists && availableLists.length > 0 && (
+                <div className="w-full space-y-1 bg-purple-900/20 p-3 rounded-xl border border-purple-500/30">
+                    <label className="text-xs text-purple-300 font-bold uppercase tracking-wider">Ajouter à la liste :</label>
+                    <select 
+                        value={selectedListId}
+                        onChange={(e) => setSelectedListId(e.target.value)}
+                        className="w-full bg-gray-800 text-white border border-gray-600 rounded-lg p-2 text-sm focus:ring-2 focus:ring-purple-500 outline-none"
+                    >
+                        {availableLists.map(list => (
+                            <option key={list.id} value={list.id}>{list.name}</option>
+                        ))}
+                    </select>
+                </div>
+            )}
+
+            {/* ÉDITION (Masquée si Generic) */}
             <div className={`w-full space-y-2 transition-opacity ${anyVersion ? 'opacity-50 pointer-events-none' : 'opacity-100'}`}>
                 <label className="text-xs text-gray-400 uppercase font-bold tracking-wider">Édition / Set</label>
                 <div className="relative">
                     <select 
                         className="w-full bg-gray-800 text-white border border-gray-700 rounded-xl p-3 appearance-none focus:ring-2 focus:ring-blue-500 outline-none text-sm"
                         value={selectedVersionId}
-                        onChange={(e) => {
-                            setSelectedVersionId(e.target.value);
-                            setIsFoil(false);
-                            setIsFlipped(false);
-                        }}
+                        onChange={(e) => { setSelectedVersionId(e.target.value); setIsFoil(false); setIsFlipped(false); }}
                     >
                         {versions.map((v) => (
-                            <option key={v.id} value={v.id}>
-                                {v.set_name} ({v.set.toUpperCase()}) #{v.collector_number}
-                            </option>
+                            <option key={v.id} value={v.id}>{v.set_name} ({v.set.toUpperCase()}) #{v.collector_number}</option>
                         ))}
                     </select>
                     <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-gray-400">▼</div>
                 </div>
             </div>
 
-            {/* OPTIONS : FINITION & GENERIC SWITCH */}
+            {/* OPTIONS */}
             <div className="w-full space-y-4">
-                
-                {/* Switch "N'importe quelle version" */}
+                {/* Switch Generic */}
                 <label className="flex items-center justify-between bg-blue-900/20 p-3 rounded-xl border border-blue-900/50 cursor-pointer hover:bg-blue-900/30 transition">
                     <div className="flex flex-col">
                         <span className="text-sm font-bold text-blue-100">Peu importe l&apos;édition</span>
@@ -167,52 +170,29 @@ export default function CardVersionPickerModal({ isOpen, onClose, baseCard, onCo
                     </div>
                 </label>
 
-                {/* Finition (Désactivé si Any Version) */}
-                <div className={`transition-opacity ${anyVersion ? 'opacity-30 pointer-events-none' : ''}`}>
-                    <div className="bg-gray-800 rounded-xl p-3 flex flex-col items-center justify-center gap-2 border border-gray-700">
-                        <span className="text-xs text-gray-400 font-bold">FINITION</span>
+                {/* Finition & Quantité */}
+                <div className="flex gap-4">
+                    <div className={`flex-1 bg-gray-800 rounded-xl p-2 flex flex-col items-center justify-center gap-1 border border-gray-700 transition-opacity ${anyVersion ? 'opacity-30 pointer-events-none' : ''}`}>
+                        <span className="text-[10px] text-gray-400 font-bold uppercase">Finition</span>
                         <div className="flex bg-gray-900 rounded-lg p-1 w-full">
-                            <button 
-                                onClick={() => setIsFoil(false)}
-                                disabled={!hasNonFoilVersion}
-                                className={`flex-1 text-xs py-1.5 rounded-md transition ${!isFoil ? 'bg-gray-700 text-white font-bold' : 'text-gray-500 hover:text-gray-300'} ${!hasNonFoilVersion && 'opacity-30 cursor-not-allowed'}`}
-                            >
-                                Normal
-                            </button>
-                            <button 
-                                onClick={() => setIsFoil(true)}
-                                disabled={!hasFoilVersion}
-                                className={`flex-1 text-xs py-1.5 rounded-md transition ${isFoil ? 'bg-purple-600 text-white font-bold' : 'text-gray-500 hover:text-purple-400'} ${!hasFoilVersion && 'opacity-30 cursor-not-allowed'}`}
-                            >
-                                Foil
-                            </button>
+                            <button onClick={() => setIsFoil(false)} disabled={!hasNonFoilVersion} className={`flex-1 text-[10px] py-1 rounded transition ${!isFoil ? 'bg-gray-700 text-white font-bold' : 'text-gray-500'} ${!hasNonFoilVersion && 'opacity-30'}`}>Normal</button>
+                            <button onClick={() => setIsFoil(true)} disabled={!hasFoilVersion} className={`flex-1 text-[10px] py-1 rounded transition ${isFoil ? 'bg-purple-600 text-white font-bold' : 'text-gray-500'} ${!hasFoilVersion && 'opacity-30'}`}>Foil</button>
                         </div>
                     </div>
-                </div>
-
-                {/* Quantité */}
-                <div className="bg-gray-800 rounded-xl p-3 flex flex-col items-center justify-center gap-2 border border-gray-700">
-                     <span className="text-xs text-gray-400 font-bold">QUANTITÉ</span>
-                     <div className="flex items-center gap-3">
-                        <button onClick={() => setQuantity(Math.max(1, quantity - 1))} className="w-8 h-8 rounded-full bg-gray-700 text-white hover:bg-gray-600 font-bold">-</button>
-                        <span className="text-xl font-bold text-white w-6 text-center">{quantity}</span>
-                        <button onClick={() => setQuantity(quantity + 1)} className="w-8 h-8 rounded-full bg-blue-600 text-white hover:bg-blue-500 font-bold">+</button>
-                     </div>
+                    <div className="flex-1 bg-gray-800 rounded-xl p-2 flex flex-col items-center justify-center gap-1 border border-gray-700">
+                         <span className="text-[10px] text-gray-400 font-bold uppercase">Quantité</span>
+                         <div className="flex items-center gap-3">
+                            <button onClick={() => setQuantity(Math.max(1, quantity - 1))} className="w-6 h-6 rounded-full bg-gray-700 text-white font-bold">-</button>
+                            <span className="text-lg font-bold text-white w-4 text-center">{quantity}</span>
+                            <button onClick={() => setQuantity(quantity + 1)} className="w-6 h-6 rounded-full bg-blue-600 text-white font-bold">+</button>
+                         </div>
+                    </div>
                 </div>
             </div>
         </div>
 
         {/* FOOTER */}
         <div className="p-4 bg-gray-800 border-t border-gray-700">
-            {!anyVersion && (
-                <div className="flex justify-between items-center mb-4">
-                    <div className="text-gray-400 text-sm">Prix unitaire</div>
-                    <div className="text-2xl font-bold text-white">
-                        {currentPrice > 0 ? `${currentPrice.toFixed(2)} €` : <span className="text-gray-500 text-lg">N/A</span>}
-                    </div>
-                </div>
-            )}
-            
             <button 
                 onClick={handleConfirm}
                 className={`w-full font-bold py-4 rounded-xl text-lg transition shadow-lg transform active:scale-95 flex justify-center items-center gap-2 ${anyVersion ? 'bg-blue-600 hover:bg-blue-500 text-white' : 'bg-amber-500 hover:bg-amber-400 text-black'}`}
@@ -221,7 +201,6 @@ export default function CardVersionPickerModal({ isOpen, onClose, baseCard, onCo
                 {quantity > 1 && <span className="bg-black/20 px-2 py-0.5 rounded text-sm">{quantity}</span>}
             </button>
         </div>
-
       </div>
     </div>
   );

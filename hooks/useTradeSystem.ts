@@ -8,7 +8,6 @@ import {
 } from 'firebase/firestore';
 import { useAuth } from '@/lib/AuthContext';
 import { CardType } from './useCardCollection';
-// ON IMPORTE L'ACTION SERVEUR
 import { executeServerTrade } from '@/app/actions/trade'; 
 import toast from 'react-hot-toast';
 
@@ -26,7 +25,6 @@ export type TradeRequest = {
   createdAt: Timestamp;
 };
 
-// Utilitaire de nettoyage pour Firestore
 const cleanCardsForFirestore = (cards: CardType[]) => {
     return cards.map(card => {
         const clean = { ...card };
@@ -44,7 +42,7 @@ export function useTradeSystem() {
   const [incomingTrades, setIncomingTrades] = useState<TradeRequest[]>([]);
   const [outgoingTrades, setOutgoingTrades] = useState<TradeRequest[]>([]);
   const [loading, setLoading] = useState(true);
-  const [isProcessing, setIsProcessing] = useState(false); // État local
+  const [isProcessing, setIsProcessing] = useState(false);
 
   // 1. Écouter les échanges
   useEffect(() => {
@@ -104,7 +102,7 @@ export function useTradeSystem() {
     }
   };
 
-  // 3. Accepter (C'EST ICI QUE C'ÉTAIT FAUX DANS TON FICHIER ACTUEL)
+  // 3. Accepter
   const acceptTrade = async (trade: TradeRequest) => {
     if (!user) return;
     
@@ -112,27 +110,31 @@ export function useTradeSystem() {
     const toastId = toast.loading("Validation sécurisée en cours...");
 
     try {
-        // APPEL DE L'ACTION SERVEUR (Admin Mode)
-        // Note: trade.itemsGiven = Ce que l'expéditeur donne
-        // Note: trade.itemsReceived = Ce que l'expéditeur reçoit
         const result = await executeServerTrade(
             trade.senderUid,
-            user.uid, // Je suis le receveur
+            user.uid, 
             trade.itemsGiven,
             trade.itemsReceived
         );
 
         if (result.success) {
-            // Si le serveur dit OK, on marque l'échange comme fini
             await updateDoc(doc(db, 'trades', trade.id), { status: 'completed' });
             toast.success("Échange terminé avec succès !", { id: toastId });
         } else {
             throw new Error(result.error || "Erreur serveur inconnue");
         }
 
-    } catch (error: any) { 
+    } catch (error: unknown) { // CORRECTION ICI : unknown au lieu de any
         console.error("Erreur Accept Trade:", error);
-        toast.error(error.message || "Échec de l'échange", { id: toastId });
+        
+        let msg = "Échec de l'échange";
+        if (error instanceof Error) {
+            msg = error.message;
+        } else if (typeof error === "string") {
+            msg = error;
+        }
+        
+        toast.error(msg, { id: toastId });
     } finally {
         setIsProcessing(false);
     }

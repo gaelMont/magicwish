@@ -44,8 +44,11 @@ export default function CollectionPage() {
 
   // Reset pagination quand on filtre/trie
   useEffect(() => {
-    // CORRECTION : Évite le set inutile
-    setVisibleCount(prev => (prev !== ITEMS_PER_PAGE ? ITEMS_PER_PAGE : prev));
+    // On ne met à jour QUE si la valeur n'est pas déjà celle par défaut
+    if (visibleCount !== ITEMS_PER_PAGE) {
+      setVisibleCount(ITEMS_PER_PAGE);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchQuery, sortBy, filterSet, filterTrade, filterFoil]);
 
   const filteredAndSortedCards = useMemo(() => {
