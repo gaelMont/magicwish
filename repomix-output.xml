@@ -99,69 +99,14 @@ tsconfig.json
 <files>
 This section contains the contents of the repository's files.
 
-<file path="components/ThemeProvider.tsx">
-'use client';
-
-import { ThemeProvider as NextThemesProvider } from 'next-themes';
-import { type ThemeProviderProps } from 'next-themes'; // corrigé l'import
-
-export function ThemeProvider({ children, ...props }: ThemeProviderProps) {
-  return <NextThemesProvider {...props}>{children}</NextThemesProvider>;
-}
-</file>
-
-<file path="components/ThemeToggle.tsx">
-'use client';
-
-import { useState, useEffect } from 'react';
-import { useTheme } from 'next-themes';
-
-export default function ThemeToggle() {
-  const [mounted, setMounted] = useState(false);
-  const { theme, setTheme } = useTheme();
-
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setMounted(true);
-  }, []);
-
-  // Si pas encore monté (côté serveur), on renvoie un carré vide de la même taille
-  // pour éviter le décalage visuel (Layout Shift)
-  if (!mounted) {
-    return <div className="w-9 h-9 p-2" />; 
-  }
-
-  return (
-    <button
-      onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-      className="p-2 rounded-lg bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-yellow-400 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
-      title="Changer de thème"
-      aria-label="Changer de thème"
-    >
-      {theme === 'dark' ? (
-        // LUNE (Mode Nuit actif -> clique pour passer en Jour)
-        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5">
-          <path strokeLinecap="round" strokeLinejoin="round" d="M21.752 15.002A9.72 9.72 0 0 1 18 15.75c-5.385 0-9.75-4.365-9.75-9.75 0-1.33.266-2.597.748-3.752A9.753 9.753 0 0 0 3 11.25C3 16.635 7.365 21 12.75 21a9.753 9.753 0 0 0 9.002-5.998Z" />
-        </svg>
-      ) : (
-        // SOLEIL (Mode Jour actif -> clique pour passer en Nuit)
-        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5 text-orange-500">
-          <path strokeLinecap="round" strokeLinejoin="round" d="M12 3v2.25m6.364.386-1.591 1.591M21 12h-2.25m-.386 6.364-1.591-1.591M12 18.75V21m-4.773-4.227-1.591 1.591M5.25 12H3m4.227-4.773L5.636 5.636M15.75 12a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0Z" />
-        </svg>
-      )}
-    </button>
-  );
-}
-</file>
-
 <file path="app/api/portal/route.ts">
 // app/api/portal/route.ts
 import { NextResponse } from 'next/server';
 import Stripe from 'stripe';
-import { getAdminFirestore } from '@/lib/firebase-admin';
 
+// CORRECTION ICI : Mise à jour de la version API pour correspondre à ton package installé
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: '2023-10-16',
+  apiVersion: '2025-11-17.clover', 
 });
 
 export async function POST(req: Request) {
@@ -181,9 +126,10 @@ export async function POST(req: Request) {
         });
 
         return NextResponse.json({ url: session.url });
-    } catch (err: any) {
+    } catch (err: unknown) {
+        const errorMessage = err instanceof Error ? err.message : "Erreur serveur";
         console.error("Erreur création portail Stripe:", err);
-        return NextResponse.json({ error: err.message || "Erreur serveur" }, { status: 500 });
+        return NextResponse.json({ error: errorMessage }, { status: 500 });
     }
 }
 </file>
@@ -277,34 +223,6 @@ export async function POST(req: Request) {
 }
 </file>
 
-<file path="app/globals.css">
-@import "tailwindcss";
-
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
-/* MODIFICATION ICI : On utilise le sélecteur .dark au lieu de @media */
-.dark {
-  --background: #0a0a0a;
-  --foreground: #ededed;
-}
-
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
-}
-</file>
-
 <file path="app/login/page.tsx">
 // Fichier : app/login/page.tsx
 
@@ -347,117 +265,6 @@ export default function LoginPage() {
       </div>
     </main>
   );
-}
-</file>
-
-<file path="app/premium/page.tsx">
-// app/premium/page.tsx
-'use client';
-
-import { useAuth } from '@/lib/AuthContext';
-import { usePremium } from '@/hooks/usePremium';
-import { useState } from 'react';
-import toast from 'react-hot-toast';
-import { doc, getDoc } from 'firebase/firestore'; // Import supplémentaire
-import { db } from '@/lib/firebase';
-
-export default function PremiumPage() {
-    const { user } = useAuth();
-    const { isPremium, loading } = usePremium();
-    const [isRedirecting, setIsRedirecting] = useState(false);
-
-    // Le lien de paiement avec le client_reference_id pour l'identification
-    const paymentLink = `${process.env.NEXT_PUBLIC_STRIPE_PAYMENT_LINK}?client_reference_id=${user?.uid}`;
-
-    // Gérer la redirection vers le portail client Stripe pour annuler/modifier
-    const handleManageSubscription = async () => {
-        if (!user) return;
-        setIsRedirecting(true);
-        try {
-            // On doit lire l'ID client Stripe stocké dans le profil de l'utilisateur
-            const docRef = await getDoc(doc(db, 'users', user.uid));
-            const customerId = docRef.data()?.stripeCustomerId;
-
-            if (!customerId) {
-                toast.error("Impossible de trouver votre abonnement. Contactez le support.");
-                setIsRedirecting(false);
-                return;
-            }
-
-            // Appel de l'API pour générer le lien de gestion du portail Stripe
-            const res = await fetch('/api/portal', { 
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ customerId })
-            });
-            
-            const data = await res.json();
-            if (data.url) {
-                window.location.href = data.url; // Redirection vers Stripe
-            } else {
-                throw new Error(data.error || "Erreur redirection Stripe");
-            }
-        } catch (e) {
-            console.error(e);
-            toast.error("Erreur gestion d'abonnement.");
-            setIsRedirecting(false);
-        }
-    };
-
-    if (loading) return <div className="p-10 text-center">Chargement...</div>;
-    if (!user) return <div className="p-10 text-center">Connectez-vous pour accéder au Premium.</div>;
-
-    return (
-        <div className="container mx-auto p-8 text-center max-w-lg min-h-[80vh] flex flex-col justify-center">
-            
-            {isPremium ? (
-                // --- VUE DÉJÀ ABONNÉ ---
-                <div className="bg-green-50 dark:bg-green-900/20 p-8 rounded-2xl border border-green-200 dark:border-green-800">
-                    <div className="text-5xl mb-4">💎</div>
-                    <h1 className="text-3xl font-bold text-green-700 dark:text-green-400 mb-2">Vous êtes Premium !</h1>
-                    <p className="text-gray-600 dark:text-gray-300 mb-6">
-                        Merci de soutenir le projet.
-                    </p>
-                    <button 
-                        onClick={handleManageSubscription}
-                        disabled={isRedirecting}
-                        className="text-sm text-gray-500 underline hover:text-gray-700 dark:hover:text-gray-200 font-medium"
-                    >
-                        {isRedirecting ? 'Chargement...' : 'Gérer mon abonnement / Annuler'}
-                    </button>
-                </div>
-            ) : (
-                // --- VUE VENTE ---
-                <>
-                    <h1 className="text-4xl font-bold mb-4 bg-linear-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
-                        Passez Premium
-                    </h1>
-                    <p className="mb-8 text-gray-600 dark:text-gray-300 text-lg">
-                        Soutenez le développement pour 1€ / mois.
-                    </p>
-                    
-                    <ul className="text-left bg-white dark:bg-gray-800 p-6 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 mb-8 space-y-4">
-                        <li className="flex items-center gap-3">
-                            <span className="bg-green-100 text-green-700 p-1 rounded-full text-xs">✓</span>
-                            <span>Plus aucune publicité</span>
-                        </li>
-                        <li className="flex items-center gap-3">
-                            <span className="bg-purple-100 text-purple-700 p-1 rounded-full text-xs">♥</span>
-                            <span className="font-bold">Juste 1,00 € / mois</span>
-                        </li>
-                    </ul>
-
-                    <a 
-                        href={paymentLink} 
-                        className="block w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 rounded-xl shadow-lg hover:scale-105 transition transform"
-                    >
-                        Devenir Premium (1€)
-                    </a>
-                    <p className="text-xs text-gray-400 mt-4">Paiement sécurisé par Stripe.</p>
-                </>
-            )}
-        </div>
-    );
 }
 </file>
 
@@ -746,6 +553,61 @@ export default function DeleteAllButton({ targetCollection }: DeleteAllButtonPro
 }
 </file>
 
+<file path="components/ThemeProvider.tsx">
+'use client';
+
+import { ThemeProvider as NextThemesProvider } from 'next-themes';
+import { type ThemeProviderProps } from 'next-themes'; // corrigé l'import
+
+export function ThemeProvider({ children, ...props }: ThemeProviderProps) {
+  return <NextThemesProvider {...props}>{children}</NextThemesProvider>;
+}
+</file>
+
+<file path="components/ThemeToggle.tsx">
+'use client';
+
+import { useState, useEffect } from 'react';
+import { useTheme } from 'next-themes';
+
+export default function ThemeToggle() {
+  const [mounted, setMounted] = useState(false);
+  const { theme, setTheme } = useTheme();
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setMounted(true);
+  }, []);
+
+  // Si pas encore monté (côté serveur), on renvoie un carré vide de la même taille
+  // pour éviter le décalage visuel (Layout Shift)
+  if (!mounted) {
+    return <div className="w-9 h-9 p-2" />; 
+  }
+
+  return (
+    <button
+      onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+      className="p-2 rounded-lg bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-yellow-400 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+      title="Changer de thème"
+      aria-label="Changer de thème"
+    >
+      {theme === 'dark' ? (
+        // LUNE (Mode Nuit actif -> clique pour passer en Jour)
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5">
+          <path strokeLinecap="round" strokeLinejoin="round" d="M21.752 15.002A9.72 9.72 0 0 1 18 15.75c-5.385 0-9.75-4.365-9.75-9.75 0-1.33.266-2.597.748-3.752A9.753 9.753 0 0 0 3 11.25C3 16.635 7.365 21 12.75 21a9.753 9.753 0 0 0 9.002-5.998Z" />
+        </svg>
+      ) : (
+        // SOLEIL (Mode Jour actif -> clique pour passer en Nuit)
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5 text-orange-500">
+          <path strokeLinecap="round" strokeLinejoin="round" d="M12 3v2.25m6.364.386-1.591 1.591M21 12h-2.25m-.386 6.364-1.591-1.591M12 18.75V21m-4.773-4.227-1.591 1.591M5.25 12H3m4.227-4.773L5.636 5.636M15.75 12a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0Z" />
+        </svg>
+      )}
+    </button>
+  );
+}
+</file>
+
 <file path="components/UsernameSetupModal.tsx">
 'use client';
 
@@ -878,116 +740,6 @@ export default function UsernameSetupModal() {
 }
 </file>
 
-<file path="components/wishlist/GlobalWishlistView.tsx">
-'use client';
-
-import { useState, useEffect, useMemo } from 'react';
-import { useAuth } from '@/lib/AuthContext';
-import { WishlistMeta } from '@/hooks/useWishlists';
-import { CardType } from '@/hooks/useCardCollection';
-import MagicCard from '@/components/MagicCard';
-import { db } from '@/lib/firebase';
-import { collection, getDocs } from 'firebase/firestore';
-import toast from 'react-hot-toast';
-
-type Props = {
-    lists: WishlistMeta[];
-};
-
-export default function GlobalWishlistView({ lists }: Props) {
-    const { user } = useAuth();
-    const [allCards, setAllCards] = useState<(CardType & { sourceListName: string })[]>([]);
-    const [loading, setLoading] = useState(true);
-
-    useEffect(() => {
-        if (!user || lists.length === 0) return;
-
-        const fetchAll = async () => {
-            setLoading(true);
-            let combined: (CardType & { sourceListName: string })[] = [];
-
-            try {
-                // A. Liste par défaut
-                const defaultRef = collection(db, 'users', user.uid, 'wishlist');
-                const defaultSnap = await getDocs(defaultRef);
-                const defaultCards = defaultSnap.docs.map(d => ({ 
-                    ...d.data(), id: d.id, sourceListName: 'Liste principale' 
-                })) as (CardType & { sourceListName: string })[];
-                combined = [...defaultCards];
-
-                // B. Listes customs
-                const customLists = lists.filter(l => l.id !== 'default');
-                const promises = customLists.map(async (list) => {
-                    const colRef = collection(db, 'users', user.uid, 'wishlists_data', list.id, 'cards');
-                    const snap = await getDocs(colRef);
-                    return snap.docs.map(d => ({
-                        ...d.data(),
-                        id: d.id,
-                        sourceListName: list.name
-                    })) as (CardType & { sourceListName: string })[];
-                });
-
-                const results = await Promise.all(promises);
-                results.forEach(res => {
-                    combined = [...combined, ...res];
-                });
-
-                setAllCards(combined);
-            } catch (error) {
-                console.error("Erreur chargement global", error);
-                toast.error("Erreur chargement global");
-            } finally {
-                setLoading(false);
-            }
-        };
-
-        fetchAll();
-    }, [user, lists]);
-
-    const globalTotal = useMemo(() => {
-        return allCards.reduce((acc, card) => acc + (card.price || 0) * card.quantity, 0);
-    }, [allCards]);
-
-    if (loading) return <div className="p-10 text-center animate-pulse">Fusion des listes en cours...</div>;
-
-    return (
-        <div className="animate-in fade-in duration-300">
-             <div className="flex justify-between items-end mb-6 border-b pb-4 dark:border-gray-700 bg-linear-to-r from-blue-50 to-transparent dark:from-blue-900/20 p-4 rounded-t-xl">
-                <div>
-                    <h2 className="text-2xl font-bold text-gray-800 dark:text-white flex items-center gap-2">
-                        🌍 Vue Globale
-                    </h2>
-                    <p className="text-sm text-gray-500 mt-1">
-                        Toutes vos cartes fusionnées ({allCards.length} cartes distinctes)
-                    </p>
-                </div>
-                <div className="text-right">
-                    <span className="text-xs text-gray-500 uppercase font-semibold">Valeur Totale</span>
-                    <p className="text-3xl font-bold text-blue-600 dark:text-blue-400">{globalTotal.toFixed(2)} €</p>
-                </div>
-            </div>
-
-            {allCards.length === 0 ? (
-                <div className="text-center py-12">
-                    <p className="text-gray-500 italic">Aucune carte trouvée.</p>
-                </div>
-            ) : (
-                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-                    {allCards.map((card, idx) => (
-                        <div key={`${card.id}-${idx}`} className="relative group">
-                            <div className="absolute top-0 right-0 z-30 bg-black/70 text-white text-[10px] px-2 py-1 rounded-bl-lg backdrop-blur-sm pointer-events-none">
-                                {card.sourceListName}
-                            </div>
-                            <MagicCard {...card} isWishlist={false} />
-                        </div>
-                    ))}
-                </div>
-            )}
-        </div>
-    );
-}
-</file>
-
 <file path="eslint.config.mjs">
 import { defineConfig, globalIgnores } from "eslint/config";
 import nextVitals from "eslint-config-next/core-web-vitals";
@@ -1007,43 +759,6 @@ const eslintConfig = defineConfig([
 ]);
 
 export default eslintConfig;
-</file>
-
-<file path="hooks/usePremium.ts">
-// hooks/usePremium.ts
-import { useAuth } from '@/lib/AuthContext';
-import { db } from '@/lib/firebase';
-import { doc, onSnapshot } from 'firebase/firestore';
-import { useState, useEffect } from 'react';
-
-export function usePremium() {
-  const { user } = useAuth();
-  const [isPremium, setIsPremium] = useState(false);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    if (!user) {
-        // eslint-disable-next-line react-hooks/set-state-in-effect
-        setIsPremium(false);
-        setLoading(false);
-        return;
-    }
-
-    // Écoute en temps réel les changements sur le document utilisateur
-    const unsub = onSnapshot(doc(db, 'users', user.uid), (docSnap) => {
-        // Le Webhook Stripe met à jour ce champ
-        setIsPremium(docSnap.data()?.isPremium === true);
-        setLoading(false);
-    }, (error) => {
-        console.error("Erreur check premium", error);
-        setLoading(false);
-    });
-
-    return () => unsub();
-  }, [user]);
-
-  return { isPremium, loading };
-}
 </file>
 
 <file path="hooks/useWishlists.ts">
@@ -1539,128 +1254,289 @@ export async function executeManualTrade(
 }
 </file>
 
-<file path="components/CollectionToolsModal.tsx">
-// components/CollectionToolsModal.tsx
+<file path="app/globals.css">
+@import "tailwindcss";
+
+:root {
+  --background: #ffffff;
+  --foreground: #171717;
+}
+
+/* MODIFICATION ICI : On utilise le sélecteur .dark au lieu de @media */
+.dark {
+  --background: #0a0a0a;
+  --foreground: #ededed;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: Arial, Helvetica, sans-serif;
+}
+</file>
+
+<file path="app/premium/page.tsx">
+// app/premium/page.tsx
 'use client';
 
+import { useAuth } from '@/lib/AuthContext';
+import { usePremium } from '@/hooks/usePremium';
 import { useState } from 'react';
-import AdContainer from './AdContainer';
+import toast from 'react-hot-toast';
+import { doc, getDoc } from 'firebase/firestore'; // Import supplémentaire
+import { db } from '@/lib/firebase';
 
-type CollectionToolsModalProps = {
-  isOpen: boolean;
-  onClose: () => void;
-  onRefreshPrices: () => Promise<void>;
-  onBulkTrade: (action: 'excess' | 'all' | 'reset', threshold?: number) => void;
-  totalCards: number;
+export default function PremiumPage() {
+    const { user } = useAuth();
+    const { isPremium, loading } = usePremium();
+    const [isRedirecting, setIsRedirecting] = useState(false);
+
+    // Le lien de paiement avec le client_reference_id pour l'identification
+    const paymentLink = `${process.env.NEXT_PUBLIC_STRIPE_PAYMENT_LINK}?client_reference_id=${user?.uid}`;
+
+    // Gérer la redirection vers le portail client Stripe pour annuler/modifier
+    const handleManageSubscription = async () => {
+        if (!user) return;
+        setIsRedirecting(true);
+        try {
+            // On doit lire l'ID client Stripe stocké dans le profil de l'utilisateur
+            const docRef = await getDoc(doc(db, 'users', user.uid));
+            const customerId = docRef.data()?.stripeCustomerId;
+
+            if (!customerId) {
+                toast.error("Impossible de trouver votre abonnement. Contactez le support.");
+                setIsRedirecting(false);
+                return;
+            }
+
+            // Appel de l'API pour générer le lien de gestion du portail Stripe
+            const res = await fetch('/api/portal', { 
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ customerId })
+            });
+            
+            const data = await res.json();
+            if (data.url) {
+                window.location.href = data.url; // Redirection vers Stripe
+            } else {
+                throw new Error(data.error || "Erreur redirection Stripe");
+            }
+        } catch (e) {
+            console.error(e);
+            toast.error("Erreur gestion d'abonnement.");
+            setIsRedirecting(false);
+        }
+    };
+
+    if (loading) return <div className="p-10 text-center">Chargement...</div>;
+    if (!user) return <div className="p-10 text-center">Connectez-vous pour accéder au Premium.</div>;
+
+    return (
+        <div className="container mx-auto p-8 text-center max-w-lg min-h-[80vh] flex flex-col justify-center">
+            
+            {isPremium ? (
+                // --- VUE DÉJÀ ABONNÉ ---
+                <div className="bg-green-50 dark:bg-green-900/20 p-8 rounded-2xl border border-green-200 dark:border-green-800">
+                    <div className="text-5xl mb-4">💎</div>
+                    <h1 className="text-3xl font-bold text-green-700 dark:text-green-400 mb-2">Vous êtes Premium !</h1>
+                    <p className="text-gray-600 dark:text-gray-300 mb-6">
+                        Merci de soutenir le projet.
+                    </p>
+                    <button 
+                        onClick={handleManageSubscription}
+                        disabled={isRedirecting}
+                        className="text-sm text-gray-500 underline hover:text-gray-700 dark:hover:text-gray-200 font-medium"
+                    >
+                        {isRedirecting ? 'Chargement...' : 'Gérer mon abonnement / Annuler'}
+                    </button>
+                </div>
+            ) : (
+                // --- VUE VENTE ---
+                <>
+                    <h1 className="text-4xl font-bold mb-4 bg-linear-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
+                        Passez Premium
+                    </h1>
+                    <p className="mb-8 text-gray-600 dark:text-gray-300 text-lg">
+                        Soutenez le développement pour 1€ / mois.
+                    </p>
+                    
+                    <ul className="text-left bg-white dark:bg-gray-800 p-6 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 mb-8 space-y-4">
+                        <li className="flex items-center gap-3">
+                            <span className="bg-green-100 text-green-700 p-1 rounded-full text-xs">✓</span>
+                            <span>Plus aucune publicité</span>
+                        </li>
+                        <li className="flex items-center gap-3">
+                            <span className="bg-purple-100 text-purple-700 p-1 rounded-full text-xs">♥</span>
+                            <span className="font-bold">Juste 1,00 € / mois</span>
+                        </li>
+                    </ul>
+
+                    <a 
+                        href={paymentLink} 
+                        className="block w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 rounded-xl shadow-lg hover:scale-105 transition transform"
+                    >
+                        Devenir Premium (1€)
+                    </a>
+                    <p className="text-xs text-gray-400 mt-4">Paiement sécurisé par Stripe.</p>
+                </>
+            )}
+        </div>
+    );
+}
+</file>
+
+<file path="components/wishlist/GlobalWishlistView.tsx">
+'use client';
+
+import { useState, useEffect, useMemo } from 'react';
+import { useAuth } from '@/lib/AuthContext';
+import { WishlistMeta } from '@/hooks/useWishlists';
+import { CardType } from '@/hooks/useCardCollection';
+import MagicCard from '@/components/MagicCard';
+import { db } from '@/lib/firebase';
+import { collection, getDocs } from 'firebase/firestore';
+import toast from 'react-hot-toast';
+
+type Props = {
+    lists: WishlistMeta[];
 };
 
-export default function CollectionToolsModal({ 
-    isOpen, onClose, onRefreshPrices, onBulkTrade, totalCards 
-}: CollectionToolsModalProps) {
-  
-  const [threshold, setThreshold] = useState(4);
-  const [isRefreshing, setIsRefreshing] = useState(false);
+export default function GlobalWishlistView({ lists }: Props) {
+    const { user } = useAuth();
+    const [allCards, setAllCards] = useState<(CardType & { sourceListName: string })[]>([]);
+    const [loading, setLoading] = useState(true);
 
-  if (!isOpen) return null;
+    useEffect(() => {
+        if (!user || lists.length === 0) return;
 
-  const handleRefresh = async () => {
-      setIsRefreshing(true);
-      await onRefreshPrices();
-      setIsRefreshing(false);
-  };
+        const fetchAll = async () => {
+            setLoading(true);
+            let combined: (CardType & { sourceListName: string })[] = [];
 
-  return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 backdrop-blur-sm" onClick={onClose}>
-      <div className="bg-white dark:bg-gray-800 rounded-2xl p-6 max-w-md w-full shadow-2xl border border-gray-200 dark:border-gray-700" onClick={e => e.stopPropagation()}>
-        
-        <div className="flex justify-between items-center mb-6">
-            <h2 className="text-xl font-bold flex items-center gap-2 text-gray-900 dark:text-white">
-                ⚙️ Gestion Collection
-            </h2>
-            <button onClick={onClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200">✕</button>
-        </div>
+            try {
+                // A. Liste par défaut
+                const defaultRef = collection(db, 'users', user.uid, 'wishlist');
+                const defaultSnap = await getDocs(defaultRef);
+                const defaultCards = defaultSnap.docs.map(d => ({ 
+                    ...d.data(), id: d.id, sourceListName: 'Liste principale' 
+                })) as (CardType & { sourceListName: string })[];
+                combined = [...defaultCards];
 
-        <div className="space-y-8">
-            
-            {/* SECTION 1 : CLASSEUR D'ÉCHANGE */}
-            <div>
-                <h3 className="text-sm font-bold text-gray-500 uppercase mb-3 border-b border-gray-200 dark:border-gray-700 pb-1">Automatisations Échange</h3>
-                
-                {/* Option Playset */}
-                <div className="bg-green-50 dark:bg-green-900/10 p-3 rounded-xl border border-green-100 dark:border-green-800 mb-3">
-                    <label className="text-sm font-medium text-gray-800 dark:text-gray-200 mb-2 block">
-                        Mettre en échange le surplus (Playset)
-                    </label>
-                    <div className="flex gap-2">
-                        <div className="flex items-center bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded-lg px-2">
-                            <span className="text-xs text-gray-500 mr-2">Qté &gt;</span>
-                            <input 
-                                type="number" 
-                                min="1" 
-                                max="100" 
-                                value={threshold} 
-                                onChange={(e) => setThreshold(parseInt(e.target.value) || 4)}
-                                className="w-10 text-center font-bold outline-none bg-transparent text-gray-900 dark:text-white"
-                            />
-                        </div>
-                        <button 
-                            onClick={() => onBulkTrade('excess', threshold)}
-                            className="grow bg-green-600 hover:bg-green-700 text-white text-sm font-bold py-2 rounded-lg transition"
-                        >
-                            Appliquer
-                        </button>
-                    </div>
-                    <p className="text-[10px] text-gray-500 mt-2">
-                        Exemple : Si Qté &gt; 4, la carte est marquée &quot;Disponible à l&apos;échange&quot;.
+                // B. Listes customs
+                const customLists = lists.filter(l => l.id !== 'default');
+                const promises = customLists.map(async (list) => {
+                    const colRef = collection(db, 'users', user.uid, 'wishlists_data', list.id, 'cards');
+                    const snap = await getDocs(colRef);
+                    return snap.docs.map(d => ({
+                        ...d.data(),
+                        id: d.id,
+                        sourceListName: list.name
+                    })) as (CardType & { sourceListName: string })[];
+                });
+
+                const results = await Promise.all(promises);
+                results.forEach(res => {
+                    combined = [...combined, ...res];
+                });
+
+                setAllCards(combined);
+            } catch (error) {
+                console.error("Erreur chargement global", error);
+                toast.error("Erreur chargement global");
+            } finally {
+                setLoading(false);
+            }
+        };
+
+        fetchAll();
+    }, [user, lists]);
+
+    const globalTotal = useMemo(() => {
+        return allCards.reduce((acc, card) => acc + (card.price || 0) * card.quantity, 0);
+    }, [allCards]);
+
+    if (loading) return <div className="p-10 text-center animate-pulse">Fusion des listes en cours...</div>;
+
+    return (
+        <div className="animate-in fade-in duration-300">
+             <div className="flex justify-between items-end mb-6 border-b pb-4 dark:border-gray-700 bg-linear-to-r from-blue-50 to-transparent dark:from-blue-900/20 p-4 rounded-t-xl">
+                <div>
+                    <h2 className="text-2xl font-bold text-gray-800 dark:text-white flex items-center gap-2">
+                        🌍 Vue Globale
+                    </h2>
+                    <p className="text-sm text-gray-500 mt-1">
+                        Toutes vos cartes fusionnées ({allCards.length} cartes distinctes)
                     </p>
                 </div>
-
-                {/* Actions Rapides */}
-                <div className="grid grid-cols-2 gap-3">
-                    <button 
-                        onClick={() => onBulkTrade('all')}
-                        className="px-4 py-2 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 text-gray-700 dark:text-gray-200 rounded-lg text-xs font-bold transition"
-                    >
-                        Tout mettre en Trade
-                    </button>
-                    <button 
-                        onClick={() => onBulkTrade('reset')}
-                        className="px-4 py-2 bg-gray-100 dark:bg-gray-700 hover:bg-red-100 hover:text-red-600 text-gray-700 dark:text-gray-200 rounded-lg text-xs font-bold transition"
-                    >
-                        Tout retirer (Reset)
-                    </button>
+                <div className="text-right">
+                    <span className="text-xs text-gray-500 uppercase font-semibold">Valeur Totale</span>
+                    <p className="text-3xl font-bold text-blue-600 dark:text-blue-400">{globalTotal.toFixed(2)} €</p>
                 </div>
             </div>
 
-            {/* SECTION 2 : ACTUALISATION */}
-            <div>
-                <h3 className="text-sm font-bold text-gray-500 uppercase mb-3 border-b border-gray-200 dark:border-gray-700 pb-1">Données & Prix</h3>
-                
-                {isRefreshing && (
-                    <div className="mb-4">
-                        <AdContainer /> {/* <--- LA PUB APPARAIT PENDANT L'ATTENTE */}
-                        <p className="text-center text-sm text-blue-600 animate-pulse mt-2">
-                            Analyse des prix en cours...
-                        </p>
-                    </div>
-                )}
-                
-                <button 
-                    onClick={handleRefresh}
-                    disabled={isRefreshing}
-                    className="w-full bg-blue-50 hover:bg-blue-100 dark:bg-blue-900/20 dark:hover:bg-blue-900/40 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800 font-bold py-3 rounded-xl transition flex items-center justify-center gap-2"
-                >
-                    {isRefreshing ? 'Mise à jour en cours...' : '🔄 Actualiser Scryfall (Prix)'}
-                </button>
-                <p className="text-[10px] text-gray-400 text-center mt-2">
-                    Met à jour les prix et informations de vos {totalCards} cartes.
-                </p>
-            </div>
-
+            {allCards.length === 0 ? (
+                <div className="text-center py-12">
+                    <p className="text-gray-500 italic">Aucune carte trouvée.</p>
+                </div>
+            ) : (
+                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                    {allCards.map((card, idx) => (
+                        <div key={`${card.id}-${idx}`} className="relative group">
+                            <div className="absolute top-0 right-0 z-30 bg-black/70 text-white text-[10px] px-2 py-1 rounded-bl-lg backdrop-blur-sm pointer-events-none">
+                                {card.sourceListName}
+                            </div>
+                            <MagicCard {...card} isWishlist={false} />
+                        </div>
+                    ))}
+                </div>
+            )}
         </div>
-      </div>
-    </div>
-  );
+    );
+}
+</file>
+
+<file path="hooks/usePremium.ts">
+// hooks/usePremium.ts
+import { useAuth } from '@/lib/AuthContext';
+import { db } from '@/lib/firebase';
+import { doc, onSnapshot } from 'firebase/firestore';
+import { useState, useEffect } from 'react';
+
+export function usePremium() {
+  const { user } = useAuth();
+  const [isPremium, setIsPremium] = useState(false);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!user) {
+        // eslint-disable-next-line react-hooks/set-state-in-effect
+        setIsPremium(false);
+        setLoading(false);
+        return;
+    }
+
+    // Écoute en temps réel les changements sur le document utilisateur
+    const unsub = onSnapshot(doc(db, 'users', user.uid), (docSnap) => {
+        // Le Webhook Stripe met à jour ce champ
+        setIsPremium(docSnap.data()?.isPremium === true);
+        setLoading(false);
+    }, (error) => {
+        console.error("Erreur check premium", error);
+        setLoading(false);
+    });
+
+    return () => unsub();
+  }, [user]);
+
+  return { isPremium, loading };
 }
 </file>
 
@@ -1727,49 +1603,6 @@ const nextConfig: NextConfig = {
 };
 
 export default nextConfig;
-</file>
-
-<file path="app/layout.tsx">
-// app/layout.tsx
-import type { Metadata } from 'next';
-import { Inter } from 'next/font/google';
-import './globals.css';
-import { AuthProvider } from '@/lib/AuthContext';
-import { ThemeProvider } from '@/components/ThemeProvider'; // <-- IMPORT
-import Header from '@/components/Header'; 
-import { Toaster } from 'react-hot-toast';
-import UsernameSetupModal from '@/components/UsernameSetupModal'; 
-
-const inter = Inter({ subsets: ['latin'] });
-
-export const metadata: Metadata = {
-  title: 'MagicWish',
-  description: 'Votre wishlist de cartes Magic',
-  manifest: '/manifest.json',
-};
-
-export default function RootLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
-  return (
-    // Ajout de suppressHydrationWarning pour éviter les warnings liés au thème
-    <html lang="fr" suppressHydrationWarning>
-      <body className={inter.className}>
-        {/* On enveloppe tout avec le ThemeProvider */}
-        <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
-          <AuthProvider>
-            <Header />
-            {children}
-            <UsernameSetupModal />
-            <Toaster position="bottom-right" />
-          </AuthProvider>
-        </ThemeProvider>
-      </body>
-    </html>
-  );
-}
 </file>
 
 <file path="app/trades/new/[uid]/page.tsx">
@@ -2024,6 +1857,131 @@ export default function DirectTradePage({ params }: { params: Promise<{ uid: str
 }
 </file>
 
+<file path="components/CollectionToolsModal.tsx">
+// components/CollectionToolsModal.tsx
+'use client';
+
+import { useState } from 'react';
+import AdContainer from './AdContainer';
+
+type CollectionToolsModalProps = {
+  isOpen: boolean;
+  onClose: () => void;
+  onRefreshPrices: () => Promise<void>;
+  onBulkTrade: (action: 'excess' | 'all' | 'reset', threshold?: number) => void;
+  totalCards: number;
+};
+
+export default function CollectionToolsModal({ 
+    isOpen, onClose, onRefreshPrices, onBulkTrade, totalCards 
+}: CollectionToolsModalProps) {
+  
+  const [threshold, setThreshold] = useState(4);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+
+  if (!isOpen) return null;
+
+  const handleRefresh = async () => {
+      setIsRefreshing(true);
+      await onRefreshPrices();
+      setIsRefreshing(false);
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 backdrop-blur-sm" onClick={onClose}>
+      <div className="bg-white dark:bg-gray-800 rounded-2xl p-6 max-w-md w-full shadow-2xl border border-gray-200 dark:border-gray-700" onClick={e => e.stopPropagation()}>
+        
+        <div className="flex justify-between items-center mb-6">
+            <h2 className="text-xl font-bold flex items-center gap-2 text-gray-900 dark:text-white">
+                ⚙️ Gestion Collection
+            </h2>
+            <button onClick={onClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200">✕</button>
+        </div>
+
+        <div className="space-y-8">
+            
+            {/* SECTION 1 : CLASSEUR D'ÉCHANGE */}
+            <div>
+                <h3 className="text-sm font-bold text-gray-500 uppercase mb-3 border-b border-gray-200 dark:border-gray-700 pb-1">Automatisations Échange</h3>
+                
+                {/* Option Playset */}
+                <div className="bg-green-50 dark:bg-green-900/10 p-3 rounded-xl border border-green-100 dark:border-green-800 mb-3">
+                    <label className="text-sm font-medium text-gray-800 dark:text-gray-200 mb-2 block">
+                        Mettre en échange le surplus (Playset)
+                    </label>
+                    <div className="flex gap-2">
+                        <div className="flex items-center bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded-lg px-2">
+                            <span className="text-xs text-gray-500 mr-2">Qté &gt;</span>
+                            <input 
+                                type="number" 
+                                min="1" 
+                                max="100" 
+                                value={threshold} 
+                                onChange={(e) => setThreshold(parseInt(e.target.value) || 4)}
+                                className="w-10 text-center font-bold outline-none bg-transparent text-gray-900 dark:text-white"
+                            />
+                        </div>
+                        <button 
+                            onClick={() => onBulkTrade('excess', threshold)}
+                            className="grow bg-green-600 hover:bg-green-700 text-white text-sm font-bold py-2 rounded-lg transition"
+                        >
+                            Appliquer
+                        </button>
+                    </div>
+                    <p className="text-[10px] text-gray-500 mt-2">
+                        Exemple : Si Qté &gt; 4, la carte est marquée &quot;Disponible à l&apos;échange&quot;.
+                    </p>
+                </div>
+
+                {/* Actions Rapides */}
+                <div className="grid grid-cols-2 gap-3">
+                    <button 
+                        onClick={() => onBulkTrade('all')}
+                        className="px-4 py-2 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 text-gray-700 dark:text-gray-200 rounded-lg text-xs font-bold transition"
+                    >
+                        Tout mettre en Trade
+                    </button>
+                    <button 
+                        onClick={() => onBulkTrade('reset')}
+                        className="px-4 py-2 bg-gray-100 dark:bg-gray-700 hover:bg-red-100 hover:text-red-600 text-gray-700 dark:text-gray-200 rounded-lg text-xs font-bold transition"
+                    >
+                        Tout retirer (Reset)
+                    </button>
+                </div>
+            </div>
+
+            {/* SECTION 2 : ACTUALISATION */}
+            <div>
+                <h3 className="text-sm font-bold text-gray-500 uppercase mb-3 border-b border-gray-200 dark:border-gray-700 pb-1">Données & Prix</h3>
+                
+                {isRefreshing && (
+                    <div className="mb-4">
+                        <AdContainer /> {/* <--- LA PUB APPARAIT PENDANT L'ATTENTE */}
+                        <p className="text-center text-sm text-blue-600 animate-pulse mt-2">
+                            Analyse des prix en cours...
+                        </p>
+                    </div>
+                )}
+                
+                <button 
+                    onClick={handleRefresh}
+                    disabled={isRefreshing}
+                    className="w-full bg-blue-50 hover:bg-blue-100 dark:bg-blue-900/20 dark:hover:bg-blue-900/40 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800 font-bold py-3 rounded-xl transition flex items-center justify-center gap-2"
+                >
+                    {isRefreshing ? 'Mise à jour en cours...' : '🔄 Actualiser Scryfall (Prix)'}
+                </button>
+                <p className="text-[10px] text-gray-400 text-center mt-2">
+                    Met à jour les prix et informations de vos {totalCards} cartes.
+                </p>
+            </div>
+
+        </div>
+      </div>
+    </div>
+  );
+}
+</file>
+
 <file path="hooks/useFriends.ts">
 // hooks/useFriends.ts
 import { useState, useEffect } from 'react';
@@ -2250,210 +2208,45 @@ export async function GET(request: Request) {
 }
 </file>
 
-<file path="app/search/page.tsx">
-'use client';
+<file path="app/layout.tsx">
+// app/layout.tsx
+import type { Metadata } from 'next';
+import { Inter } from 'next/font/google';
+import './globals.css';
+import { AuthProvider } from '@/lib/AuthContext';
+import { ThemeProvider } from '@/components/ThemeProvider'; // <-- IMPORT
+import Header from '@/components/Header'; 
+import { Toaster } from 'react-hot-toast';
+import UsernameSetupModal from '@/components/UsernameSetupModal'; 
 
-import { useState, useMemo } from 'react';
-import { useAuth } from '@/lib/AuthContext';
-import { db } from '@/lib/firebase';
-import { doc, setDoc, increment, serverTimestamp } from 'firebase/firestore';
-import { ScryfallRawData } from '@/lib/cardUtils';
-import { CardType } from '@/hooks/useCardCollection';
-import { useWishlists } from '@/hooks/useWishlists';
-import CardVersionPickerModal from '@/components/CardVersionPickerModal';
-import toast from 'react-hot-toast';
+const inter = Inter({ subsets: ['latin'] });
 
-export default function SearchPage() {
-  const { user } = useAuth();
-  const { lists } = useWishlists();
-  
-  const [query, setQuery] = useState('');
-  const [results, setResults] = useState<ScryfallRawData[]>([]);
-  const [isSearching, setIsSearching] = useState(false);
-  const [hasSearched, setHasSearched] = useState(false);
+export const metadata: Metadata = {
+  title: 'MagicWish',
+  description: 'Votre wishlist de cartes Magic',
+  manifest: '/manifest.json',
+};
 
-  const [modalOpen, setModalOpen] = useState(false);
-  const [selectedBaseCard, setSelectedBaseCard] = useState<ScryfallRawData | null>(null);
-  const [targetDestination, setTargetDestination] = useState<'collection' | 'wishlist'>('collection');
-
-  const handleSearch = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!query.trim()) return;
-
-    setIsSearching(true);
-    setHasSearched(true);
-    setResults([]);
-
-    try {
-        const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
-        const data = await res.json();
-        
-        if (data.data) {
-            setResults(data.data);
-        } else {
-            toast.error("Aucune carte trouvee.");
-        }
-    } catch (error) {
-        console.error(error);
-        toast.error("Erreur de recherche.");
-    } finally {
-        setIsSearching(false);
-    }
-  };
-
-  const openPicker = (card: ScryfallRawData, destination: 'collection' | 'wishlist') => {
-      setSelectedBaseCard(card);
-      setTargetDestination(destination);
-      setModalOpen(true);
-  };
-
-  const handleConfirmAdd = async (card: CardType, targetListId: string = 'default') => {
-      if (!user) return;
-
-      const destLabel = targetDestination === 'collection' ? 'Collection' : 'Wishlist';
-      const toastId = toast.loading(`Ajout a : ${destLabel}...`);
-      
-      try {
-          let collectionPath = 'collection';
-          if (targetDestination === 'wishlist') {
-              if (targetListId === 'default') {
-                  collectionPath = 'wishlist';
-              } else {
-                  collectionPath = `wishlists_data/${targetListId}/cards`;
-              }
-          }
-
-          const cardRef = doc(db, 'users', user.uid, collectionPath, card.id);
-
-          const dataToSave = {
-              ...card,
-              imageBackUrl: card.imageBackUrl || null,
-              addedAt: serverTimestamp(),
-              wishlistId: targetDestination === 'wishlist' ? targetListId : null, 
-              isForTrade: false 
-          };
-
-          await setDoc(cardRef, {
-              ...dataToSave,
-              quantity: increment(card.quantity)
-          }, { merge: true });
-
-          toast.success(`Ajoute avec succes !`, { id: toastId });
-
-      } catch (error) {
-          console.error(error);
-          toast.error("Erreur lors de l'ajout", { id: toastId });
-      }
-  };
-
-  const uniqueResults = useMemo(() => {
-    const seen = new Set();
-    return results.filter(c => {
-        const name = c.name.split(' // ')[0];
-        if (seen.has(name)) return false;
-        seen.add(name);
-        return true;
-    });
-  }, [results]);
-
+export default function RootLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
   return (
-    <main className="container mx-auto p-4 max-w-5xl min-h-[85vh]">
-      
-      <div className="text-center mb-8 pt-4">
-          <h1 className="text-3xl font-bold bg-linear-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent mb-2">
-              Centre de Recherche
-          </h1>
-          <p className="text-gray-500">
-              Trouvez n&apos;importe quelle carte et ajoutez-la a votre Collection ou votre Wishlist.
-          </p>
-      </div>
-
-      <div className="max-w-2xl mx-auto mb-10 sticky top-4 z-20">
-          <form onSubmit={handleSearch} className="relative shadow-lg rounded-full">
-              <input 
-                  type="text" 
-                  className="w-full p-4 pl-6 pr-14 rounded-full border-2 border-transparent bg-white dark:bg-gray-800 dark:text-white focus:border-blue-500 outline-none transition text-lg"
-                  placeholder="Nom de la carte (ex: Black Lotus, Sol Ring...)"
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  autoFocus
-              />
-              <button 
-                  type="submit"
-                  disabled={isSearching || !query.trim()}
-                  className="absolute right-2 top-2 bottom-2 bg-blue-600 hover:bg-blue-700 text-white rounded-full w-12 flex items-center justify-center transition disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                  {isSearching ? '...' : 'Go'}
-              </button>
-          </form>
-      </div>
-
-      {isSearching ? (
-          <div className="text-center py-20">
-              <div className="inline-block w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mb-4"></div>
-              <p className="text-gray-400">Interrogation de Scryfall...</p>
-          </div>
-      ) : uniqueResults.length > 0 ? (
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-              {uniqueResults.map((card) => (
-                  <div key={card.id} className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden flex flex-col group hover:shadow-md transition">
-                      <div className="relative aspect-[2.5/3.5] bg-gray-200 overflow-hidden">
-                          {card.image_uris?.normal ? (
-                              <img src={card.image_uris.normal} alt={card.name} className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110" loading="lazy" />
-                          ) : (
-                             <div className="flex items-center justify-center h-full text-gray-400 text-xs">Pas d&apos;image</div>
-                          )}
-                          
-                          <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center gap-3 p-4">
-                              <button 
-                                  onClick={() => openPicker(card, 'collection')}
-                                  className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 rounded-lg text-sm shadow-lg transform translate-y-4 group-hover:translate-y-0 transition-transform duration-300"
-                              >
-                                  + Collection
-                              </button>
-                              <button 
-                                  onClick={() => openPicker(card, 'wishlist')}
-                                  className="w-full bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 rounded-lg text-sm shadow-lg transform translate-y-4 group-hover:translate-y-0 transition-transform duration-300 delay-75"
-                              >
-                                  + Wishlist
-                              </button>
-                          </div>
-                      </div>
-
-                      <div className="p-3">
-                          <h3 className="font-bold text-gray-900 dark:text-white truncate" title={card.name}>{card.name}</h3>
-                          <p className="text-xs text-gray-500">{card.set_name}</p>
-                      </div>
-                  </div>
-              ))}
-          </div>
-      ) : hasSearched ? (
-          <div className="text-center py-20 bg-gray-50 dark:bg-gray-800/50 rounded-2xl border-2 border-dashed border-gray-200 dark:border-gray-700">
-              <p className="text-xl text-gray-500">Aucun resultat trouve pour &quot;{query}&quot;.</p>
-          </div>
-      ) : (
-          <div className="grid md:grid-cols-2 gap-4 max-w-3xl mx-auto opacity-50 hover:opacity-100 transition-opacity">
-               <div className="p-6 border-2 border-dashed border-gray-200 dark:border-gray-700 rounded-xl text-center">
-                   <span className="text-4xl mb-2 block font-bold text-gray-300">COLLECTION</span>
-                   <h3 className="font-bold">Completer ma Collection</h3>
-               </div>
-               <div className="p-6 border-2 border-dashed border-gray-200 dark:border-gray-700 rounded-xl text-center">
-                   <span className="text-4xl mb-2 block font-bold text-gray-300">WISHLIST</span>
-                   <h3 className="font-bold">Remplir ma Wishlist</h3>
-               </div>
-          </div>
-      )}
-
-      <CardVersionPickerModal 
-          isOpen={modalOpen}
-          onClose={() => setModalOpen(false)}
-          baseCard={selectedBaseCard}
-          onConfirm={handleConfirmAdd}
-          destination={targetDestination}
-          availableLists={lists}
-      />
-
-    </main>
+    // Ajout de suppressHydrationWarning pour éviter les warnings liés au thème
+    <html lang="fr" suppressHydrationWarning>
+      <body className={inter.className}>
+        {/* On enveloppe tout avec le ThemeProvider */}
+        <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
+          <AuthProvider>
+            <Header />
+            {children}
+            <UsernameSetupModal />
+            <Toaster position="bottom-right" />
+          </AuthProvider>
+        </ThemeProvider>
+      </body>
+    </html>
   );
 }
 </file>
@@ -2741,6 +2534,214 @@ export const normalizeCardData = (data: ScryfallRawData) => {
     scryfallData: data // On garde la donnée brute
   };
 };
+</file>
+
+<file path="app/search/page.tsx">
+'use client';
+
+import { useState, useMemo } from 'react';
+import { useAuth } from '@/lib/AuthContext';
+import { db } from '@/lib/firebase';
+import { doc, setDoc, increment, serverTimestamp } from 'firebase/firestore';
+import { ScryfallRawData } from '@/lib/cardUtils';
+import { CardType } from '@/hooks/useCardCollection';
+import { useWishlists } from '@/hooks/useWishlists';
+import CardVersionPickerModal from '@/components/CardVersionPickerModal';
+import toast from 'react-hot-toast';
+
+export default function SearchPage() {
+  const { user } = useAuth();
+  const { lists } = useWishlists();
+  
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState<ScryfallRawData[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [hasSearched, setHasSearched] = useState(false);
+
+  const [modalOpen, setModalOpen] = useState(false);
+  const [selectedBaseCard, setSelectedBaseCard] = useState<ScryfallRawData | null>(null);
+  const [targetDestination, setTargetDestination] = useState<'collection' | 'wishlist'>('collection');
+
+  const handleSearch = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!query.trim()) return;
+
+    setIsSearching(true);
+    setHasSearched(true);
+    setResults([]);
+
+    try {
+        const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
+        const data = await res.json();
+        
+        if (data.data) {
+            setResults(data.data);
+        } else {
+            toast.error("Aucune carte trouvee.");
+        }
+    } catch (error) {
+        console.error(error);
+        toast.error("Erreur de recherche.");
+    } finally {
+        setIsSearching(false);
+    }
+  };
+
+  const openPicker = (card: ScryfallRawData, destination: 'collection' | 'wishlist') => {
+      setSelectedBaseCard(card);
+      setTargetDestination(destination);
+      setModalOpen(true);
+  };
+
+  const handleConfirmAdd = async (card: CardType, targetListId: string = 'default') => {
+      if (!user) return;
+
+      const destLabel = targetDestination === 'collection' ? 'Collection' : 'Wishlist';
+      const toastId = toast.loading(`Ajout a : ${destLabel}...`);
+      
+      try {
+          let collectionPath = 'collection';
+          if (targetDestination === 'wishlist') {
+              if (targetListId === 'default') {
+                  collectionPath = 'wishlist';
+              } else {
+                  collectionPath = `wishlists_data/${targetListId}/cards`;
+              }
+          }
+
+          const cardRef = doc(db, 'users', user.uid, collectionPath, card.id);
+
+          const dataToSave = {
+              ...card,
+              imageBackUrl: card.imageBackUrl || null,
+              addedAt: serverTimestamp(),
+              wishlistId: targetDestination === 'wishlist' ? targetListId : null, 
+              isForTrade: false 
+          };
+
+          await setDoc(cardRef, {
+              ...dataToSave,
+              quantity: increment(card.quantity)
+          }, { merge: true });
+
+          toast.success(`Ajoute avec succes !`, { id: toastId });
+
+      } catch (error) {
+          console.error(error);
+          toast.error("Erreur lors de l'ajout", { id: toastId });
+      }
+  };
+
+  const uniqueResults = useMemo(() => {
+    const seen = new Set();
+    return results.filter(c => {
+        const name = c.name.split(' // ')[0];
+        if (seen.has(name)) return false;
+        seen.add(name);
+        return true;
+    });
+  }, [results]);
+
+  return (
+    <main className="container mx-auto p-4 max-w-5xl min-h-[85vh]">
+      
+      <div className="text-center mb-8 pt-4">
+          <h1 className="text-3xl font-bold bg-linear-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent mb-2">
+              Centre de Recherche
+          </h1>
+          <p className="text-gray-500">
+              Trouvez n&apos;importe quelle carte et ajoutez-la a votre Collection ou votre Wishlist.
+          </p>
+      </div>
+
+      <div className="max-w-2xl mx-auto mb-10 sticky top-4 z-20">
+          <form onSubmit={handleSearch} className="relative shadow-lg rounded-full">
+              <input 
+                  type="text" 
+                  className="w-full p-4 pl-6 pr-14 rounded-full border-2 border-transparent bg-white dark:bg-gray-800 dark:text-white focus:border-blue-500 outline-none transition text-lg"
+                  placeholder="Nom de la carte (ex: Black Lotus, Sol Ring...)"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  autoFocus
+              />
+              <button 
+                  type="submit"
+                  disabled={isSearching || !query.trim()}
+                  className="absolute right-2 top-2 bottom-2 bg-blue-600 hover:bg-blue-700 text-white rounded-full w-12 flex items-center justify-center transition disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                  {isSearching ? '...' : 'Go'}
+              </button>
+          </form>
+      </div>
+
+      {isSearching ? (
+          <div className="text-center py-20">
+              <div className="inline-block w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mb-4"></div>
+              <p className="text-gray-400">Interrogation de Scryfall...</p>
+          </div>
+      ) : uniqueResults.length > 0 ? (
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+              {uniqueResults.map((card) => (
+                  <div key={card.id} className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden flex flex-col group hover:shadow-md transition">
+                      <div className="relative aspect-[2.5/3.5] bg-gray-200 overflow-hidden">
+                          {card.image_uris?.normal ? (
+                              <img src={card.image_uris.normal} alt={card.name} className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110" loading="lazy" />
+                          ) : (
+                             <div className="flex items-center justify-center h-full text-gray-400 text-xs">Pas d&apos;image</div>
+                          )}
+                          
+                          <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center gap-3 p-4">
+                              <button 
+                                  onClick={() => openPicker(card, 'collection')}
+                                  className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 rounded-lg text-sm shadow-lg transform translate-y-4 group-hover:translate-y-0 transition-transform duration-300"
+                              >
+                                  + Collection
+                              </button>
+                              <button 
+                                  onClick={() => openPicker(card, 'wishlist')}
+                                  className="w-full bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 rounded-lg text-sm shadow-lg transform translate-y-4 group-hover:translate-y-0 transition-transform duration-300 delay-75"
+                              >
+                                  + Wishlist
+                              </button>
+                          </div>
+                      </div>
+
+                      <div className="p-3">
+                          <h3 className="font-bold text-gray-900 dark:text-white truncate" title={card.name}>{card.name}</h3>
+                          <p className="text-xs text-gray-500">{card.set_name}</p>
+                      </div>
+                  </div>
+              ))}
+          </div>
+      ) : hasSearched ? (
+          <div className="text-center py-20 bg-gray-50 dark:bg-gray-800/50 rounded-2xl border-2 border-dashed border-gray-200 dark:border-gray-700">
+              <p className="text-xl text-gray-500">Aucun resultat trouve pour &quot;{query}&quot;.</p>
+          </div>
+      ) : (
+          <div className="grid md:grid-cols-2 gap-4 max-w-3xl mx-auto opacity-50 hover:opacity-100 transition-opacity">
+               <div className="p-6 border-2 border-dashed border-gray-200 dark:border-gray-700 rounded-xl text-center">
+                   <span className="text-4xl mb-2 block font-bold text-gray-300">COLLECTION</span>
+                   <h3 className="font-bold">Completer ma Collection</h3>
+               </div>
+               <div className="p-6 border-2 border-dashed border-gray-200 dark:border-gray-700 rounded-xl text-center">
+                   <span className="text-4xl mb-2 block font-bold text-gray-300">WISHLIST</span>
+                   <h3 className="font-bold">Remplir ma Wishlist</h3>
+               </div>
+          </div>
+      )}
+
+      <CardVersionPickerModal 
+          isOpen={modalOpen}
+          onClose={() => setModalOpen(false)}
+          baseCard={selectedBaseCard}
+          onConfirm={handleConfirmAdd}
+          destination={targetDestination}
+          availableLists={lists}
+      />
+
+    </main>
+  );
+}
 </file>
 
 <file path="package.json">
@@ -3398,142 +3399,6 @@ export default function ContactsPage() {
 }
 </file>
 
-<file path="components/Header.tsx">
-'use client';
-
-import { useState } from 'react';
-import Link from 'next/link';
-import { useAuth } from '@/lib/AuthContext';
-import { usePathname } from 'next/navigation';
-import ThemeToggle from './ThemeToggle';
-
-export default function Header() {
-  const { user, logOut, friendRequestCount } = useAuth();
-  const pathname = usePathname();
-  const [isMenuOpen, setIsMenuOpen] = useState(false);
-
-  const linkClass = (path: string) => `
-    font-medium transition-colors block py-2 md:py-0
-    ${pathname === path 
-      ? 'text-blue-600 dark:text-blue-400 font-bold' 
-      : 'text-gray-700 dark:text-gray-200 hover:text-blue-600 dark:hover:text-blue-400'}
-  `;
-
-  return (
-    <header className="bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-700 p-4 shadow-sm sticky top-0 z-40">
-      <div className="container mx-auto">
-        <div className="flex justify-between items-center">
-          {/* LOGO */}
-          <Link 
-            href="/" 
-            className="text-xl font-bold text-transparent bg-clip-text bg-linear-to-r from-blue-600 to-purple-600 hover:opacity-80 transition"
-            onClick={() => setIsMenuOpen(false)}
-          >
-            MagicWish
-          </Link>
-
-          <div className="flex items-center gap-4">
-            
-            {/* BOUTON THÈME (Visible par tout le monde) */}
-            <ThemeToggle />
-
-            {user ? (
-              <>
-                {/* MENU DESKTOP */}
-                <nav className="hidden md:flex gap-6 mr-4 items-center">
-                  <Link href="/search" className={linkClass('/search')}>Recherche</Link> 
-                  <Link href="/wishlist" className={linkClass('/wishlist')}>Wishlist</Link>
-                  <Link href="/collection" className={linkClass('/collection')}>Collection</Link>
-                  <Link href="/trades" className={linkClass('/trades')}>Echanges</Link>
-                  <Link href="/contacts" className={`${linkClass('/contacts')} relative flex items-center gap-1`}>
-                    Contacts
-                    {friendRequestCount > 0 && (
-                      <span className="absolute -top-2 -right-3 bg-red-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full">
-                        {friendRequestCount}
-                      </span>
-                    )}
-                  </Link>
-                </nav>
-
-                <div className="h-6 w-px bg-gray-300 dark:bg-gray-600 hidden md:block"></div>
-
-                {/* PROFIL & DÉCONNEXION */}
-                <div className="flex items-center gap-3">
-                  {user.photoURL && (
-                    <img 
-                      src={user.photoURL} 
-                      alt="Avatar" 
-                      className="w-8 h-8 rounded-full border border-gray-300 dark:border-gray-600"
-                      title={user.displayName || ''}
-                    />
-                  )}
-                  <button
-                    onClick={logOut}
-                    className="hidden md:block text-sm text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 px-3 py-1 rounded transition"
-                  >
-                    Deconnexion
-                  </button>
-
-                  {/* BOUTON BURGER (Mobile) */}
-                  <button 
-                    onClick={() => setIsMenuOpen(!isMenuOpen)}
-                    className="md:hidden p-2 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg focus:outline-none"
-                  >
-                    Menu
-                  </button>
-                </div>
-              </>
-            ) : (
-              // BOUTON LOGIN (Si pas connecté)
-              <Link
-                href="/login"
-                className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 transition"
-              >
-                Se connecter
-              </Link>
-            )}
-          </div>
-        </div>
-        
-        {/* MENU MOBILE DÉROULANT */}
-        {user && isMenuOpen && (
-          <div className="md:hidden mt-4 pt-4 border-t border-gray-100 dark:border-gray-800 animate-in slide-in-from-top-2 duration-200">
-             <nav className="flex flex-col space-y-2">
-               <Link href="/search" className={linkClass('/search')} onClick={() => setIsMenuOpen(false)}>
-                 Recherche
-               </Link>
-               <Link href="/wishlist" className={linkClass('/wishlist')} onClick={() => setIsMenuOpen(false)}>
-                 Wishlist
-               </Link>
-               <Link href="/collection" className={linkClass('/collection')} onClick={() => setIsMenuOpen(false)}>
-                 Collection
-               </Link>
-               <Link href="/trades" className={linkClass('/trades')} onClick={() => setIsMenuOpen(false)}>
-                 Echanges
-               </Link>
-               <Link href="/contacts" className={`${linkClass('/contacts')} flex items-center justify-between`} onClick={() => setIsMenuOpen(false)}>
-                 <span>Contacts</span>
-                 {friendRequestCount > 0 && (
-                    <span className="bg-red-500 text-white text-xs font-bold px-2 py-0.5 rounded-full">
-                        {friendRequestCount}
-                    </span>
-                 )}
-               </Link>
-               <button 
-                 onClick={() => { logOut(); setIsMenuOpen(false); }}
-                 className="text-left py-2 text-red-600 font-medium hover:bg-red-50 dark:hover:bg-red-900/10 rounded"
-               >
-                 Deconnexion
-               </button>
-             </nav>
-          </div>
-        )}
-      </div>
-    </header>
-  );
-}
-</file>
-
 <file path="app/trades/manual/page.tsx">
 'use client';
 
@@ -3813,6 +3678,142 @@ export default function ManualTradePage() {
         />
 
     </div>
+  );
+}
+</file>
+
+<file path="components/Header.tsx">
+'use client';
+
+import { useState } from 'react';
+import Link from 'next/link';
+import { useAuth } from '@/lib/AuthContext';
+import { usePathname } from 'next/navigation';
+import ThemeToggle from './ThemeToggle';
+
+export default function Header() {
+  const { user, logOut, friendRequestCount } = useAuth();
+  const pathname = usePathname();
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+
+  const linkClass = (path: string) => `
+    font-medium transition-colors block py-2 md:py-0
+    ${pathname === path 
+      ? 'text-blue-600 dark:text-blue-400 font-bold' 
+      : 'text-gray-700 dark:text-gray-200 hover:text-blue-600 dark:hover:text-blue-400'}
+  `;
+
+  return (
+    <header className="bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-700 p-4 shadow-sm sticky top-0 z-40">
+      <div className="container mx-auto">
+        <div className="flex justify-between items-center">
+          {/* LOGO */}
+          <Link 
+            href="/" 
+            className="text-xl font-bold text-transparent bg-clip-text bg-linear-to-r from-blue-600 to-purple-600 hover:opacity-80 transition"
+            onClick={() => setIsMenuOpen(false)}
+          >
+            MagicWish
+          </Link>
+
+          <div className="flex items-center gap-4">
+            
+            {/* BOUTON THÈME (Visible par tout le monde) */}
+            <ThemeToggle />
+
+            {user ? (
+              <>
+                {/* MENU DESKTOP */}
+                <nav className="hidden md:flex gap-6 mr-4 items-center">
+                  <Link href="/search" className={linkClass('/search')}>Recherche</Link> 
+                  <Link href="/wishlist" className={linkClass('/wishlist')}>Wishlist</Link>
+                  <Link href="/collection" className={linkClass('/collection')}>Collection</Link>
+                  <Link href="/trades" className={linkClass('/trades')}>Echanges</Link>
+                  <Link href="/contacts" className={`${linkClass('/contacts')} relative flex items-center gap-1`}>
+                    Contacts
+                    {friendRequestCount > 0 && (
+                      <span className="absolute -top-2 -right-3 bg-red-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full">
+                        {friendRequestCount}
+                      </span>
+                    )}
+                  </Link>
+                </nav>
+
+                <div className="h-6 w-px bg-gray-300 dark:bg-gray-600 hidden md:block"></div>
+
+                {/* PROFIL & DÉCONNEXION */}
+                <div className="flex items-center gap-3">
+                  {user.photoURL && (
+                    <img 
+                      src={user.photoURL} 
+                      alt="Avatar" 
+                      className="w-8 h-8 rounded-full border border-gray-300 dark:border-gray-600"
+                      title={user.displayName || ''}
+                    />
+                  )}
+                  <button
+                    onClick={logOut}
+                    className="hidden md:block text-sm text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 px-3 py-1 rounded transition"
+                  >
+                    Deconnexion
+                  </button>
+
+                  {/* BOUTON BURGER (Mobile) */}
+                  <button 
+                    onClick={() => setIsMenuOpen(!isMenuOpen)}
+                    className="md:hidden p-2 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg focus:outline-none"
+                  >
+                    Menu
+                  </button>
+                </div>
+              </>
+            ) : (
+              // BOUTON LOGIN (Si pas connecté)
+              <Link
+                href="/login"
+                className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 transition"
+              >
+                Se connecter
+              </Link>
+            )}
+          </div>
+        </div>
+        
+        {/* MENU MOBILE DÉROULANT */}
+        {user && isMenuOpen && (
+          <div className="md:hidden mt-4 pt-4 border-t border-gray-100 dark:border-gray-800 animate-in slide-in-from-top-2 duration-200">
+             <nav className="flex flex-col space-y-2">
+               <Link href="/search" className={linkClass('/search')} onClick={() => setIsMenuOpen(false)}>
+                 Recherche
+               </Link>
+               <Link href="/wishlist" className={linkClass('/wishlist')} onClick={() => setIsMenuOpen(false)}>
+                 Wishlist
+               </Link>
+               <Link href="/collection" className={linkClass('/collection')} onClick={() => setIsMenuOpen(false)}>
+                 Collection
+               </Link>
+               <Link href="/trades" className={linkClass('/trades')} onClick={() => setIsMenuOpen(false)}>
+                 Echanges
+               </Link>
+               <Link href="/contacts" className={`${linkClass('/contacts')} flex items-center justify-between`} onClick={() => setIsMenuOpen(false)}>
+                 <span>Contacts</span>
+                 {friendRequestCount > 0 && (
+                    <span className="bg-red-500 text-white text-xs font-bold px-2 py-0.5 rounded-full">
+                        {friendRequestCount}
+                    </span>
+                 )}
+               </Link>
+               <button 
+                 onClick={() => { logOut(); setIsMenuOpen(false); }}
+                 className="text-left py-2 text-red-600 font-medium hover:bg-red-50 dark:hover:bg-red-900/10 rounded"
+               >
+                 Deconnexion
+               </button>
+             </nav>
+          </div>
+        )}
+      </div>
+    </header>
   );
 }
 </file>
@@ -4562,137 +4563,6 @@ export function useCardCollection(
 }
 </file>
 
-<file path="app/wishlist/page.tsx">
-// app/wishlist/page.tsx
-'use client';
-
-import { useState } from 'react';
-import { useAuth } from '@/lib/AuthContext';
-import { useWishlists } from '@/hooks/useWishlists';
-// Import des nouveaux composants
-import SingleWishlistView from '@/components/wishlist/SingleWishlistView';
-import GlobalWishlistView from '@/components/wishlist/GlobalWishlistView';
-
-export default function WishlistPage() {
-  const { user } = useAuth();
-  const { lists, createList, deleteList, loading: metaLoading } = useWishlists();
-  
-  const [selectedListId, setSelectedListId] = useState<string>('default');
-  const [newListName, setNewListName] = useState('');
-
-  if (!user) return <p className="p-10 text-center">Veuillez vous connecter.</p>;
-
-  const handleCreate = (e: React.FormEvent) => {
-    e.preventDefault();
-    if(newListName.trim()) {
-        createList(newListName);
-        setNewListName('');
-    }
-  };
-
-  return (
-    <main className="container mx-auto p-4 flex flex-col md:flex-row gap-8 min-h-[85vh]">
-      
-      {/* SIDEBAR */}
-      <aside className="w-full md:w-72 flex-none space-y-6">
-        <div className="bg-white dark:bg-gray-800 p-5 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 sticky top-24">
-            <h3 className="font-bold mb-4 text-gray-900 dark:text-white flex items-center gap-2 border-b border-gray-100 dark:border-gray-700 pb-2">
-                📑 Mes Listes
-            </h3>
-            
-            {metaLoading ? (
-                <p className="text-sm text-gray-400">Chargement...</p>
-            ) : (
-                <div className="flex flex-col gap-1 max-h-[60vh] overflow-y-auto pr-1 custom-scrollbar">
-                    
-                    {/* BOUTON VUE GLOBALE */}
-                    <button
-                        onClick={() => setSelectedListId('GLOBAL_VIEW')}
-                        className={`text-left px-3 py-2.5 rounded-lg text-sm transition-all duration-200 flex items-center gap-2 mb-2 ${
-                            selectedListId === 'GLOBAL_VIEW'
-                            ? 'bg-purple-600 text-white shadow-md font-medium' 
-                            : 'bg-purple-50 text-purple-700 hover:bg-purple-100 dark:bg-purple-900/20 dark:text-purple-300'
-                        }`}
-                    >
-                        <span>🌍</span> Tout voir (Fusionné)
-                    </button>
-
-                    <div className="border-t border-gray-100 dark:border-gray-700 my-2"></div>
-
-                    {lists.map(list => (
-                        <div key={list.id} className="group flex items-center relative">
-                            <button
-                                onClick={() => setSelectedListId(list.id)}
-                                className={`grow text-left px-3 py-2.5 rounded-lg text-sm transition-all duration-200 ${
-                                    selectedListId === list.id 
-                                    ? 'bg-blue-600 text-white shadow-md font-medium' 
-                                    : 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300'
-                                }`}
-                            >
-                                {list.name}
-                            </button>
-                            
-                            {list.id !== 'default' && (
-                                <button 
-                                    onClick={(e) => {
-                                        e.stopPropagation();
-                                        deleteList(list.id);
-                                        if (selectedListId === list.id) setSelectedListId('default');
-                                    }}
-                                    className={`absolute right-2 p-1.5 rounded-md transition-opacity ${
-                                        selectedListId === list.id 
-                                        ? 'text-blue-200 hover:text-white hover:bg-blue-500' 
-                                        : 'opacity-0 group-hover:opacity-100 text-gray-400 hover:text-red-600 hover:bg-gray-200 dark:hover:bg-gray-600'
-                                    }`}
-                                    title="Supprimer"
-                                >
-                                    ✕
-                                </button>
-                            )}
-                        </div>
-                    ))}
-                </div>
-            )}
-
-            {/* Formulaire Création */}
-            <form onSubmit={handleCreate} className="mt-6 pt-4 border-t border-gray-100 dark:border-gray-700">
-                <div className="flex gap-2">
-                    <input 
-                        type="text" 
-                        placeholder="Nom nouvelle liste..." 
-                        className="w-full text-sm p-2 border rounded-lg bg-gray-50 dark:bg-gray-900 dark:border-gray-600 focus:ring-2 focus:ring-blue-500 outline-none"
-                        value={newListName}
-                        onChange={e => setNewListName(e.target.value)}
-                    />
-                    <button 
-                        type="submit"
-                        className="bg-blue-600 hover:bg-blue-700 text-white px-3 rounded-lg font-bold text-lg leading-none pb-1"
-                    >
-                        +
-                    </button>
-                </div>
-            </form>
-        </div>
-      </aside>
-
-      {/* CONTENU PRINCIPAL */}
-      <section className="grow min-w-0">
-          {selectedListId === 'GLOBAL_VIEW' ? (
-              <GlobalWishlistView lists={lists} />
-          ) : (
-              <SingleWishlistView 
-                key={selectedListId} 
-                listId={selectedListId} 
-                listName={lists.find(l => l.id === selectedListId)?.name || 'Liste'} 
-              />
-          )}
-      </section>
-
-    </main>
-  );
-}
-</file>
-
 <file path="components/MagicCard.tsx">
 'use client';
 
@@ -4935,6 +4805,137 @@ function MagicCard(props: MagicCardProps) {
 }
 
 export default memo(MagicCard);
+</file>
+
+<file path="app/wishlist/page.tsx">
+// app/wishlist/page.tsx
+'use client';
+
+import { useState } from 'react';
+import { useAuth } from '@/lib/AuthContext';
+import { useWishlists } from '@/hooks/useWishlists';
+// Import des nouveaux composants
+import SingleWishlistView from '@/components/wishlist/SingleWishlistView';
+import GlobalWishlistView from '@/components/wishlist/GlobalWishlistView';
+
+export default function WishlistPage() {
+  const { user } = useAuth();
+  const { lists, createList, deleteList, loading: metaLoading } = useWishlists();
+  
+  const [selectedListId, setSelectedListId] = useState<string>('default');
+  const [newListName, setNewListName] = useState('');
+
+  if (!user) return <p className="p-10 text-center">Veuillez vous connecter.</p>;
+
+  const handleCreate = (e: React.FormEvent) => {
+    e.preventDefault();
+    if(newListName.trim()) {
+        createList(newListName);
+        setNewListName('');
+    }
+  };
+
+  return (
+    <main className="container mx-auto p-4 flex flex-col md:flex-row gap-8 min-h-[85vh]">
+      
+      {/* SIDEBAR */}
+      <aside className="w-full md:w-72 flex-none space-y-6">
+        <div className="bg-white dark:bg-gray-800 p-5 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 sticky top-24">
+            <h3 className="font-bold mb-4 text-gray-900 dark:text-white flex items-center gap-2 border-b border-gray-100 dark:border-gray-700 pb-2">
+                📑 Mes Listes
+            </h3>
+            
+            {metaLoading ? (
+                <p className="text-sm text-gray-400">Chargement...</p>
+            ) : (
+                <div className="flex flex-col gap-1 max-h-[60vh] overflow-y-auto pr-1 custom-scrollbar">
+                    
+                    {/* BOUTON VUE GLOBALE */}
+                    <button
+                        onClick={() => setSelectedListId('GLOBAL_VIEW')}
+                        className={`text-left px-3 py-2.5 rounded-lg text-sm transition-all duration-200 flex items-center gap-2 mb-2 ${
+                            selectedListId === 'GLOBAL_VIEW'
+                            ? 'bg-purple-600 text-white shadow-md font-medium' 
+                            : 'bg-purple-50 text-purple-700 hover:bg-purple-100 dark:bg-purple-900/20 dark:text-purple-300'
+                        }`}
+                    >
+                        <span>🌍</span> Tout voir (Fusionné)
+                    </button>
+
+                    <div className="border-t border-gray-100 dark:border-gray-700 my-2"></div>
+
+                    {lists.map(list => (
+                        <div key={list.id} className="group flex items-center relative">
+                            <button
+                                onClick={() => setSelectedListId(list.id)}
+                                className={`grow text-left px-3 py-2.5 rounded-lg text-sm transition-all duration-200 ${
+                                    selectedListId === list.id 
+                                    ? 'bg-blue-600 text-white shadow-md font-medium' 
+                                    : 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300'
+                                }`}
+                            >
+                                {list.name}
+                            </button>
+                            
+                            {list.id !== 'default' && (
+                                <button 
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        deleteList(list.id);
+                                        if (selectedListId === list.id) setSelectedListId('default');
+                                    }}
+                                    className={`absolute right-2 p-1.5 rounded-md transition-opacity ${
+                                        selectedListId === list.id 
+                                        ? 'text-blue-200 hover:text-white hover:bg-blue-500' 
+                                        : 'opacity-0 group-hover:opacity-100 text-gray-400 hover:text-red-600 hover:bg-gray-200 dark:hover:bg-gray-600'
+                                    }`}
+                                    title="Supprimer"
+                                >
+                                    ✕
+                                </button>
+                            )}
+                        </div>
+                    ))}
+                </div>
+            )}
+
+            {/* Formulaire Création */}
+            <form onSubmit={handleCreate} className="mt-6 pt-4 border-t border-gray-100 dark:border-gray-700">
+                <div className="flex gap-2">
+                    <input 
+                        type="text" 
+                        placeholder="Nom nouvelle liste..." 
+                        className="w-full text-sm p-2 border rounded-lg bg-gray-50 dark:bg-gray-900 dark:border-gray-600 focus:ring-2 focus:ring-blue-500 outline-none"
+                        value={newListName}
+                        onChange={e => setNewListName(e.target.value)}
+                    />
+                    <button 
+                        type="submit"
+                        className="bg-blue-600 hover:bg-blue-700 text-white px-3 rounded-lg font-bold text-lg leading-none pb-1"
+                    >
+                        +
+                    </button>
+                </div>
+            </form>
+        </div>
+      </aside>
+
+      {/* CONTENU PRINCIPAL */}
+      <section className="grow min-w-0">
+          {selectedListId === 'GLOBAL_VIEW' ? (
+              <GlobalWishlistView lists={lists} />
+          ) : (
+              <SingleWishlistView 
+                key={selectedListId} 
+                listId={selectedListId} 
+                listName={lists.find(l => l.id === selectedListId)?.name || 'Liste'} 
+              />
+          )}
+      </section>
+
+    </main>
+  );
+}
 </file>
 
 <file path="app/page.tsx">

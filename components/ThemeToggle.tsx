@@ -8,7 +8,10 @@ export default function ThemeToggle() {
   const { theme, setTheme } = useTheme();
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
+    // Cette ligne est nécessaire pour éviter l'erreur "hydration mismatch"
+    // Le linter râle car on set un state dans un effect sans dépendance,
+    // mais c'est le comportement voulu ici.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     setMounted(true);
   }, []);
 
