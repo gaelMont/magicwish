@@ -54,6 +54,7 @@ function MagicCard(props: MagicCardProps) {
   useEffect(() => {
     if (!isEditingPrice) {
         const newVal = customPrice?.toString() || price?.toString() || "0";
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         setTempPrice(prev => (prev !== newVal ? newVal : prev));
     }
   }, [customPrice, price, isEditingPrice]);
@@ -80,20 +81,20 @@ function MagicCard(props: MagicCardProps) {
   // --- VUE LISTE (TRADE) ---
   if (isTradeView) {
       return (
-        <div className="flex items-center gap-3 bg-white dark:bg-gray-800 p-2 rounded-lg border border-gray-100 dark:border-gray-700 content-visibility-auto">
+        <div className="flex items-center gap-3 bg-white dark:bg-slate-800 p-2 rounded-xl border border-slate-200 dark:border-slate-700 content-visibility-auto shadow-sm">
             <div className="w-10 h-14 bg-gray-200 rounded overflow-hidden flex-shrink-0 relative group cursor-pointer" onClick={() => setIsFlipped(!isFlipped)}>
                  <img src={currentImage} className="w-full h-full object-cover" alt={name} loading="lazy" />
-                 {isFoil && <div className="absolute top-0 right-0 bg-purple-600/80 text-white text-[8px] px-1 font-bold">FOIL</div>}
+                 {isFoil && <div className="absolute top-0 right-0 bg-gradient-to-tr from-purple-600 to-pink-600 text-white text-[8px] px-1 font-bold">FOIL</div>}
             </div>
             
             <div className="flex-grow min-w-0">
                 <div className="flex items-center gap-2">
-                    <p className="font-bold text-sm truncate" title={name}>{name}</p>
-                    {isFoil && <span className="text-xs font-bold text-purple-600">FOIL</span>}
+                    <p className="font-bold text-sm truncate text-slate-900 dark:text-white" title={name}>{name}</p>
+                    {isFoil && <span className="text-xs font-bold text-transparent bg-clip-text bg-gradient-to-r from-purple-600 to-pink-600">FOIL</span>}
                 </div>
-                <div className="flex items-center gap-2 text-xs text-gray-500">
+                <div className="flex items-center gap-2 text-xs text-slate-500">
                     <p className="truncate">{setName}</p>
-                    {isSpecificVersion && <span className="bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300 px-1 rounded text-[9px] border border-blue-200">EXACT</span>}
+                    {isSpecificVersion && <span className="bg-blue-50 text-blue-700 dark:bg-blue-900 dark:text-blue-300 px-1.5 py-0.5 rounded text-[9px] border border-blue-200 font-bold">EXACT</span>}
                 </div>
             </div>
 
@@ -105,12 +106,12 @@ function MagicCard(props: MagicCardProps) {
                     </div>
                 ) : (
                     <div 
-                        className={`font-bold text-sm ${customPrice ? 'text-orange-600' : 'text-gray-700 dark:text-gray-300'} ${allowPriceEdit ? 'cursor-pointer hover:underline' : ''}`}
+                        className={`font-bold text-sm ${customPrice ? 'text-orange-600' : 'text-slate-700 dark:text-slate-300'} ${allowPriceEdit ? 'cursor-pointer hover:underline' : ''}`}
                         onClick={() => { if (allowPriceEdit) { setTempPrice(effectivePrice.toString()); setIsEditingPrice(true); }}}
-                        title={customPrice ? "Prix personnalise" : "Prix Scryfall"}
+                        title={customPrice ? "Prix personnalisé" : "Prix Scryfall"}
                     >
-                        {effectivePrice.toFixed(2)} EUR
-                        {customPrice && <span className="text-[8px] align-top ml-0.5">*</span>}
+                        {effectivePrice.toFixed(2)} €
+                        {customPrice && <span className="text-[8px] align-top ml-0.5 text-orange-500">*</span>}
                     </div>
                 )}
             </div>
@@ -122,64 +123,71 @@ function MagicCard(props: MagicCardProps) {
   return (
     <div 
         onClick={handleCardClick}
-        className={`relative group flex flex-col rounded-lg overflow-hidden p-3 gap-2 border transition-all duration-200 h-full content-visibility-auto
+        className={`relative group flex flex-col rounded-xl overflow-hidden p-3 gap-2 h-full content-visibility-auto
         
-        /* MODIFICATION ICI : Gestion des fonds et ombres */
-        bg-white dark:bg-gray-800 
-        shadow-sm hover:shadow-md dark:shadow-none
+        /* --- ESTHÉTIQUE MODERNE (PEPS) --- */
+        /* Fond Blanc (sur fond gris de page) + Ombre douce + Bordure fine */
+        bg-white dark:bg-slate-800 
+        border transition-all duration-300
+        
+        /* Effet "Lift" au survol : la carte se soulève et l'ombre grandit */
+        shadow-[0_2px_8px_-2px_rgba(0,0,0,0.05)] hover:shadow-[0_8px_16px_-4px_rgba(0,0,0,0.1)] hover:-translate-y-1
+        dark:shadow-none dark:hover:border-indigo-500/50
         
         ${isSelected 
-            ? 'border-blue-500 ring-2 ring-blue-500 bg-blue-50 dark:bg-blue-900/20' 
+            ? 'border-indigo-500 ring-2 ring-indigo-500 bg-indigo-50 dark:bg-indigo-900/20' 
             : isFoil 
-                ? 'border-purple-300 dark:border-purple-800' 
-                : 'border-gray-200 dark:border-gray-700 hover:border-blue-300 dark:hover:border-blue-500' // border-gray-200 est important en Light mode
+                ? 'border-purple-200 dark:border-purple-900 hover:border-purple-400' 
+                : 'border-slate-200 dark:border-slate-700 hover:border-indigo-300 dark:hover:border-indigo-500'
         }
         ${isSelectMode ? 'cursor-pointer' : ''}
         `}
     >
-      
 
       {isSelectMode && (
           <div className="absolute top-2 right-2 z-30 pointer-events-none">
-              <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center transition-colors shadow-sm ${isSelected ? 'bg-blue-600 border-blue-600' : 'bg-white/90 border-gray-400'}`}>
-                  {isSelected && <span className="text-white text-sm font-bold">V</span>}
+              <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center transition-all shadow-md ${isSelected ? 'bg-indigo-600 border-indigo-600 scale-110' : 'bg-white/90 border-slate-300'}`}>
+                  {isSelected && <span className="text-white text-sm font-bold">✓</span>}
               </div>
           </div>
       )}
 
-      <div className="relative w-full aspect-[2.5/3.5] bg-gray-200 rounded-lg overflow-hidden shrink-0">
+      {/* Image Container */}
+      <div className="relative w-full aspect-[2.5/3.5] bg-slate-100 dark:bg-slate-900 rounded-lg overflow-hidden shrink-0 shadow-inner">
         <img
           src={currentImage || CARD_BACK_URL}
           alt={name}
           loading="lazy"
-          className="w-full h-full object-cover transition-transform duration-300"
+          className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
           onError={(e) => { e.currentTarget.src = CARD_BACK_URL; }}
         />
-        {isFoil && <div className="absolute inset-0 bg-gradient-to-tr from-purple-500/20 to-transparent pointer-events-none mix-blend-overlay"></div>}
+        {/* Effet Foil Amélioré */}
+        {isFoil && <div className="absolute inset-0 bg-gradient-to-tr from-purple-500/30 via-transparent to-indigo-500/10 pointer-events-none mix-blend-overlay opacity-80"></div>}
 
         {imageBackUrl && !isSelectMode && (
-          <button onClick={(e) => { e.stopPropagation(); setIsFlipped(!isFlipped); }} className="absolute top-1/2 right-2 -translate-y-1/2 bg-black/50 hover:bg-black/80 text-white p-2 rounded-full backdrop-blur-sm transition-all shadow-lg border border-white/20 z-10 pointer-events-auto font-bold text-xs">
+          <button onClick={(e) => { e.stopPropagation(); setIsFlipped(!isFlipped); }} className="absolute top-1/2 right-2 -translate-y-1/2 bg-black/60 hover:bg-black/80 text-white p-2 rounded-full backdrop-blur-sm transition-all shadow-lg border border-white/20 z-10 pointer-events-auto font-bold text-[10px] tracking-widest uppercase opacity-0 group-hover:opacity-100">
             FLIP
           </button>
         )}
       </div>
       
+      {/* Contenu Texte & Boutons */}
       <div className="flex-1 flex flex-col min-w-0">
-        <div className="flex justify-between items-start mb-1">
-            <h3 className="font-bold text-sm md:text-base truncate flex-grow" title={name}>{name}</h3>
+        <div className="flex justify-between items-start mb-1 mt-1">
+            <h3 className="font-bold text-sm md:text-base truncate flex-grow text-slate-800 dark:text-slate-100 group-hover:text-indigo-600 transition-colors" title={name}>{name}</h3>
         </div>
         
-        <p className="text-xs text-blue-600 dark:text-blue-400 truncate font-medium mb-2">{setName}</p>
+        <p className="text-xs text-slate-500 dark:text-slate-400 truncate font-medium mb-3">{setName}</p>
 
         <div className={`flex flex-wrap gap-1.5 mb-2 ${isSelectMode ? 'pointer-events-none opacity-50' : ''}`}>
             
             {onToggleAttribute ? (
                 <button 
                     onClick={(e) => { e.stopPropagation(); onToggleAttribute('isFoil', !!isFoil); }}
-                    className={`text-[10px] px-2 py-0.5 rounded border transition-colors font-medium flex-1 text-center ${
+                    className={`text-[10px] px-2 py-1 rounded-md border transition-all font-semibold flex-1 text-center ${
                         isFoil 
-                        ? 'bg-purple-100 text-purple-700 border-purple-200 hover:bg-purple-200 dark:bg-purple-900/30 dark:text-purple-300' 
-                        : 'bg-gray-50 text-gray-400 border-gray-200 hover:bg-gray-100 dark:bg-gray-800 dark:border-gray-600'
+                        ? 'bg-gradient-to-r from-purple-100 to-pink-100 text-purple-700 border-purple-200 hover:shadow-sm dark:from-purple-900/40 dark:to-pink-900/40 dark:text-purple-300 dark:border-purple-800' 
+                        : 'bg-slate-50 text-slate-400 border-slate-100 hover:bg-slate-100 dark:bg-slate-800/50 dark:border-slate-700'
                     }`}
                 >
                     {isFoil ? 'Foil' : 'Normal'}
@@ -190,8 +198,10 @@ function MagicCard(props: MagicCardProps) {
                 onToggleAttribute && (
                     <button 
                         onClick={(e) => { e.stopPropagation(); onToggleAttribute('isSpecificVersion', !!isSpecificVersion); }}
-                        className={`text-[10px] px-2 py-0.5 rounded border transition-colors font-medium flex-1 text-center ${
-                            isSpecificVersion ? 'bg-blue-100 text-blue-700 border-blue-200' : 'bg-gray-50 text-gray-400 border-gray-200'
+                        className={`text-[10px] px-2 py-1 rounded-md border transition-colors font-semibold flex-1 text-center ${
+                            isSpecificVersion 
+                            ? 'bg-blue-50 text-blue-700 border-blue-200' 
+                            : 'bg-slate-50 text-slate-400 border-slate-100'
                         }`}
                     >
                         {isSpecificVersion ? 'Exact' : 'Auto'}
@@ -201,40 +211,39 @@ function MagicCard(props: MagicCardProps) {
                 onToggleAttribute && (
                     <button 
                         onClick={(e) => { e.stopPropagation(); onToggleAttribute('isForTrade', !!isForTrade); }}
-                        className={`text-[10px] px-2 py-0.5 rounded border transition-colors font-medium flex-1 text-center ${
+                        className={`text-[10px] px-2 py-1 rounded-md border transition-colors font-semibold flex-1 text-center ${
                             isForTrade 
-                            ? 'bg-green-100 text-green-700 border-green-200 hover:bg-green-200 dark:bg-green-900/30 dark:text-green-300' 
-                            : 'bg-gray-50 text-gray-400 border-gray-200 hover:bg-gray-100 dark:bg-gray-800 dark:border-gray-600'
+                            ? 'bg-green-50 text-green-700 border-green-200 hover:bg-green-100 dark:bg-green-900/30 dark:text-green-300' 
+                            : 'bg-slate-50 text-slate-400 border-slate-100 hover:bg-slate-100 dark:bg-slate-800/50 dark:border-slate-700'
                         }`}
                     >
-                        {isForTrade ? 'Echange' : 'Prive'}
+                        {isForTrade ? 'Trade' : 'Privé'}
                     </button>
                 )
             )}
             
-            {/* LE BOUTON ACHETÉ RESTE ICI */}
             {isWishlist && !readOnly && !isSelectMode && onMove && (
                 <button 
                     onClick={(e) => { e.stopPropagation(); onMove(); }}
-                    className="text-[10px] px-2 py-0.5 rounded border transition-colors font-bold flex-1 text-center bg-green-50 text-green-700 border-green-200 hover:bg-green-100 dark:bg-green-900/30 dark:text-green-300 dark:border-green-800"
-                    title="Deplacer vers Collection"
+                    className="text-[10px] px-2 py-1 rounded-md border transition-colors font-bold flex-1 text-center bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100 hover:shadow-sm dark:bg-emerald-900/30 dark:text-emerald-300 dark:border-emerald-800"
+                    title="Déplacer vers Collection"
                 >
-                    Achete
+                    Acheté
                 </button>
             )}
         </div>
         
-        <div className={`mt-auto flex justify-between items-end border-t border-gray-100 dark:border-gray-700 pt-2 ${isSelectMode ? 'pointer-events-none opacity-50' : ''}`}>
-          <div className="flex items-center gap-1.5">
-            {!readOnly && <button onClick={(e) => {e.stopPropagation(); onDecrement?.()}} className="bg-gray-200 dark:bg-gray-700 w-6 h-6 rounded hover:bg-gray-300 font-bold flex items-center justify-center text-sm">-</button>}
-            <span className={`font-mono text-base ${readOnly ? 'font-bold text-gray-800 dark:text-white' : 'w-4 text-center'}`}>{readOnly && "x"}{quantity}</span>
-            {!readOnly && <button onClick={(e) => {e.stopPropagation(); onIncrement?.()}} className="bg-blue-100 dark:bg-blue-900 text-blue-600 font-bold w-6 h-6 rounded hover:bg-blue-200 flex items-center justify-center text-sm">+</button>}
+        <div className={`mt-auto flex justify-between items-end border-t border-slate-100 dark:border-slate-700 pt-2 ${isSelectMode ? 'pointer-events-none opacity-50' : ''}`}>
+          <div className="flex items-center gap-1">
+            {!readOnly && <button onClick={(e) => {e.stopPropagation(); onDecrement?.()}} className="bg-slate-100 dark:bg-slate-700 w-6 h-6 rounded-md hover:bg-slate-200 text-slate-600 font-bold flex items-center justify-center text-sm transition-colors">-</button>}
+            <span className={`font-mono text-base ${readOnly ? 'font-bold text-slate-800 dark:text-white' : 'w-5 text-center text-slate-700 dark:text-slate-200'}`}>{readOnly && "x"}{quantity}</span>
+            {!readOnly && <button onClick={(e) => {e.stopPropagation(); onIncrement?.()}} className="bg-indigo-50 dark:bg-indigo-900/50 text-indigo-600 dark:text-indigo-400 font-bold w-6 h-6 rounded-md hover:bg-indigo-100 flex items-center justify-center text-sm transition-colors border border-indigo-100 dark:border-indigo-800">+</button>}
           </div>
           
           <div className="text-right">
-             <p className="text-[10px] text-gray-400">Unit: {effectivePrice.toFixed(2)}</p>
-             <p className={`font-bold text-sm ${customPrice ? 'text-orange-600' : 'text-gray-700 dark:text-gray-200'}`}>
-                 {(effectivePrice * quantity).toFixed(2)} EUR
+             <p className="text-[9px] text-slate-400 uppercase tracking-wide">Unit: {effectivePrice.toFixed(2)}</p>
+             <p className={`font-bold text-sm ${customPrice ? 'text-orange-600' : 'text-slate-700 dark:text-slate-200'}`}>
+                 {(effectivePrice * quantity).toFixed(2)} €
              </p>
           </div>
         </div>

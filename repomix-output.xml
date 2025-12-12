@@ -99,130 +99,6 @@ tsconfig.json
 <files>
 This section contains the contents of the repository's files.
 
-<file path="app/api/portal/route.ts">
-// app/api/portal/route.ts
-import { NextResponse } from 'next/server';
-import Stripe from 'stripe';
-
-// CORRECTION ICI : Mise à jour de la version API pour correspondre à ton package installé
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: '2025-11-17.clover', 
-});
-
-export async function POST(req: Request) {
-    
-    try {
-        const body = await req.json();
-        const { customerId } = body; 
-
-        if (!customerId) {
-             return NextResponse.json({ error: "Customer ID manquant" }, { status: 400 });
-        }
-
-        // Création de la session du portail de facturation
-        const session = await stripe.billingPortal.sessions.create({
-            customer: customerId,
-            return_url: `${process.env.NEXT_PUBLIC_BASE_URL}/premium`, // Redirection après gestion
-        });
-
-        return NextResponse.json({ url: session.url });
-    } catch (err: unknown) {
-        const errorMessage = err instanceof Error ? err.message : "Erreur serveur";
-        console.error("Erreur création portail Stripe:", err);
-        return NextResponse.json({ error: errorMessage }, { status: 500 });
-    }
-}
-</file>
-
-<file path="app/api/webhook/stripe/route.ts">
-// app/api/webhook/stripe/route.ts
-import { NextResponse } from 'next/server';
-import { headers } from 'next/headers';
-import Stripe from 'stripe';
-import { getAdminFirestore } from '@/lib/firebase-admin';
-import { FieldValue } from 'firebase-admin/firestore';
-
-// Init Stripe Server-Side
-// CORRECTION 1 : Mise à jour de la version API demandée par ton erreur
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: '2025-11-17.clover', // Version spécifique demandée par TypeScript
-});
-
-export async function POST(req: Request) {
-  const body = await req.text();
-  
-  // CORRECTION 2 : headers() est async dans Next.js 15, il faut await
-  const headerList = await headers();
-  const signature = headerList.get('Stripe-Signature') as string;
-
-  let event: Stripe.Event;
-
-  try {
-    event = stripe.webhooks.constructEvent(
-        body, 
-        signature, 
-        process.env.STRIPE_WEBHOOK_SECRET!
-    );
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  } catch (error: any) {
-    console.error("Webhook signature failed", error.message);
-    return new NextResponse(`Webhook Error: ${error.message}`, { status: 400 });
-  }
-
-  const db = getAdminFirestore();
-
-  try {
-      switch (event.type) {
-        
-        // CAS 1 : NOUVEL ABONNEMENT PAYÉ
-        case 'checkout.session.completed': {
-          const session = event.data.object as Stripe.Checkout.Session;
-          const userId = session.client_reference_id; 
-          
-          if (userId) {
-            await db.collection('users').doc(userId).set({
-              isPremium: true,
-              stripeCustomerId: session.customer as string,
-              stripeSubscriptionId: session.subscription as string,
-              premiumSince: FieldValue.serverTimestamp(),
-            }, { merge: true });
-            console.log(`✅ User ${userId} passed Premium`);
-          }
-          break;
-        }
-
-        // CAS 2 : ABONNEMENT SUPPRIMÉ (Annulation ou Défaut de paiement)
-        case 'customer.subscription.deleted': {
-          const subscription = event.data.object as Stripe.Subscription;
-          const stripeSubId = subscription.id;
-
-          const snapshot = await db.collection('users')
-            .where('stripeSubscriptionId', '==', stripeSubId)
-            .get();
-
-          if (!snapshot.empty) {
-            const batch = db.batch();
-            snapshot.docs.forEach(doc => {
-                batch.update(doc.ref, { 
-                    isPremium: false,
-                    premiumEndedAt: FieldValue.serverTimestamp()
-                });
-            });
-            await batch.commit();
-            console.log(`Subscription ${stripeSubId} deleted. User downgraded.`);
-          }
-          break;
-        }
-      }
-  } catch (err) {
-      console.error("Firebase update error", err);
-      return new NextResponse("Server Error", { status: 500 });
-  }
-
-  return NextResponse.json({ received: true });
-}
-</file>
-
 <file path="app/login/page.tsx">
 // Fichier : app/login/page.tsx
 
@@ -561,50 +437,6 @@ import { type ThemeProviderProps } from 'next-themes'; // corrigé l'import
 
 export function ThemeProvider({ children, ...props }: ThemeProviderProps) {
   return <NextThemesProvider {...props}>{children}</NextThemesProvider>;
-}
-</file>
-
-<file path="components/ThemeToggle.tsx">
-'use client';
-
-import { useState, useEffect } from 'react';
-import { useTheme } from 'next-themes';
-
-export default function ThemeToggle() {
-  const [mounted, setMounted] = useState(false);
-  const { theme, setTheme } = useTheme();
-
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setMounted(true);
-  }, []);
-
-  // Si pas encore monté (côté serveur), on renvoie un carré vide de la même taille
-  // pour éviter le décalage visuel (Layout Shift)
-  if (!mounted) {
-    return <div className="w-9 h-9 p-2" />; 
-  }
-
-  return (
-    <button
-      onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-      className="p-2 rounded-lg bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-yellow-400 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
-      title="Changer de thème"
-      aria-label="Changer de thème"
-    >
-      {theme === 'dark' ? (
-        // LUNE (Mode Nuit actif -> clique pour passer en Jour)
-        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5">
-          <path strokeLinecap="round" strokeLinejoin="round" d="M21.752 15.002A9.72 9.72 0 0 1 18 15.75c-5.385 0-9.75-4.365-9.75-9.75 0-1.33.266-2.597.748-3.752A9.753 9.753 0 0 0 3 11.25C3 16.635 7.365 21 12.75 21a9.753 9.753 0 0 0 9.002-5.998Z" />
-        </svg>
-      ) : (
-        // SOLEIL (Mode Jour actif -> clique pour passer en Nuit)
-        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5 text-orange-500">
-          <path strokeLinecap="round" strokeLinejoin="round" d="M12 3v2.25m6.364.386-1.591 1.591M21 12h-2.25m-.386 6.364-1.591-1.591M12 18.75V21m-4.773-4.227-1.591 1.591M5.25 12H3m4.227-4.773L5.636 5.636M15.75 12a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0Z" />
-        </svg>
-      )}
-    </button>
-  );
 }
 </file>
 
@@ -1254,31 +1086,86 @@ export async function executeManualTrade(
 }
 </file>
 
-<file path="app/globals.css">
-@import "tailwindcss";
+<file path="app/api/webhook/stripe/route.ts">
+// app/api/webhook/stripe/route.ts
+import { NextResponse } from 'next/server';
+import { headers } from 'next/headers';
+import Stripe from 'stripe';
+import { getAdminFirestore } from '@/lib/firebase-admin';
+import { FieldValue } from 'firebase-admin/firestore';
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+export async function POST(req: Request) {
+  // CORRECTION : Initialisation Lazy (au moment de la requête)
+  const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
+    apiVersion: '2025-11-17.clover',
+  });
 
-/* MODIFICATION ICI : On utilise le sélecteur .dark au lieu de @media */
-.dark {
-  --background: #0a0a0a;
-  --foreground: #ededed;
-}
+  const body = await req.text();
+  const headerList = await headers();
+  const signature = headerList.get('Stripe-Signature') as string;
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
+  let event: Stripe.Event;
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  try {
+    event = stripe.webhooks.constructEvent(
+        body, 
+        signature, 
+        process.env.STRIPE_WEBHOOK_SECRET!
+    );
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  } catch (error: any) {
+    console.error("Webhook signature failed", error.message);
+    return new NextResponse(`Webhook Error: ${error.message}`, { status: 400 });
+  }
+
+  const db = getAdminFirestore();
+
+  try {
+      switch (event.type) {
+        case 'checkout.session.completed': {
+          const session = event.data.object as Stripe.Checkout.Session;
+          const userId = session.client_reference_id; 
+          
+          if (userId) {
+            await db.collection('users').doc(userId).set({
+              isPremium: true,
+              stripeCustomerId: session.customer as string,
+              stripeSubscriptionId: session.subscription as string,
+              premiumSince: FieldValue.serverTimestamp(),
+            }, { merge: true });
+            console.log(`✅ User ${userId} passed Premium`);
+          }
+          break;
+        }
+
+        case 'customer.subscription.deleted': {
+          const subscription = event.data.object as Stripe.Subscription;
+          const stripeSubId = subscription.id;
+
+          const snapshot = await db.collection('users')
+            .where('stripeSubscriptionId', '==', stripeSubId)
+            .get();
+
+          if (!snapshot.empty) {
+            const batch = db.batch();
+            snapshot.docs.forEach(doc => {
+                batch.update(doc.ref, { 
+                    isPremium: false,
+                    premiumEndedAt: FieldValue.serverTimestamp()
+                });
+            });
+            await batch.commit();
+            console.log(`Subscription ${stripeSubId} deleted. User downgraded.`);
+          }
+          break;
+        }
+      }
+  } catch (err) {
+      console.error("Firebase update error", err);
+      return new NextResponse("Server Error", { status: 500 });
+  }
+
+  return NextResponse.json({ received: true });
 }
 </file>
 
@@ -1390,6 +1277,53 @@ export default function PremiumPage() {
             )}
         </div>
     );
+}
+</file>
+
+<file path="components/ThemeToggle.tsx">
+'use client';
+
+import { useState, useEffect } from 'react';
+import { useTheme } from 'next-themes';
+
+export default function ThemeToggle() {
+  const [mounted, setMounted] = useState(false);
+  const { theme, setTheme } = useTheme();
+
+  useEffect(() => {
+    // Cette ligne est nécessaire pour éviter l'erreur "hydration mismatch"
+    // Le linter râle car on set un state dans un effect sans dépendance,
+    // mais c'est le comportement voulu ici.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    setMounted(true);
+  }, []);
+
+  // Si pas encore monté (côté serveur), on renvoie un carré vide de la même taille
+  // pour éviter le décalage visuel (Layout Shift)
+  if (!mounted) {
+    return <div className="w-9 h-9 p-2" />; 
+  }
+
+  return (
+    <button
+      onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+      className="p-2 rounded-lg bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-yellow-400 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+      title="Changer de thème"
+      aria-label="Changer de thème"
+    >
+      {theme === 'dark' ? (
+        // LUNE (Mode Nuit actif -> clique pour passer en Jour)
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5">
+          <path strokeLinecap="round" strokeLinejoin="round" d="M21.752 15.002A9.72 9.72 0 0 1 18 15.75c-5.385 0-9.75-4.365-9.75-9.75 0-1.33.266-2.597.748-3.752A9.753 9.753 0 0 0 3 11.25C3 16.635 7.365 21 12.75 21a9.753 9.753 0 0 0 9.002-5.998Z" />
+        </svg>
+      ) : (
+        // SOLEIL (Mode Jour actif -> clique pour passer en Nuit)
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5 text-orange-500">
+          <path strokeLinecap="round" strokeLinejoin="round" d="M12 3v2.25m6.364.386-1.591 1.591M21 12h-2.25m-.386 6.364-1.591-1.591M12 18.75V21m-4.773-4.227-1.591 1.591M5.25 12H3m4.227-4.773L5.636 5.636M15.75 12a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0Z" />
+        </svg>
+      )}
+    </button>
+  );
 }
 </file>
 
@@ -1603,6 +1537,72 @@ const nextConfig: NextConfig = {
 };
 
 export default nextConfig;
+</file>
+
+<file path="app/api/portal/route.ts">
+// app/api/portal/route.ts
+import { NextResponse } from 'next/server';
+import Stripe from 'stripe';
+
+export async function POST(req: Request) {
+    try {
+        // On initialise Stripe ICI, à l'intérieur de la fonction
+        // Cela évite de faire planter le build si la clé n'est pas encore là
+        const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
+            apiVersion: '2025-11-17.clover', 
+        });
+
+        const body = await req.json();
+        const { customerId } = body; 
+
+        if (!customerId) {
+             return NextResponse.json({ error: "Customer ID manquant" }, { status: 400 });
+        }
+
+        const session = await stripe.billingPortal.sessions.create({
+            customer: customerId,
+            return_url: `${process.env.NEXT_PUBLIC_BASE_URL}/premium`,
+        });
+
+        return NextResponse.json({ url: session.url });
+        
+    } catch (err: unknown) {
+        console.error("Erreur création portail Stripe:", err);
+        let errorMessage = "Erreur serveur";
+        if (err instanceof Error) errorMessage = err.message;
+        else if (typeof err === 'string') errorMessage = err;
+        return NextResponse.json({ error: errorMessage }, { status: 500 });
+    }
+}
+</file>
+
+<file path="app/globals.css">
+@import "tailwindcss";
+
+:root {
+  /* MODE CLAIR : On met un gris très pâle au lieu du blanc pur */
+  --background: #f9fafb; /* gray-50 */
+  --foreground: #111827; /* gray-900 */
+}
+
+/* MODE SOMBRE */
+.dark {
+  --background: #0a0a0a;
+  --foreground: #ededed;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: Arial, Helvetica, sans-serif;
+}
 </file>
 
 <file path="app/trades/new/[uid]/page.tsx">
@@ -4563,250 +4563,6 @@ export function useCardCollection(
 }
 </file>
 
-<file path="components/MagicCard.tsx">
-'use client';
-
-import { useState, useEffect, memo } from 'react';
-
-type MagicCardProps = {
-  id?: string;
-  name: string;
-  imageUrl: string;
-  imageBackUrl?: string | null;
-  quantity?: number;
-  price?: number;
-  customPrice?: number; 
-  setName?: string;
-  
-  isFoil?: boolean;
-  isSpecificVersion?: boolean;
-  isForTrade?: boolean; 
-  
-  onIncrement?: () => void;
-  onDecrement?: () => void;
-  onMove?: () => void;
-  
-  onEditPrice?: (newPrice: number) => void;
-  onToggleAttribute?: (field: 'isFoil' | 'isSpecificVersion' | 'isForTrade', currentValue: boolean) => void;
-  
-  isWishlist?: boolean;
-  readOnly?: boolean;
-  isTradeView?: boolean;
-  allowPriceEdit?: boolean;
-
-  isSelectMode?: boolean;
-  isSelected?: boolean;
-  onSelect?: () => void;
-};
-
-const CARD_BACK_URL = "https://cards.scryfall.io/large/front/a/6/a6984342-f723-4e80-8e69-902d287a915f.jpg";
-
-function MagicCard(props: MagicCardProps) {
-  const { 
-      name, imageUrl, imageBackUrl, quantity = 1, 
-      price, customPrice, setName, 
-      isFoil, isSpecificVersion, isForTrade,
-      isTradeView, allowPriceEdit, 
-      onEditPrice, onToggleAttribute, 
-      readOnly, isWishlist,
-      onIncrement, onDecrement, onMove,
-      isSelectMode, isSelected, onSelect
-  } = props;
-  
-  const [isFlipped, setIsFlipped] = useState(false);
-  const [isEditingPrice, setIsEditingPrice] = useState(false);
-  const [tempPrice, setTempPrice] = useState(customPrice?.toString() || price?.toString() || "0");
-
-  useEffect(() => {
-    if (!isEditingPrice) {
-        const newVal = customPrice?.toString() || price?.toString() || "0";
-        setTempPrice(prev => (prev !== newVal ? newVal : prev));
-    }
-  }, [customPrice, price, isEditingPrice]);
-
-  const effectivePrice = customPrice !== undefined ? customPrice : (price || 0);
-
-  const handleSavePrice = () => {
-      if (onEditPrice) {
-          onEditPrice(parseFloat(tempPrice));
-          setIsEditingPrice(false);
-      }
-  };
-
-  const currentImage = isFlipped && imageBackUrl ? imageBackUrl : imageUrl;
-
-  const handleCardClick = () => {
-      if (isSelectMode && onSelect) {
-          onSelect();
-      } else if (imageBackUrl) {
-          setIsFlipped(!isFlipped);
-      }
-  };
-
-  // --- VUE LISTE (TRADE) ---
-  if (isTradeView) {
-      return (
-        <div className="flex items-center gap-3 bg-white dark:bg-gray-800 p-2 rounded-lg border border-gray-100 dark:border-gray-700 content-visibility-auto">
-            <div className="w-10 h-14 bg-gray-200 rounded overflow-hidden flex-shrink-0 relative group cursor-pointer" onClick={() => setIsFlipped(!isFlipped)}>
-                 <img src={currentImage} className="w-full h-full object-cover" alt={name} loading="lazy" />
-                 {isFoil && <div className="absolute top-0 right-0 bg-purple-600/80 text-white text-[8px] px-1 font-bold">FOIL</div>}
-            </div>
-            
-            <div className="flex-grow min-w-0">
-                <div className="flex items-center gap-2">
-                    <p className="font-bold text-sm truncate" title={name}>{name}</p>
-                    {isFoil && <span className="text-xs font-bold text-purple-600">FOIL</span>}
-                </div>
-                <div className="flex items-center gap-2 text-xs text-gray-500">
-                    <p className="truncate">{setName}</p>
-                    {isSpecificVersion && <span className="bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300 px-1 rounded text-[9px] border border-blue-200">EXACT</span>}
-                </div>
-            </div>
-
-            <div className="text-right flex flex-col items-end">
-                {isEditingPrice ? (
-                    <div className="flex items-center gap-1">
-                        <input type="number" value={tempPrice} onChange={(e) => setTempPrice(e.target.value)} className="w-16 p-1 text-xs border rounded text-black" autoFocus />
-                        <button onClick={handleSavePrice} className="text-green-600 text-xs font-bold">OK</button>
-                    </div>
-                ) : (
-                    <div 
-                        className={`font-bold text-sm ${customPrice ? 'text-orange-600' : 'text-gray-700 dark:text-gray-300'} ${allowPriceEdit ? 'cursor-pointer hover:underline' : ''}`}
-                        onClick={() => { if (allowPriceEdit) { setTempPrice(effectivePrice.toString()); setIsEditingPrice(true); }}}
-                        title={customPrice ? "Prix personnalise" : "Prix Scryfall"}
-                    >
-                        {effectivePrice.toFixed(2)} EUR
-                        {customPrice && <span className="text-[8px] align-top ml-0.5">*</span>}
-                    </div>
-                )}
-            </div>
-        </div>
-      );
-  }
-
-  // --- VUE NORMALE (GRILLE) ---
-  return (
-    <div 
-        onClick={handleCardClick}
-        className={`relative group flex flex-col bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden p-3 gap-2 border transition-all duration-200 h-full content-visibility-auto
-        ${isSelected 
-            ? 'border-blue-500 ring-2 ring-blue-500 bg-blue-50 dark:bg-blue-900/20' 
-            : isFoil 
-                ? 'border-purple-300 dark:border-purple-800' 
-                : 'border-gray-100 dark:border-gray-700 hover:border-blue-300 dark:hover:border-blue-500'
-        }
-        ${isSelectMode ? 'cursor-pointer' : ''}
-        `}
-    >
-      
-
-      {isSelectMode && (
-          <div className="absolute top-2 right-2 z-30 pointer-events-none">
-              <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center transition-colors shadow-sm ${isSelected ? 'bg-blue-600 border-blue-600' : 'bg-white/90 border-gray-400'}`}>
-                  {isSelected && <span className="text-white text-sm font-bold">V</span>}
-              </div>
-          </div>
-      )}
-
-      <div className="relative w-full aspect-[2.5/3.5] bg-gray-200 rounded-lg overflow-hidden shrink-0">
-        <img
-          src={currentImage || CARD_BACK_URL}
-          alt={name}
-          loading="lazy"
-          className="w-full h-full object-cover transition-transform duration-300"
-          onError={(e) => { e.currentTarget.src = CARD_BACK_URL; }}
-        />
-        {isFoil && <div className="absolute inset-0 bg-gradient-to-tr from-purple-500/20 to-transparent pointer-events-none mix-blend-overlay"></div>}
-
-        {imageBackUrl && !isSelectMode && (
-          <button onClick={(e) => { e.stopPropagation(); setIsFlipped(!isFlipped); }} className="absolute top-1/2 right-2 -translate-y-1/2 bg-black/50 hover:bg-black/80 text-white p-2 rounded-full backdrop-blur-sm transition-all shadow-lg border border-white/20 z-10 pointer-events-auto font-bold text-xs">
-            FLIP
-          </button>
-        )}
-      </div>
-      
-      <div className="flex-1 flex flex-col min-w-0">
-        <div className="flex justify-between items-start mb-1">
-            <h3 className="font-bold text-sm md:text-base truncate flex-grow" title={name}>{name}</h3>
-        </div>
-        
-        <p className="text-xs text-blue-600 dark:text-blue-400 truncate font-medium mb-2">{setName}</p>
-
-        <div className={`flex flex-wrap gap-1.5 mb-2 ${isSelectMode ? 'pointer-events-none opacity-50' : ''}`}>
-            
-            {onToggleAttribute ? (
-                <button 
-                    onClick={(e) => { e.stopPropagation(); onToggleAttribute('isFoil', !!isFoil); }}
-                    className={`text-[10px] px-2 py-0.5 rounded border transition-colors font-medium flex-1 text-center ${
-                        isFoil 
-                        ? 'bg-purple-100 text-purple-700 border-purple-200 hover:bg-purple-200 dark:bg-purple-900/30 dark:text-purple-300' 
-                        : 'bg-gray-50 text-gray-400 border-gray-200 hover:bg-gray-100 dark:bg-gray-800 dark:border-gray-600'
-                    }`}
-                >
-                    {isFoil ? 'Foil' : 'Normal'}
-                </button>
-            ) : isFoil && ( <span className="text-[10px] bg-purple-100 text-purple-700 px-2 py-0.5 rounded border border-purple-200 font-medium">Foil</span> )}
-
-            {isWishlist ? (
-                onToggleAttribute && (
-                    <button 
-                        onClick={(e) => { e.stopPropagation(); onToggleAttribute('isSpecificVersion', !!isSpecificVersion); }}
-                        className={`text-[10px] px-2 py-0.5 rounded border transition-colors font-medium flex-1 text-center ${
-                            isSpecificVersion ? 'bg-blue-100 text-blue-700 border-blue-200' : 'bg-gray-50 text-gray-400 border-gray-200'
-                        }`}
-                    >
-                        {isSpecificVersion ? 'Exact' : 'Auto'}
-                    </button>
-                )
-            ) : (
-                onToggleAttribute && (
-                    <button 
-                        onClick={(e) => { e.stopPropagation(); onToggleAttribute('isForTrade', !!isForTrade); }}
-                        className={`text-[10px] px-2 py-0.5 rounded border transition-colors font-medium flex-1 text-center ${
-                            isForTrade 
-                            ? 'bg-green-100 text-green-700 border-green-200 hover:bg-green-200 dark:bg-green-900/30 dark:text-green-300' 
-                            : 'bg-gray-50 text-gray-400 border-gray-200 hover:bg-gray-100 dark:bg-gray-800 dark:border-gray-600'
-                        }`}
-                    >
-                        {isForTrade ? 'Echange' : 'Prive'}
-                    </button>
-                )
-            )}
-            
-            {/* LE BOUTON ACHETÉ RESTE ICI */}
-            {isWishlist && !readOnly && !isSelectMode && onMove && (
-                <button 
-                    onClick={(e) => { e.stopPropagation(); onMove(); }}
-                    className="text-[10px] px-2 py-0.5 rounded border transition-colors font-bold flex-1 text-center bg-green-50 text-green-700 border-green-200 hover:bg-green-100 dark:bg-green-900/30 dark:text-green-300 dark:border-green-800"
-                    title="Deplacer vers Collection"
-                >
-                    Achete
-                </button>
-            )}
-        </div>
-        
-        <div className={`mt-auto flex justify-between items-end border-t border-gray-100 dark:border-gray-700 pt-2 ${isSelectMode ? 'pointer-events-none opacity-50' : ''}`}>
-          <div className="flex items-center gap-1.5">
-            {!readOnly && <button onClick={(e) => {e.stopPropagation(); onDecrement?.()}} className="bg-gray-200 dark:bg-gray-700 w-6 h-6 rounded hover:bg-gray-300 font-bold flex items-center justify-center text-sm">-</button>}
-            <span className={`font-mono text-base ${readOnly ? 'font-bold text-gray-800 dark:text-white' : 'w-4 text-center'}`}>{readOnly && "x"}{quantity}</span>
-            {!readOnly && <button onClick={(e) => {e.stopPropagation(); onIncrement?.()}} className="bg-blue-100 dark:bg-blue-900 text-blue-600 font-bold w-6 h-6 rounded hover:bg-blue-200 flex items-center justify-center text-sm">+</button>}
-          </div>
-          
-          <div className="text-right">
-             <p className="text-[10px] text-gray-400">Unit: {effectivePrice.toFixed(2)}</p>
-             <p className={`font-bold text-sm ${customPrice ? 'text-orange-600' : 'text-gray-700 dark:text-gray-200'}`}>
-                 {(effectivePrice * quantity).toFixed(2)} EUR
-             </p>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-export default memo(MagicCard);
-</file>
-
 <file path="app/wishlist/page.tsx">
 // app/wishlist/page.tsx
 'use client';
@@ -4936,6 +4692,255 @@ export default function WishlistPage() {
     </main>
   );
 }
+</file>
+
+<file path="components/MagicCard.tsx">
+'use client';
+
+import { useState, useEffect, memo } from 'react';
+
+type MagicCardProps = {
+  id?: string;
+  name: string;
+  imageUrl: string;
+  imageBackUrl?: string | null;
+  quantity?: number;
+  price?: number;
+  customPrice?: number; 
+  setName?: string;
+  
+  isFoil?: boolean;
+  isSpecificVersion?: boolean;
+  isForTrade?: boolean; 
+  
+  onIncrement?: () => void;
+  onDecrement?: () => void;
+  onMove?: () => void;
+  
+  onEditPrice?: (newPrice: number) => void;
+  onToggleAttribute?: (field: 'isFoil' | 'isSpecificVersion' | 'isForTrade', currentValue: boolean) => void;
+  
+  isWishlist?: boolean;
+  readOnly?: boolean;
+  isTradeView?: boolean;
+  allowPriceEdit?: boolean;
+
+  isSelectMode?: boolean;
+  isSelected?: boolean;
+  onSelect?: () => void;
+};
+
+const CARD_BACK_URL = "https://cards.scryfall.io/large/front/a/6/a6984342-f723-4e80-8e69-902d287a915f.jpg";
+
+function MagicCard(props: MagicCardProps) {
+  const { 
+      name, imageUrl, imageBackUrl, quantity = 1, 
+      price, customPrice, setName, 
+      isFoil, isSpecificVersion, isForTrade,
+      isTradeView, allowPriceEdit, 
+      onEditPrice, onToggleAttribute, 
+      readOnly, isWishlist,
+      onIncrement, onDecrement, onMove,
+      isSelectMode, isSelected, onSelect
+  } = props;
+  
+  const [isFlipped, setIsFlipped] = useState(false);
+  const [isEditingPrice, setIsEditingPrice] = useState(false);
+  const [tempPrice, setTempPrice] = useState(customPrice?.toString() || price?.toString() || "0");
+
+  useEffect(() => {
+    if (!isEditingPrice) {
+        const newVal = customPrice?.toString() || price?.toString() || "0";
+        setTempPrice(prev => (prev !== newVal ? newVal : prev));
+    }
+  }, [customPrice, price, isEditingPrice]);
+
+  const effectivePrice = customPrice !== undefined ? customPrice : (price || 0);
+
+  const handleSavePrice = () => {
+      if (onEditPrice) {
+          onEditPrice(parseFloat(tempPrice));
+          setIsEditingPrice(false);
+      }
+  };
+
+  const currentImage = isFlipped && imageBackUrl ? imageBackUrl : imageUrl;
+
+  const handleCardClick = () => {
+      if (isSelectMode && onSelect) {
+          onSelect();
+      } else if (imageBackUrl) {
+          setIsFlipped(!isFlipped);
+      }
+  };
+
+  // --- VUE LISTE (TRADE) ---
+  if (isTradeView) {
+      return (
+        <div className="flex items-center gap-3 bg-white dark:bg-gray-800 p-2 rounded-lg border border-gray-100 dark:border-gray-700 content-visibility-auto">
+            <div className="w-10 h-14 bg-gray-200 rounded overflow-hidden flex-shrink-0 relative group cursor-pointer" onClick={() => setIsFlipped(!isFlipped)}>
+                 <img src={currentImage} className="w-full h-full object-cover" alt={name} loading="lazy" />
+                 {isFoil && <div className="absolute top-0 right-0 bg-purple-600/80 text-white text-[8px] px-1 font-bold">FOIL</div>}
+            </div>
+            
+            <div className="flex-grow min-w-0">
+                <div className="flex items-center gap-2">
+                    <p className="font-bold text-sm truncate" title={name}>{name}</p>
+                    {isFoil && <span className="text-xs font-bold text-purple-600">FOIL</span>}
+                </div>
+                <div className="flex items-center gap-2 text-xs text-gray-500">
+                    <p className="truncate">{setName}</p>
+                    {isSpecificVersion && <span className="bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300 px-1 rounded text-[9px] border border-blue-200">EXACT</span>}
+                </div>
+            </div>
+
+            <div className="text-right flex flex-col items-end">
+                {isEditingPrice ? (
+                    <div className="flex items-center gap-1">
+                        <input type="number" value={tempPrice} onChange={(e) => setTempPrice(e.target.value)} className="w-16 p-1 text-xs border rounded text-black" autoFocus />
+                        <button onClick={handleSavePrice} className="text-green-600 text-xs font-bold">OK</button>
+                    </div>
+                ) : (
+                    <div 
+                        className={`font-bold text-sm ${customPrice ? 'text-orange-600' : 'text-gray-700 dark:text-gray-300'} ${allowPriceEdit ? 'cursor-pointer hover:underline' : ''}`}
+                        onClick={() => { if (allowPriceEdit) { setTempPrice(effectivePrice.toString()); setIsEditingPrice(true); }}}
+                        title={customPrice ? "Prix personnalise" : "Prix Scryfall"}
+                    >
+                        {effectivePrice.toFixed(2)} EUR
+                        {customPrice && <span className="text-[8px] align-top ml-0.5">*</span>}
+                    </div>
+                )}
+            </div>
+        </div>
+      );
+  }
+
+  // --- VUE NORMALE (GRILLE) ---
+  return (
+    <div 
+        onClick={handleCardClick}
+        className={`relative group flex flex-col rounded-lg overflow-hidden p-3 gap-2 border transition-all duration-200 h-full content-visibility-auto
+        
+        /* MODIFICATION ICI : Gestion des fonds et ombres */
+        bg-white dark:bg-gray-800 
+        shadow-sm hover:shadow-md dark:shadow-none
+        
+        ${isSelected 
+            ? 'border-blue-500 ring-2 ring-blue-500 bg-blue-50 dark:bg-blue-900/20' 
+            : isFoil 
+                ? 'border-purple-300 dark:border-purple-800' 
+                : 'border-gray-200 dark:border-gray-700 hover:border-blue-300 dark:hover:border-blue-500' // border-gray-200 est important en Light mode
+        }
+        ${isSelectMode ? 'cursor-pointer' : ''}
+        `}
+    >
+      
+
+      {isSelectMode && (
+          <div className="absolute top-2 right-2 z-30 pointer-events-none">
+              <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center transition-colors shadow-sm ${isSelected ? 'bg-blue-600 border-blue-600' : 'bg-white/90 border-gray-400'}`}>
+                  {isSelected && <span className="text-white text-sm font-bold">V</span>}
+              </div>
+          </div>
+      )}
+
+      <div className="relative w-full aspect-[2.5/3.5] bg-gray-200 rounded-lg overflow-hidden shrink-0">
+        <img
+          src={currentImage || CARD_BACK_URL}
+          alt={name}
+          loading="lazy"
+          className="w-full h-full object-cover transition-transform duration-300"
+          onError={(e) => { e.currentTarget.src = CARD_BACK_URL; }}
+        />
+        {isFoil && <div className="absolute inset-0 bg-gradient-to-tr from-purple-500/20 to-transparent pointer-events-none mix-blend-overlay"></div>}
+
+        {imageBackUrl && !isSelectMode && (
+          <button onClick={(e) => { e.stopPropagation(); setIsFlipped(!isFlipped); }} className="absolute top-1/2 right-2 -translate-y-1/2 bg-black/50 hover:bg-black/80 text-white p-2 rounded-full backdrop-blur-sm transition-all shadow-lg border border-white/20 z-10 pointer-events-auto font-bold text-xs">
+            FLIP
+          </button>
+        )}
+      </div>
+      
+      <div className="flex-1 flex flex-col min-w-0">
+        <div className="flex justify-between items-start mb-1">
+            <h3 className="font-bold text-sm md:text-base truncate flex-grow" title={name}>{name}</h3>
+        </div>
+        
+        <p className="text-xs text-blue-600 dark:text-blue-400 truncate font-medium mb-2">{setName}</p>
+
+        <div className={`flex flex-wrap gap-1.5 mb-2 ${isSelectMode ? 'pointer-events-none opacity-50' : ''}`}>
+            
+            {onToggleAttribute ? (
+                <button 
+                    onClick={(e) => { e.stopPropagation(); onToggleAttribute('isFoil', !!isFoil); }}
+                    className={`text-[10px] px-2 py-0.5 rounded border transition-colors font-medium flex-1 text-center ${
+                        isFoil 
+                        ? 'bg-purple-100 text-purple-700 border-purple-200 hover:bg-purple-200 dark:bg-purple-900/30 dark:text-purple-300' 
+                        : 'bg-gray-50 text-gray-400 border-gray-200 hover:bg-gray-100 dark:bg-gray-800 dark:border-gray-600'
+                    }`}
+                >
+                    {isFoil ? 'Foil' : 'Normal'}
+                </button>
+            ) : isFoil && ( <span className="text-[10px] bg-purple-100 text-purple-700 px-2 py-0.5 rounded border border-purple-200 font-medium">Foil</span> )}
+
+            {isWishlist ? (
+                onToggleAttribute && (
+                    <button 
+                        onClick={(e) => { e.stopPropagation(); onToggleAttribute('isSpecificVersion', !!isSpecificVersion); }}
+                        className={`text-[10px] px-2 py-0.5 rounded border transition-colors font-medium flex-1 text-center ${
+                            isSpecificVersion ? 'bg-blue-100 text-blue-700 border-blue-200' : 'bg-gray-50 text-gray-400 border-gray-200'
+                        }`}
+                    >
+                        {isSpecificVersion ? 'Exact' : 'Auto'}
+                    </button>
+                )
+            ) : (
+                onToggleAttribute && (
+                    <button 
+                        onClick={(e) => { e.stopPropagation(); onToggleAttribute('isForTrade', !!isForTrade); }}
+                        className={`text-[10px] px-2 py-0.5 rounded border transition-colors font-medium flex-1 text-center ${
+                            isForTrade 
+                            ? 'bg-green-100 text-green-700 border-green-200 hover:bg-green-200 dark:bg-green-900/30 dark:text-green-300' 
+                            : 'bg-gray-50 text-gray-400 border-gray-200 hover:bg-gray-100 dark:bg-gray-800 dark:border-gray-600'
+                        }`}
+                    >
+                        {isForTrade ? 'Echange' : 'Prive'}
+                    </button>
+                )
+            )}
+            
+            {/* LE BOUTON ACHETÉ RESTE ICI */}
+            {isWishlist && !readOnly && !isSelectMode && onMove && (
+                <button 
+                    onClick={(e) => { e.stopPropagation(); onMove(); }}
+                    className="text-[10px] px-2 py-0.5 rounded border transition-colors font-bold flex-1 text-center bg-green-50 text-green-700 border-green-200 hover:bg-green-100 dark:bg-green-900/30 dark:text-green-300 dark:border-green-800"
+                    title="Deplacer vers Collection"
+                >
+                    Achete
+                </button>
+            )}
+        </div>
+        
+        <div className={`mt-auto flex justify-between items-end border-t border-gray-100 dark:border-gray-700 pt-2 ${isSelectMode ? 'pointer-events-none opacity-50' : ''}`}>
+          <div className="flex items-center gap-1.5">
+            {!readOnly && <button onClick={(e) => {e.stopPropagation(); onDecrement?.()}} className="bg-gray-200 dark:bg-gray-700 w-6 h-6 rounded hover:bg-gray-300 font-bold flex items-center justify-center text-sm">-</button>}
+            <span className={`font-mono text-base ${readOnly ? 'font-bold text-gray-800 dark:text-white' : 'w-4 text-center'}`}>{readOnly && "x"}{quantity}</span>
+            {!readOnly && <button onClick={(e) => {e.stopPropagation(); onIncrement?.()}} className="bg-blue-100 dark:bg-blue-900 text-blue-600 font-bold w-6 h-6 rounded hover:bg-blue-200 flex items-center justify-center text-sm">+</button>}
+          </div>
+          
+          <div className="text-right">
+             <p className="text-[10px] text-gray-400">Unit: {effectivePrice.toFixed(2)}</p>
+             <p className={`font-bold text-sm ${customPrice ? 'text-orange-600' : 'text-gray-700 dark:text-gray-200'}`}>
+                 {(effectivePrice * quantity).toFixed(2)} EUR
+             </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default memo(MagicCard);
 </file>
 
 <file path="app/page.tsx">

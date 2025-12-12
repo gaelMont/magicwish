@@ -1,15 +1,15 @@
 @import "tailwindcss";
 
 :root {
-  /* MODE CLAIR : On met un gris très pâle au lieu du blanc pur */
-  --background: #f9fafb; /* gray-50 */
-  --foreground: #111827; /* gray-900 */
+  /* MODE CLAIR : On quitte le blanc pur pour un "Slate" (Gris-Bleuté) très léger */
+  --background: #f8fafc; /* slate-50 */
+  --foreground: #0f172a; /* slate-900 */
 }
 
-/* MODE SOMBRE */
+/* MODE SOMBRE : On reste sur du profond */
 .dark {
-  --background: #0a0a0a;
-  --foreground: #ededed;
+  --background: #020617; /* slate-950 */
+  --foreground: #f8fafc; /* slate-50 */
 }
 
 @theme inline {
