@@ -138,7 +138,7 @@ export default function CollectionPage() {
                     ({filteredAndSortedCards.length})
                 </span>
             </h1>
-            <div className="flex-shrink-0 bg-blue-50 dark:bg-blue-900/30 text-blue-800 dark:text-blue-100 px-3 py-1.5 rounded-lg border border-blue-200 dark:border-blue-700 text-right">
+            <div className="shrink-0 bg-blue-50 dark:bg-blue-900/30 text-blue-800 dark:text-blue-100 px-3 py-1.5 rounded-lg border border-blue-200 dark:border-blue-700 text-right">
                 <span className="text-[10px] uppercase tracking-wide opacity-70 block">Total</span>
                 <span className="font-bold whitespace-nowrap">{totalPrice.toFixed(2)} EUR</span>
             </div>
@@ -149,7 +149,7 @@ export default function CollectionPage() {
         <div className="flex items-center gap-2 overflow-x-auto pb-2 -mx-4 px-4 md:mx-0 md:px-0 no-scrollbar">
            <button 
              onClick={() => { setIsSelectMode(!isSelectMode); setSelectedIds([]); }}
-             className={`flex-shrink-0 px-3 py-2 rounded-lg text-sm font-medium transition shadow-sm border flex items-center gap-2 whitespace-nowrap ${isSelectMode ? 'bg-blue-600 text-white border-blue-600' : 'bg-white hover:bg-gray-100 text-gray-700 border-gray-300 dark:bg-gray-800 dark:border-gray-600 dark:text-gray-200'}`}
+             className={`shrink-0 px-3 py-2 rounded-lg text-sm font-medium transition shadow-sm border flex items-center gap-2 whitespace-nowrap ${isSelectMode ? 'bg-blue-600 text-white border-blue-600' : 'bg-white hover:bg-gray-100 text-gray-700 border-gray-300 dark:bg-gray-800 dark:border-gray-600 dark:text-gray-200'}`}
            >
              {isSelectMode ? 'Annuler' : 'Selectionner'}
            </button>
@@ -158,18 +158,18 @@ export default function CollectionPage() {
                <>
                 <button 
                     onClick={() => setIsToolsOpen(true)}
-                    className="flex-shrink-0 bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200 px-3 py-2 rounded-lg text-sm font-medium transition shadow-sm border border-gray-200 dark:border-gray-600 flex items-center gap-2 whitespace-nowrap"
+                    className="shrink-0 bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200 px-3 py-2 rounded-lg text-sm font-medium transition shadow-sm border border-gray-200 dark:border-gray-600 flex items-center gap-2 whitespace-nowrap"
                 >
                     Gerer
                 </button>
 
-                <div className="flex-shrink-0">
+                <div className="shrink-0">
                     <DeleteAllButton targetCollection="collection" />
                 </div>
                 
                 <button 
                     onClick={() => setIsImportOpen(true)} 
-                    className="flex-shrink-0 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition shadow-sm whitespace-nowrap"
+                    className="shrink-0 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition shadow-sm whitespace-nowrap"
                 >
                     Importer CSV
                 </button>
@@ -181,7 +181,7 @@ export default function CollectionPage() {
       {/* FILTRES COMPACTS */}
       <div className="bg-white dark:bg-gray-800 p-4 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm mb-6">
           <div className="flex gap-2 items-center">
-              <div className="flex-grow">
+              <div className="grow">
                   <input 
                       type="text" 
                       placeholder="Rechercher une carte..." 
@@ -193,7 +193,7 @@ export default function CollectionPage() {
               {/* Bouton Toggle Filtres (Mobile uniquement) */}
               <button 
                 onClick={() => setShowFilters(!showFilters)}
-                className="md:hidden flex-shrink-0 px-3 py-2 bg-gray-100 dark:bg-gray-700 rounded-lg text-gray-600 dark:text-gray-300 border border-gray-300 dark:border-gray-600 text-sm font-medium"
+                className="md:hidden shrink-0 px-3 py-2 bg-gray-100 dark:bg-gray-700 rounded-lg text-gray-600 dark:text-gray-300 border border-gray-300 dark:border-gray-600 text-sm font-medium"
               >
                 {showFilters ? 'Masquer' : 'Filtres'}
               </button>

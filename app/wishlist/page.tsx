@@ -58,7 +58,7 @@ export default function WishlistPage() {
                         <div key={list.id} className="group flex items-center relative">
                             <button
                                 onClick={() => setSelectedListId(list.id)}
-                                className={`flex-grow text-left px-3 py-2.5 rounded-lg text-sm transition-all duration-200 ${
+                                className={`grow text-left px-3 py-2.5 rounded-lg text-sm transition-all duration-200 ${
                                     selectedListId === list.id 
                                     ? 'bg-blue-600 text-white shadow-md font-medium' 
                                     : 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300'
@@ -111,7 +111,7 @@ export default function WishlistPage() {
       </aside>
 
       {/* CONTENU PRINCIPAL */}
-      <section className="flex-grow min-w-0">
+      <section className="grow min-w-0">
           {selectedListId === 'GLOBAL_VIEW' ? (
               <GlobalWishlistView lists={lists} />
           ) : (

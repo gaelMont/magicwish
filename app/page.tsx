@@ -37,7 +37,7 @@ export default function DashboardPage() {
   if (!user) {
     return (
       <div className="flex flex-col items-center justify-center min-h-[80vh] text-center p-4">
-        <h1 className="text-5xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent mb-6">
+        <h1 className="text-5xl font-bold bg-linear-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent mb-6">
           MagicWish
         </h1>
         <p className="text-xl text-gray-600 dark:text-gray-300 max-w-lg mb-8">
@@ -116,7 +116,7 @@ export default function DashboardPage() {
                               <div className="w-10 h-14 bg-gray-200 rounded overflow-hidden shrink-0">
                                   <img src={card.imageUrl} className="w-full h-full object-cover" alt="" />
                               </div>
-                              <div className="flex-grow">
+                              <div className="grow">
                                   <p className="font-bold text-sm text-gray-900 dark:text-white">{card.name}</p>
                                   <p className="text-xs text-gray-500">{card.setName} {card.isFoil && 'Foil'}</p>
                               </div>
@@ -130,7 +130,7 @@ export default function DashboardPage() {
           </div>
 
           <div className="space-y-6">
-              <div className="bg-gradient-to-br from-purple-600 to-blue-600 rounded-xl p-6 text-white shadow-lg">
+              <div className="bg-linear-to-br from-purple-600 to-blue-600 rounded-xl p-6 text-white shadow-lg">
                   <h3 className="font-bold text-lg mb-2">Action Rapide</h3>
                   <p className="text-white/80 text-sm mb-6">Vous revenez de tournoi ou d&apos;ouverture de boosters ?</p>
                   

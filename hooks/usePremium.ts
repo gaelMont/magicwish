@@ -11,6 +11,7 @@ export function usePremium() {
 
   useEffect(() => {
     if (!user) {
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         setIsPremium(false);
         setLoading(false);
         return;

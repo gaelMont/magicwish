@@ -71,7 +71,7 @@ export default function GlobalWishlistView({ lists }: Props) {
 
     return (
         <div className="animate-in fade-in duration-300">
-             <div className="flex justify-between items-end mb-6 border-b pb-4 dark:border-gray-700 bg-gradient-to-r from-blue-50 to-transparent dark:from-blue-900/20 p-4 rounded-t-xl">
+             <div className="flex justify-between items-end mb-6 border-b pb-4 dark:border-gray-700 bg-linear-to-r from-blue-50 to-transparent dark:from-blue-900/20 p-4 rounded-t-xl">
                 <div>
                     <h2 className="text-2xl font-bold text-gray-800 dark:text-white flex items-center gap-2">
                         🌍 Vue Globale

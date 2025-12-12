@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
+import Image from 'next/image';
 import { useAuth } from '@/lib/AuthContext';
 import { useFriends, FriendProfile } from '@/hooks/useFriends';
 import toast from 'react-hot-toast';
@@ -76,7 +77,7 @@ export default function ContactsPage() {
                 <h2 className="font-bold text-lg mb-4 text-gray-800 dark:text-white">Chercher un ami</h2>
                 
                 <form onSubmit={handleSearch} className="flex gap-2 mb-4">
-                    <div className="relative flex-grow">
+                    <div className="relative grow">
                         <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">@</span>
                         <input 
                             type="text" 
@@ -99,8 +100,8 @@ export default function ContactsPage() {
                     {searchResults.map(result => (
                         <div key={result.uid} className="flex items-center justify-between bg-blue-50 dark:bg-blue-900/20 p-3 rounded-lg border border-blue-100 dark:border-blue-800 animate-in fade-in">
                             <div className="flex items-center gap-3">
-                                <div className="w-8 h-8 rounded-full bg-blue-200 flex items-center justify-center text-blue-700 font-bold text-xs overflow-hidden">
-                                    {result.photoURL ? <img src={result.photoURL} alt="" className="w-full h-full object-cover"/> : result.username[0].toUpperCase()}
+                                <div className="w-8 h-8 rounded-full bg-blue-200 flex items-center justify-center text-blue-700 font-bold text-xs overflow-hidden relative">
+                                    {result.photoURL ? <Image src={result.photoURL} alt="" fill className="object-cover" /> : result.username[0].toUpperCase()}
                                 </div>
                                 <div>
                                     <p className="font-bold text-sm text-gray-900 dark:text-white">{result.displayName}</p>
@@ -127,8 +128,8 @@ export default function ContactsPage() {
                         {requestsReceived.map(req => (
                             <div key={req.uid} className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
                                 <div className="flex items-center gap-3">
-                                    <div className="w-10 h-10 rounded-full bg-gray-300 overflow-hidden">
-                                        {req.photoURL ? <img src={req.photoURL} alt="" className="w-full h-full object-cover"/> : <span className="flex items-center justify-center h-full font-bold text-gray-500">{req.username[0].toUpperCase()}</span>}
+                                    <div className="w-10 h-10 rounded-full bg-gray-300 overflow-hidden relative">
+                                        {req.photoURL ? <Image src={req.photoURL} alt="" fill className="object-cover" /> : <span className="flex items-center justify-center h-full font-bold text-gray-500">{req.username[0].toUpperCase()}</span>}
                                     </div>
                                     <div>
                                         <p className="font-bold text-sm text-gray-900 dark:text-white">{req.displayName}</p>
@@ -163,8 +164,8 @@ export default function ContactsPage() {
                         <div key={friend.uid} className="group flex items-center justify-between p-3 hover:bg-gray-50 dark:hover:bg-gray-700/50 rounded-lg transition border border-transparent hover:border-gray-100 dark:hover:border-gray-600">
                             
                             <div className="flex items-center gap-3">
-                                <div className="w-10 h-10 rounded-full bg-gradient-to-br from-purple-500 to-blue-500 flex items-center justify-center text-white font-bold shadow-sm overflow-hidden">
-                                    {friend.photoURL ? <img src={friend.photoURL} alt="" className="w-full h-full object-cover" /> : friend.username[0].toUpperCase()}
+                                <div className="w-10 h-10 rounded-full bg-linear-to-br from-purple-500 to-blue-500 flex items-center justify-center text-white font-bold shadow-sm overflow-hidden relative">
+                                    {friend.photoURL ? <Image src={friend.photoURL} alt="" fill className="object-cover" /> : friend.username[0].toUpperCase()}
                                 </div>
                                 <div>
                                     <p className="font-bold text-gray-800 dark:text-gray-200">{friend.displayName}</p>

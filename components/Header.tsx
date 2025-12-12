@@ -4,6 +4,7 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { useAuth } from '@/lib/AuthContext';
 import { usePathname } from 'next/navigation';
+import ThemeToggle from './ThemeToggle';
 
 export default function Header() {
   const { user, logOut, friendRequestCount } = useAuth();
@@ -21,17 +22,23 @@ export default function Header() {
     <header className="bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-700 p-4 shadow-sm sticky top-0 z-40">
       <div className="container mx-auto">
         <div className="flex justify-between items-center">
+          {/* LOGO */}
           <Link 
             href="/" 
-            className="text-xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-purple-600 hover:opacity-80 transition"
+            className="text-xl font-bold text-transparent bg-clip-text bg-linear-to-r from-blue-600 to-purple-600 hover:opacity-80 transition"
             onClick={() => setIsMenuOpen(false)}
           >
             MagicWish
           </Link>
 
           <div className="flex items-center gap-4">
+            
+            {/* BOUTON THÈME (Visible par tout le monde) */}
+            <ThemeToggle />
+
             {user ? (
               <>
+                {/* MENU DESKTOP */}
                 <nav className="hidden md:flex gap-6 mr-4 items-center">
                   <Link href="/search" className={linkClass('/search')}>Recherche</Link> 
                   <Link href="/wishlist" className={linkClass('/wishlist')}>Wishlist</Link>
@@ -49,12 +56,13 @@ export default function Header() {
 
                 <div className="h-6 w-px bg-gray-300 dark:bg-gray-600 hidden md:block"></div>
 
+                {/* PROFIL & DÉCONNEXION */}
                 <div className="flex items-center gap-3">
                   {user.photoURL && (
                     <img 
                       src={user.photoURL} 
                       alt="Avatar" 
-                      className="w-8 h-8 rounded-full border border-gray-300"
+                      className="w-8 h-8 rounded-full border border-gray-300 dark:border-gray-600"
                       title={user.displayName || ''}
                     />
                   )}
@@ -65,6 +73,7 @@ export default function Header() {
                     Deconnexion
                   </button>
 
+                  {/* BOUTON BURGER (Mobile) */}
                   <button 
                     onClick={() => setIsMenuOpen(!isMenuOpen)}
                     className="md:hidden p-2 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg focus:outline-none"
@@ -74,6 +83,7 @@ export default function Header() {
                 </div>
               </>
             ) : (
+              // BOUTON LOGIN (Si pas connecté)
               <Link
                 href="/login"
                 className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 transition"
@@ -84,6 +94,7 @@ export default function Header() {
           </div>
         </div>
         
+        {/* MENU MOBILE DÉROULANT */}
         {user && isMenuOpen && (
           <div className="md:hidden mt-4 pt-4 border-t border-gray-100 dark:border-gray-800 animate-in slide-in-from-top-2 duration-200">
              <nav className="flex flex-col space-y-2">

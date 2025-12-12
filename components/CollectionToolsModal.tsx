@@ -63,7 +63,7 @@ export default function CollectionToolsModal({
                         </div>
                         <button 
                             onClick={() => onBulkTrade('excess', threshold)}
-                            className="flex-grow bg-green-600 hover:bg-green-700 text-white text-sm font-bold py-2 rounded-lg transition"
+                            className="grow bg-green-600 hover:bg-green-700 text-white text-sm font-bold py-2 rounded-lg transition"
                         >
                             Appliquer
                         </button>

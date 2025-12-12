@@ -76,7 +76,7 @@ export default function PremiumPage() {
             ) : (
                 // --- VUE VENTE ---
                 <>
-                    <h1 className="text-4xl font-bold mb-4 bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
+                    <h1 className="text-4xl font-bold mb-4 bg-linear-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
                         Passez Premium
                     </h1>
                     <p className="mb-8 text-gray-600 dark:text-gray-300 text-lg">
