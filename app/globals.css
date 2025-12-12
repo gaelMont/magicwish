@@ -1,11 +1,12 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  /* MODE CLAIR : On met un gris très pâle au lieu du blanc pur */
+  --background: #f9fafb; /* gray-50 */
+  --foreground: #111827; /* gray-900 */
 }
 
-/* MODIFICATION ICI : On utilise le sélecteur .dark au lieu de @media */
+/* MODE SOMBRE */
 .dark {
   --background: #0a0a0a;
   --foreground: #ededed;

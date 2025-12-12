@@ -122,12 +122,17 @@ function MagicCard(props: MagicCardProps) {
   return (
     <div 
         onClick={handleCardClick}
-        className={`relative group flex flex-col bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden p-3 gap-2 border transition-all duration-200 h-full content-visibility-auto
+        className={`relative group flex flex-col rounded-lg overflow-hidden p-3 gap-2 border transition-all duration-200 h-full content-visibility-auto
+        
+        /* MODIFICATION ICI : Gestion des fonds et ombres */
+        bg-white dark:bg-gray-800 
+        shadow-sm hover:shadow-md dark:shadow-none
+        
         ${isSelected 
             ? 'border-blue-500 ring-2 ring-blue-500 bg-blue-50 dark:bg-blue-900/20' 
             : isFoil 
                 ? 'border-purple-300 dark:border-purple-800' 
-                : 'border-gray-100 dark:border-gray-700 hover:border-blue-300 dark:hover:border-blue-500'
+                : 'border-gray-200 dark:border-gray-700 hover:border-blue-300 dark:hover:border-blue-500' // border-gray-200 est important en Light mode
         }
         ${isSelectMode ? 'cursor-pointer' : ''}
         `}
