@@ -11,29 +11,30 @@ export default function Header() {
   const pathname = usePathname();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
 
+  // Liens : Gris foncé par défaut, Bleu au survol. Pas de gras inutile.
   const linkClass = (path: string) => `
-    font-medium transition-colors block py-2 md:py-0
+    text-sm font-medium transition-colors block py-2 md:py-0
     ${pathname === path 
-      ? 'text-indigo-600 dark:text-indigo-400 font-bold' 
-      : 'text-slate-600 dark:text-slate-300 hover:text-indigo-600 dark:hover:text-indigo-400'}
+      ? 'text-blue-600 dark:text-blue-400' 
+      : 'text-zinc-600 dark:text-zinc-400 hover:text-blue-600 dark:hover:text-blue-300'}
   `;
 
   return (
-    // MODIF : bg-white/80 + backdrop-blur pour l'effet "Verre" moderne
-    <header className="bg-white/80 dark:bg-slate-950/80 backdrop-blur-md border-b border-slate-200 dark:border-slate-800 p-4 sticky top-0 z-40 transition-colors">
+    // Fond blanc simple avec une bordure très fine en bas
+    <header className="bg-white/90 dark:bg-zinc-950/90 backdrop-blur-sm border-b border-zinc-200 dark:border-zinc-800 p-4 sticky top-0 z-40">
       <div className="container mx-auto">
         <div className="flex justify-between items-center">
-          {/* LOGO AVEC DÉGRADÉ (PEPS) */}
+          
+          {/* LOGO : Simple, Noir (ou Blanc en dark), Gras. C'est tout. */}
           <Link 
             href="/" 
-            className="text-2xl font-black tracking-tight text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 hover:opacity-80 transition"
+            className="text-xl font-bold tracking-tight text-zinc-900 dark:text-white hover:opacity-70 transition"
             onClick={() => setIsMenuOpen(false)}
           >
             MagicWish
           </Link>
 
           <div className="flex items-center gap-4">
-            
             <ThemeToggle />
 
             {user ? (
@@ -46,34 +47,33 @@ export default function Header() {
                   <Link href="/contacts" className={`${linkClass('/contacts')} relative flex items-center gap-1`}>
                     Contacts
                     {friendRequestCount > 0 && (
-                      <span className="absolute -top-2 -right-3 bg-red-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full animate-bounce">
+                      <span className="absolute -top-1.5 -right-2 bg-red-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full">
                         {friendRequestCount}
                       </span>
                     )}
                   </Link>
                 </nav>
 
-                <div className="h-6 w-px bg-slate-200 dark:bg-slate-700 hidden md:block"></div>
+                <div className="h-5 w-px bg-zinc-200 dark:bg-zinc-700 hidden md:block"></div>
 
                 <div className="flex items-center gap-3">
                   {user.photoURL && (
                     <img 
                       src={user.photoURL} 
                       alt="Avatar" 
-                      className="w-8 h-8 rounded-full border-2 border-slate-200 dark:border-slate-700 shadow-sm"
-                      title={user.displayName || ''}
+                      className="w-8 h-8 rounded-full bg-zinc-100 dark:bg-zinc-800 object-cover border border-zinc-200 dark:border-zinc-700"
                     />
                   )}
                   <button
                     onClick={logOut}
-                    className="hidden md:block text-sm text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 px-3 py-1 rounded-lg transition font-medium"
+                    className="hidden md:block text-xs font-medium text-zinc-500 hover:text-red-600 transition"
                   >
                     Déconnexion
                   </button>
 
                   <button 
                     onClick={() => setIsMenuOpen(!isMenuOpen)}
-                    className="md:hidden p-2 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg focus:outline-none"
+                    className="md:hidden p-2 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-lg"
                   >
                     <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6">
                       <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" />
@@ -84,7 +84,7 @@ export default function Header() {
             ) : (
               <Link
                 href="/login"
-                className="bg-indigo-600 text-white px-5 py-2 rounded-full font-bold shadow-lg shadow-indigo-500/30 hover:bg-indigo-700 hover:scale-105 transition transform"
+                className="bg-zinc-900 dark:bg-white text-white dark:text-black px-4 py-2 rounded-lg text-sm font-medium hover:opacity-90 transition"
               >
                 Se connecter
               </Link>
@@ -92,26 +92,16 @@ export default function Header() {
           </div>
         </div>
         
-        {/* MENU MOBILE */}
+        {/* Menu Mobile simplifié */}
         {user && isMenuOpen && (
-          <div className="md:hidden mt-4 pt-4 border-t border-slate-100 dark:border-slate-800 animate-in slide-in-from-top-2 duration-200">
-             <nav className="flex flex-col space-y-2">
+          <div className="md:hidden mt-4 pt-4 border-t border-zinc-100 dark:border-zinc-800 animate-in slide-in-from-top-2">
+             <nav className="flex flex-col space-y-3">
                <Link href="/search" className={linkClass('/search')} onClick={() => setIsMenuOpen(false)}>Recherche</Link>
                <Link href="/wishlist" className={linkClass('/wishlist')} onClick={() => setIsMenuOpen(false)}>Wishlist</Link>
                <Link href="/collection" className={linkClass('/collection')} onClick={() => setIsMenuOpen(false)}>Collection</Link>
                <Link href="/trades" className={linkClass('/trades')} onClick={() => setIsMenuOpen(false)}>Echanges</Link>
-               <Link href="/contacts" className={`${linkClass('/contacts')} flex items-center justify-between`} onClick={() => setIsMenuOpen(false)}>
-                 <span>Contacts</span>
-                 {friendRequestCount > 0 && (
-                    <span className="bg-red-500 text-white text-xs font-bold px-2 py-0.5 rounded-full">{friendRequestCount}</span>
-                 )}
-               </Link>
-               <button 
-                 onClick={() => { logOut(); setIsMenuOpen(false); }}
-                 className="text-left py-2 text-red-600 font-medium hover:bg-red-50 dark:hover:bg-red-900/10 rounded"
-               >
-                 Déconnexion
-               </button>
+               <Link href="/contacts" className={linkClass('/contacts')} onClick={() => setIsMenuOpen(false)}>Contacts</Link>
+               <button onClick={() => { logOut(); setIsMenuOpen(false); }} className="text-left py-2 text-red-600 text-sm font-medium">Déconnexion</button>
              </nav>
           </div>
         )}

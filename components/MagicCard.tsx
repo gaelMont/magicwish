@@ -2,6 +2,7 @@
 
 import { useState, useEffect, memo } from 'react';
 
+// ... (Garde les Types MagicCardProps inchangés) ...
 type MagicCardProps = {
   id?: string;
   name: string;
@@ -11,23 +12,18 @@ type MagicCardProps = {
   price?: number;
   customPrice?: number; 
   setName?: string;
-  
   isFoil?: boolean;
   isSpecificVersion?: boolean;
   isForTrade?: boolean; 
-  
   onIncrement?: () => void;
   onDecrement?: () => void;
   onMove?: () => void;
-  
   onEditPrice?: (newPrice: number) => void;
   onToggleAttribute?: (field: 'isFoil' | 'isSpecificVersion' | 'isForTrade', currentValue: boolean) => void;
-  
   isWishlist?: boolean;
   readOnly?: boolean;
   isTradeView?: boolean;
   allowPriceEdit?: boolean;
-
   isSelectMode?: boolean;
   isSelected?: boolean;
   onSelect?: () => void;
@@ -36,6 +32,7 @@ type MagicCardProps = {
 const CARD_BACK_URL = "https://cards.scryfall.io/large/front/a/6/a6984342-f723-4e80-8e69-902d287a915f.jpg";
 
 function MagicCard(props: MagicCardProps) {
+  // ... (Garde toute la logique JS inchangée : destructuring, hooks, handlers...) ...
   const { 
       name, imageUrl, imageBackUrl, quantity = 1, 
       price, customPrice, setName, 
@@ -54,7 +51,6 @@ function MagicCard(props: MagicCardProps) {
   useEffect(() => {
     if (!isEditingPrice) {
         const newVal = customPrice?.toString() || price?.toString() || "0";
-        // eslint-disable-next-line react-hooks/set-state-in-effect
         setTempPrice(prev => (prev !== newVal ? newVal : prev));
     }
   }, [customPrice, price, isEditingPrice]);
@@ -81,20 +77,18 @@ function MagicCard(props: MagicCardProps) {
   // --- VUE LISTE (TRADE) ---
   if (isTradeView) {
       return (
-        <div className="flex items-center gap-3 bg-white dark:bg-slate-800 p-2 rounded-xl border border-slate-200 dark:border-slate-700 content-visibility-auto shadow-sm">
-            <div className="w-10 h-14 bg-gray-200 rounded overflow-hidden flex-shrink-0 relative group cursor-pointer" onClick={() => setIsFlipped(!isFlipped)}>
+        <div className="flex items-center gap-3 bg-white dark:bg-zinc-900 p-2 rounded-lg border border-zinc-200 dark:border-zinc-800 content-visibility-auto">
+            <div className="w-10 h-14 bg-zinc-100 rounded overflow-hidden flex-shrink-0 relative group cursor-pointer" onClick={() => setIsFlipped(!isFlipped)}>
                  <img src={currentImage} className="w-full h-full object-cover" alt={name} loading="lazy" />
-                 {isFoil && <div className="absolute top-0 right-0 bg-gradient-to-tr from-purple-600 to-pink-600 text-white text-[8px] px-1 font-bold">FOIL</div>}
             </div>
             
             <div className="flex-grow min-w-0">
                 <div className="flex items-center gap-2">
-                    <p className="font-bold text-sm truncate text-slate-900 dark:text-white" title={name}>{name}</p>
-                    {isFoil && <span className="text-xs font-bold text-transparent bg-clip-text bg-gradient-to-r from-purple-600 to-pink-600">FOIL</span>}
+                    <p className="font-semibold text-sm truncate text-zinc-900 dark:text-zinc-100" title={name}>{name}</p>
+                    {isFoil && <span className="text-[10px] font-bold text-amber-600 bg-amber-50 px-1 rounded">FOIL</span>}
                 </div>
-                <div className="flex items-center gap-2 text-xs text-slate-500">
+                <div className="flex items-center gap-2 text-xs text-zinc-500">
                     <p className="truncate">{setName}</p>
-                    {isSpecificVersion && <span className="bg-blue-50 text-blue-700 dark:bg-blue-900 dark:text-blue-300 px-1.5 py-0.5 rounded text-[9px] border border-blue-200 font-bold">EXACT</span>}
                 </div>
             </div>
 
@@ -106,12 +100,10 @@ function MagicCard(props: MagicCardProps) {
                     </div>
                 ) : (
                     <div 
-                        className={`font-bold text-sm ${customPrice ? 'text-orange-600' : 'text-slate-700 dark:text-slate-300'} ${allowPriceEdit ? 'cursor-pointer hover:underline' : ''}`}
+                        className={`font-medium text-sm ${customPrice ? 'text-orange-600' : 'text-zinc-700 dark:text-zinc-300'} ${allowPriceEdit ? 'cursor-pointer hover:underline' : ''}`}
                         onClick={() => { if (allowPriceEdit) { setTempPrice(effectivePrice.toString()); setIsEditingPrice(true); }}}
-                        title={customPrice ? "Prix personnalisé" : "Prix Scryfall"}
                     >
                         {effectivePrice.toFixed(2)} €
-                        {customPrice && <span className="text-[8px] align-top ml-0.5 text-orange-500">*</span>}
                     </div>
                 )}
             </div>
@@ -125,20 +117,15 @@ function MagicCard(props: MagicCardProps) {
         onClick={handleCardClick}
         className={`relative group flex flex-col rounded-xl overflow-hidden p-3 gap-2 h-full content-visibility-auto
         
-        /* --- ESTHÉTIQUE MODERNE (PEPS) --- */
-        /* Fond Blanc (sur fond gris de page) + Ombre douce + Bordure fine */
-        bg-white dark:bg-slate-800 
-        border transition-all duration-300
+        /* DESIGN NEUTRE : Fond blanc, bordure gris clair, ombre douce */
+        bg-white dark:bg-zinc-900 
+        border transition-all duration-200
+        shadow-sm hover:shadow-md
         
-        /* Effet "Lift" au survol : la carte se soulève et l'ombre grandit */
-        shadow-[0_2px_8px_-2px_rgba(0,0,0,0.05)] hover:shadow-[0_8px_16px_-4px_rgba(0,0,0,0.1)] hover:-translate-y-1
-        dark:shadow-none dark:hover:border-indigo-500/50
-        
+        /* SÉLECTION : Juste une bordure bleue simple, pas de fond coloré agressif */
         ${isSelected 
-            ? 'border-indigo-500 ring-2 ring-indigo-500 bg-indigo-50 dark:bg-indigo-900/20' 
-            : isFoil 
-                ? 'border-purple-200 dark:border-purple-900 hover:border-purple-400' 
-                : 'border-slate-200 dark:border-slate-700 hover:border-indigo-300 dark:hover:border-indigo-500'
+            ? 'border-blue-500 ring-1 ring-blue-500 bg-blue-50/10' 
+            : 'border-zinc-200 dark:border-zinc-800 hover:border-zinc-300 dark:hover:border-zinc-600'
         }
         ${isSelectMode ? 'cursor-pointer' : ''}
         `}
@@ -146,14 +133,14 @@ function MagicCard(props: MagicCardProps) {
 
       {isSelectMode && (
           <div className="absolute top-2 right-2 z-30 pointer-events-none">
-              <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center transition-all shadow-md ${isSelected ? 'bg-indigo-600 border-indigo-600 scale-110' : 'bg-white/90 border-slate-300'}`}>
-                  {isSelected && <span className="text-white text-sm font-bold">✓</span>}
+              <div className={`w-5 h-5 rounded-full border flex items-center justify-center transition-all ${isSelected ? 'bg-blue-600 border-blue-600' : 'bg-white border-zinc-300'}`}>
+                  {isSelected && <span className="text-white text-xs font-bold">✓</span>}
               </div>
           </div>
       )}
 
-      {/* Image Container */}
-      <div className="relative w-full aspect-[2.5/3.5] bg-slate-100 dark:bg-slate-900 rounded-lg overflow-hidden shrink-0 shadow-inner">
+      {/* Image */}
+      <div className="relative w-full aspect-[2.5/3.5] bg-zinc-100 dark:bg-zinc-800 rounded-lg overflow-hidden shrink-0">
         <img
           src={currentImage || CARD_BACK_URL}
           alt={name}
@@ -161,47 +148,49 @@ function MagicCard(props: MagicCardProps) {
           className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
           onError={(e) => { e.currentTarget.src = CARD_BACK_URL; }}
         />
-        {/* Effet Foil Amélioré */}
-        {isFoil && <div className="absolute inset-0 bg-gradient-to-tr from-purple-500/30 via-transparent to-indigo-500/10 pointer-events-none mix-blend-overlay opacity-80"></div>}
+        
+        {/* Badge Foil discret en bas à droite de l'image */}
+        {isFoil && <div className="absolute bottom-0 right-0 bg-amber-500 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-tl-md shadow-sm">FOIL</div>}
 
         {imageBackUrl && !isSelectMode && (
-          <button onClick={(e) => { e.stopPropagation(); setIsFlipped(!isFlipped); }} className="absolute top-1/2 right-2 -translate-y-1/2 bg-black/60 hover:bg-black/80 text-white p-2 rounded-full backdrop-blur-sm transition-all shadow-lg border border-white/20 z-10 pointer-events-auto font-bold text-[10px] tracking-widest uppercase opacity-0 group-hover:opacity-100">
-            FLIP
+          <button onClick={(e) => { e.stopPropagation(); setIsFlipped(!isFlipped); }} className="absolute top-2 right-2 bg-black/50 hover:bg-black/70 text-white p-1.5 rounded-full backdrop-blur-sm transition-opacity opacity-0 group-hover:opacity-100 z-10 text-[9px] font-bold">
+            ↻
           </button>
         )}
       </div>
       
-      {/* Contenu Texte & Boutons */}
-      <div className="flex-1 flex flex-col min-w-0">
-        <div className="flex justify-between items-start mb-1 mt-1">
-            <h3 className="font-bold text-sm md:text-base truncate flex-grow text-slate-800 dark:text-slate-100 group-hover:text-indigo-600 transition-colors" title={name}>{name}</h3>
+      {/* Contenu */}
+      <div className="flex-1 flex flex-col min-w-0 pt-1">
+        <div className="flex justify-between items-start mb-0.5">
+            <h3 className="font-semibold text-sm leading-tight text-zinc-900 dark:text-zinc-100 truncate flex-grow" title={name}>{name}</h3>
         </div>
         
-        <p className="text-xs text-slate-500 dark:text-slate-400 truncate font-medium mb-3">{setName}</p>
+        <p className="text-[11px] text-zinc-500 dark:text-zinc-400 truncate mb-2">{setName}</p>
 
-        <div className={`flex flex-wrap gap-1.5 mb-2 ${isSelectMode ? 'pointer-events-none opacity-50' : ''}`}>
+        {/* Boutons Actions (Plus petits, gris neutres qui passent au bleu/vert au clic) */}
+        <div className={`flex flex-wrap gap-1 mb-2 ${isSelectMode ? 'pointer-events-none opacity-50' : ''}`}>
             
             {onToggleAttribute ? (
                 <button 
                     onClick={(e) => { e.stopPropagation(); onToggleAttribute('isFoil', !!isFoil); }}
-                    className={`text-[10px] px-2 py-1 rounded-md border transition-all font-semibold flex-1 text-center ${
+                    className={`text-[10px] px-2 py-1 rounded border transition-colors font-medium flex-1 text-center ${
                         isFoil 
-                        ? 'bg-gradient-to-r from-purple-100 to-pink-100 text-purple-700 border-purple-200 hover:shadow-sm dark:from-purple-900/40 dark:to-pink-900/40 dark:text-purple-300 dark:border-purple-800' 
-                        : 'bg-slate-50 text-slate-400 border-slate-100 hover:bg-slate-100 dark:bg-slate-800/50 dark:border-slate-700'
+                        ? 'bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-900/30 dark:text-amber-400 dark:border-amber-800' 
+                        : 'bg-zinc-50 text-zinc-400 border-zinc-100 hover:bg-zinc-100 dark:bg-zinc-800 dark:border-zinc-700'
                     }`}
                 >
                     {isFoil ? 'Foil' : 'Normal'}
                 </button>
-            ) : isFoil && ( <span className="text-[10px] bg-purple-100 text-purple-700 px-2 py-0.5 rounded border border-purple-200 font-medium">Foil</span> )}
+            ) : null}
 
             {isWishlist ? (
                 onToggleAttribute && (
                     <button 
                         onClick={(e) => { e.stopPropagation(); onToggleAttribute('isSpecificVersion', !!isSpecificVersion); }}
-                        className={`text-[10px] px-2 py-1 rounded-md border transition-colors font-semibold flex-1 text-center ${
+                        className={`text-[10px] px-2 py-1 rounded border transition-colors font-medium flex-1 text-center ${
                             isSpecificVersion 
                             ? 'bg-blue-50 text-blue-700 border-blue-200' 
-                            : 'bg-slate-50 text-slate-400 border-slate-100'
+                            : 'bg-zinc-50 text-zinc-400 border-zinc-100'
                         }`}
                     >
                         {isSpecificVersion ? 'Exact' : 'Auto'}
@@ -211,10 +200,10 @@ function MagicCard(props: MagicCardProps) {
                 onToggleAttribute && (
                     <button 
                         onClick={(e) => { e.stopPropagation(); onToggleAttribute('isForTrade', !!isForTrade); }}
-                        className={`text-[10px] px-2 py-1 rounded-md border transition-colors font-semibold flex-1 text-center ${
+                        className={`text-[10px] px-2 py-1 rounded border transition-colors font-medium flex-1 text-center ${
                             isForTrade 
-                            ? 'bg-green-50 text-green-700 border-green-200 hover:bg-green-100 dark:bg-green-900/30 dark:text-green-300' 
-                            : 'bg-slate-50 text-slate-400 border-slate-100 hover:bg-slate-100 dark:bg-slate-800/50 dark:border-slate-700'
+                            ? 'bg-emerald-50 text-emerald-700 border-emerald-200' 
+                            : 'bg-zinc-50 text-zinc-400 border-zinc-100 hover:bg-zinc-100'
                         }`}
                     >
                         {isForTrade ? 'Trade' : 'Privé'}
@@ -225,24 +214,24 @@ function MagicCard(props: MagicCardProps) {
             {isWishlist && !readOnly && !isSelectMode && onMove && (
                 <button 
                     onClick={(e) => { e.stopPropagation(); onMove(); }}
-                    className="text-[10px] px-2 py-1 rounded-md border transition-colors font-bold flex-1 text-center bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100 hover:shadow-sm dark:bg-emerald-900/30 dark:text-emerald-300 dark:border-emerald-800"
-                    title="Déplacer vers Collection"
+                    className="text-[10px] px-2 py-1 rounded border transition-colors font-bold flex-1 text-center bg-white text-emerald-600 border-emerald-200 hover:bg-emerald-50"
+                    title="J'ai reçu cette carte"
                 >
                     Acheté
                 </button>
             )}
         </div>
         
-        <div className={`mt-auto flex justify-between items-end border-t border-slate-100 dark:border-slate-700 pt-2 ${isSelectMode ? 'pointer-events-none opacity-50' : ''}`}>
+        {/* Footer Prix & Quantité */}
+        <div className={`mt-auto flex justify-between items-center border-t border-zinc-100 dark:border-zinc-800 pt-2 ${isSelectMode ? 'pointer-events-none opacity-50' : ''}`}>
           <div className="flex items-center gap-1">
-            {!readOnly && <button onClick={(e) => {e.stopPropagation(); onDecrement?.()}} className="bg-slate-100 dark:bg-slate-700 w-6 h-6 rounded-md hover:bg-slate-200 text-slate-600 font-bold flex items-center justify-center text-sm transition-colors">-</button>}
-            <span className={`font-mono text-base ${readOnly ? 'font-bold text-slate-800 dark:text-white' : 'w-5 text-center text-slate-700 dark:text-slate-200'}`}>{readOnly && "x"}{quantity}</span>
-            {!readOnly && <button onClick={(e) => {e.stopPropagation(); onIncrement?.()}} className="bg-indigo-50 dark:bg-indigo-900/50 text-indigo-600 dark:text-indigo-400 font-bold w-6 h-6 rounded-md hover:bg-indigo-100 flex items-center justify-center text-sm transition-colors border border-indigo-100 dark:border-indigo-800">+</button>}
+            {!readOnly && <button onClick={(e) => {e.stopPropagation(); onDecrement?.()}} className="w-5 h-5 rounded bg-zinc-100 hover:bg-zinc-200 text-zinc-600 flex items-center justify-center text-xs font-bold transition">-</button>}
+            <span className={`text-sm ${readOnly ? 'font-bold text-zinc-700 dark:text-zinc-300' : 'w-4 text-center text-zinc-700 dark:text-zinc-300'}`}>{readOnly && "x"}{quantity}</span>
+            {!readOnly && <button onClick={(e) => {e.stopPropagation(); onIncrement?.()}} className="w-5 h-5 rounded bg-blue-50 hover:bg-blue-100 text-blue-600 border border-blue-100 flex items-center justify-center text-xs font-bold transition">+</button>}
           </div>
           
-          <div className="text-right">
-             <p className="text-[9px] text-slate-400 uppercase tracking-wide">Unit: {effectivePrice.toFixed(2)}</p>
-             <p className={`font-bold text-sm ${customPrice ? 'text-orange-600' : 'text-slate-700 dark:text-slate-200'}`}>
+          <div className="text-right leading-none">
+             <p className={`font-bold text-sm ${customPrice ? 'text-orange-600' : 'text-zinc-700 dark:text-zinc-200'}`}>
                  {(effectivePrice * quantity).toFixed(2)} €
              </p>
           </div>
