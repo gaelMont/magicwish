@@ -2,7 +2,6 @@
 
 import { useState, useEffect, memo } from 'react';
 
-// ... (Garde les Types MagicCardProps inchangés) ...
 type MagicCardProps = {
   id?: string;
   name: string;
@@ -12,18 +11,23 @@ type MagicCardProps = {
   price?: number;
   customPrice?: number; 
   setName?: string;
+  
   isFoil?: boolean;
   isSpecificVersion?: boolean;
   isForTrade?: boolean; 
+  
   onIncrement?: () => void;
   onDecrement?: () => void;
   onMove?: () => void;
+  
   onEditPrice?: (newPrice: number) => void;
   onToggleAttribute?: (field: 'isFoil' | 'isSpecificVersion' | 'isForTrade', currentValue: boolean) => void;
+  
   isWishlist?: boolean;
   readOnly?: boolean;
   isTradeView?: boolean;
   allowPriceEdit?: boolean;
+
   isSelectMode?: boolean;
   isSelected?: boolean;
   onSelect?: () => void;
@@ -32,7 +36,6 @@ type MagicCardProps = {
 const CARD_BACK_URL = "https://cards.scryfall.io/large/front/a/6/a6984342-f723-4e80-8e69-902d287a915f.jpg";
 
 function MagicCard(props: MagicCardProps) {
-  // ... (Garde toute la logique JS inchangée : destructuring, hooks, handlers...) ...
   const { 
       name, imageUrl, imageBackUrl, quantity = 1, 
       price, customPrice, setName, 
@@ -51,6 +54,7 @@ function MagicCard(props: MagicCardProps) {
   useEffect(() => {
     if (!isEditingPrice) {
         const newVal = customPrice?.toString() || price?.toString() || "0";
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         setTempPrice(prev => (prev !== newVal ? newVal : prev));
     }
   }, [customPrice, price, isEditingPrice]);
@@ -89,6 +93,7 @@ function MagicCard(props: MagicCardProps) {
                 </div>
                 <div className="flex items-center gap-2 text-xs text-zinc-500">
                     <p className="truncate">{setName}</p>
+                    {isSpecificVersion && <span className="bg-blue-50 text-blue-700 dark:bg-blue-900 dark:text-blue-300 px-1.5 py-0.5 rounded text-[9px] border border-blue-200 font-bold">EXACT</span>}
                 </div>
             </div>
 
@@ -104,6 +109,7 @@ function MagicCard(props: MagicCardProps) {
                         onClick={() => { if (allowPriceEdit) { setTempPrice(effectivePrice.toString()); setIsEditingPrice(true); }}}
                     >
                         {effectivePrice.toFixed(2)} €
+                        {customPrice && <span className="text-[8px] align-top ml-0.5 text-orange-500">*</span>}
                     </div>
                 )}
             </div>
