@@ -42,7 +42,9 @@ The content is organized as follows:
 <directory_structure>
 .gitignore
 app/actions/trade.ts
+app/api/portal/route.ts
 app/api/search/route.ts
+app/api/webhook/stripe/route.ts
 app/collection/page.tsx
 app/contacts/page.tsx
 app/favicon.ico
@@ -50,12 +52,14 @@ app/globals.css
 app/layout.tsx
 app/login/page.tsx
 app/page.tsx
+app/premium/page.tsx
 app/search/page.tsx
 app/trades/manual/page.tsx
 app/trades/new/[uid]/page.tsx
 app/trades/page.tsx
 app/user/[uid]/page.tsx
 app/wishlist/page.tsx
+components/AdContainer.tsx
 components/CardVersionPickerModal.tsx
 components/CollectionToolsModal.tsx
 components/ConfirmModal.tsx
@@ -69,9 +73,9 @@ components/wishlist/SingleWishlistView.tsx
 eslint.config.mjs
 hooks/useCardCollection.ts
 hooks/useFriends.ts
+hooks/usePremium.ts
 hooks/useTradeMatcher.ts
 hooks/useTradeSystem.ts
-hooks/useTradeTransaction.ts
 hooks/useWishlists.ts
 lib/AuthContext.tsx
 lib/cardUtils.ts
@@ -82,6 +86,7 @@ package.json
 postcss.config.mjs
 public/file.svg
 public/globe.svg
+public/manifest.json
 public/next.svg
 public/vercel.svg
 public/window.svg
@@ -91,6 +96,324 @@ tsconfig.json
 
 <files>
 This section contains the contents of the repository's files.
+
+<file path="app/api/portal/route.ts">
+// app/api/portal/route.ts
+import { NextResponse } from 'next/server';
+import Stripe from 'stripe';
+import { getAdminFirestore } from '@/lib/firebase-admin';
+
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
+  apiVersion: '2023-10-16',
+});
+
+export async function POST(req: Request) {
+    
+    try {
+        const body = await req.json();
+        const { customerId } = body; 
+
+        if (!customerId) {
+             return NextResponse.json({ error: "Customer ID manquant" }, { status: 400 });
+        }
+
+        // Création de la session du portail de facturation
+        const session = await stripe.billingPortal.sessions.create({
+            customer: customerId,
+            return_url: `${process.env.NEXT_PUBLIC_BASE_URL}/premium`, // Redirection après gestion
+        });
+
+        return NextResponse.json({ url: session.url });
+    } catch (err: any) {
+        console.error("Erreur création portail Stripe:", err);
+        return NextResponse.json({ error: err.message || "Erreur serveur" }, { status: 500 });
+    }
+}
+</file>
+
+<file path="app/api/webhook/stripe/route.ts">
+// app/api/webhook/stripe/route.ts
+import { NextResponse } from 'next/server';
+import { headers } from 'next/headers';
+import Stripe from 'stripe';
+import { getAdminFirestore } from '@/lib/firebase-admin';
+import { FieldValue } from 'firebase-admin/firestore';
+
+// Init Stripe Server-Side
+// CORRECTION 1 : Mise à jour de la version API demandée par ton erreur
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
+  apiVersion: '2025-11-17.clover', // Version spécifique demandée par TypeScript
+});
+
+export async function POST(req: Request) {
+  const body = await req.text();
+  
+  // CORRECTION 2 : headers() est async dans Next.js 15, il faut await
+  const headerList = await headers();
+  const signature = headerList.get('Stripe-Signature') as string;
+
+  let event: Stripe.Event;
+
+  try {
+    event = stripe.webhooks.constructEvent(
+        body, 
+        signature, 
+        process.env.STRIPE_WEBHOOK_SECRET!
+    );
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  } catch (error: any) {
+    console.error("Webhook signature failed", error.message);
+    return new NextResponse(`Webhook Error: ${error.message}`, { status: 400 });
+  }
+
+  const db = getAdminFirestore();
+
+  try {
+      switch (event.type) {
+        
+        // CAS 1 : NOUVEL ABONNEMENT PAYÉ
+        case 'checkout.session.completed': {
+          const session = event.data.object as Stripe.Checkout.Session;
+          const userId = session.client_reference_id; 
+          
+          if (userId) {
+            await db.collection('users').doc(userId).set({
+              isPremium: true,
+              stripeCustomerId: session.customer as string,
+              stripeSubscriptionId: session.subscription as string,
+              premiumSince: FieldValue.serverTimestamp(),
+            }, { merge: true });
+            console.log(`✅ User ${userId} passed Premium`);
+          }
+          break;
+        }
+
+        // CAS 2 : ABONNEMENT SUPPRIMÉ (Annulation ou Défaut de paiement)
+        case 'customer.subscription.deleted': {
+          const subscription = event.data.object as Stripe.Subscription;
+          const stripeSubId = subscription.id;
+
+          const snapshot = await db.collection('users')
+            .where('stripeSubscriptionId', '==', stripeSubId)
+            .get();
+
+          if (!snapshot.empty) {
+            const batch = db.batch();
+            snapshot.docs.forEach(doc => {
+                batch.update(doc.ref, { 
+                    isPremium: false,
+                    premiumEndedAt: FieldValue.serverTimestamp()
+                });
+            });
+            await batch.commit();
+            console.log(`Subscription ${stripeSubId} deleted. User downgraded.`);
+          }
+          break;
+        }
+      }
+  } catch (err) {
+      console.error("Firebase update error", err);
+      return new NextResponse("Server Error", { status: 500 });
+  }
+
+  return NextResponse.json({ received: true });
+}
+</file>
+
+<file path="app/premium/page.tsx">
+// app/premium/page.tsx
+'use client';
+
+import { useAuth } from '@/lib/AuthContext';
+import { usePremium } from '@/hooks/usePremium';
+import { useState } from 'react';
+import toast from 'react-hot-toast';
+import { doc, getDoc } from 'firebase/firestore'; // Import supplémentaire
+import { db } from '@/lib/firebase';
+
+export default function PremiumPage() {
+    const { user } = useAuth();
+    const { isPremium, loading } = usePremium();
+    const [isRedirecting, setIsRedirecting] = useState(false);
+
+    // Le lien de paiement avec le client_reference_id pour l'identification
+    const paymentLink = `${process.env.NEXT_PUBLIC_STRIPE_PAYMENT_LINK}?client_reference_id=${user?.uid}`;
+
+    // Gérer la redirection vers le portail client Stripe pour annuler/modifier
+    const handleManageSubscription = async () => {
+        if (!user) return;
+        setIsRedirecting(true);
+        try {
+            // On doit lire l'ID client Stripe stocké dans le profil de l'utilisateur
+            const docRef = await getDoc(doc(db, 'users', user.uid));
+            const customerId = docRef.data()?.stripeCustomerId;
+
+            if (!customerId) {
+                toast.error("Impossible de trouver votre abonnement. Contactez le support.");
+                setIsRedirecting(false);
+                return;
+            }
+
+            // Appel de l'API pour générer le lien de gestion du portail Stripe
+            const res = await fetch('/api/portal', { 
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ customerId })
+            });
+            
+            const data = await res.json();
+            if (data.url) {
+                window.location.href = data.url; // Redirection vers Stripe
+            } else {
+                throw new Error(data.error || "Erreur redirection Stripe");
+            }
+        } catch (e) {
+            console.error(e);
+            toast.error("Erreur gestion d'abonnement.");
+            setIsRedirecting(false);
+        }
+    };
+
+    if (loading) return <div className="p-10 text-center">Chargement...</div>;
+    if (!user) return <div className="p-10 text-center">Connectez-vous pour accéder au Premium.</div>;
+
+    return (
+        <div className="container mx-auto p-8 text-center max-w-lg min-h-[80vh] flex flex-col justify-center">
+            
+            {isPremium ? (
+                // --- VUE DÉJÀ ABONNÉ ---
+                <div className="bg-green-50 dark:bg-green-900/20 p-8 rounded-2xl border border-green-200 dark:border-green-800">
+                    <div className="text-5xl mb-4">💎</div>
+                    <h1 className="text-3xl font-bold text-green-700 dark:text-green-400 mb-2">Vous êtes Premium !</h1>
+                    <p className="text-gray-600 dark:text-gray-300 mb-6">
+                        Merci de soutenir le projet.
+                    </p>
+                    <button 
+                        onClick={handleManageSubscription}
+                        disabled={isRedirecting}
+                        className="text-sm text-gray-500 underline hover:text-gray-700 dark:hover:text-gray-200 font-medium"
+                    >
+                        {isRedirecting ? 'Chargement...' : 'Gérer mon abonnement / Annuler'}
+                    </button>
+                </div>
+            ) : (
+                // --- VUE VENTE ---
+                <>
+                    <h1 className="text-4xl font-bold mb-4 bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
+                        Passez Premium
+                    </h1>
+                    <p className="mb-8 text-gray-600 dark:text-gray-300 text-lg">
+                        Soutenez le développement pour 1€ / mois.
+                    </p>
+                    
+                    <ul className="text-left bg-white dark:bg-gray-800 p-6 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 mb-8 space-y-4">
+                        <li className="flex items-center gap-3">
+                            <span className="bg-green-100 text-green-700 p-1 rounded-full text-xs">✓</span>
+                            <span>Plus aucune publicité</span>
+                        </li>
+                        <li className="flex items-center gap-3">
+                            <span className="bg-purple-100 text-purple-700 p-1 rounded-full text-xs">♥</span>
+                            <span className="font-bold">Juste 1,00 € / mois</span>
+                        </li>
+                    </ul>
+
+                    <a 
+                        href={paymentLink} 
+                        className="block w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 rounded-xl shadow-lg hover:scale-105 transition transform"
+                    >
+                        Devenir Premium (1€)
+                    </a>
+                    <p className="text-xs text-gray-400 mt-4">Paiement sécurisé par Stripe.</p>
+                </>
+            )}
+        </div>
+    );
+}
+</file>
+
+<file path="components/AdContainer.tsx">
+// components/AdContainer.tsx
+'use client';
+import { usePremium } from '@/hooks/usePremium';
+import Link from 'next/link';
+
+export default function AdContainer() {
+  const { isPremium, loading } = usePremium();
+
+  if (loading || isPremium) return null;
+
+  return (
+    <div className="w-full my-4 p-4 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg flex flex-col items-center justify-center text-center animate-in fade-in duration-500">
+        
+        {/* Placeholder pour AdSense / Bannière */}
+        <div className="w-full max-w-[300px] h-[250px] bg-white dark:bg-black border-2 border-dashed border-gray-300 flex flex-col items-center justify-center gap-2 text-gray-400 text-sm overflow-hidden">
+            <span className="text-2xl">📢</span>
+            <p>Espace Publicitaire</p>
+        </div>
+        
+        <p className="text-[10px] text-gray-500 mt-3 uppercase tracking-wide">
+            Supportez MagicWish - <Link href="/premium" className="underline hover:text-blue-500 font-bold">Retirer la pub (1€)</Link>
+        </p>
+    </div>
+  );
+}
+</file>
+
+<file path="hooks/usePremium.ts">
+// hooks/usePremium.ts
+import { useAuth } from '@/lib/AuthContext';
+import { db } from '@/lib/firebase';
+import { doc, onSnapshot } from 'firebase/firestore';
+import { useState, useEffect } from 'react';
+
+export function usePremium() {
+  const { user } = useAuth();
+  const [isPremium, setIsPremium] = useState(false);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!user) {
+        setIsPremium(false);
+        setLoading(false);
+        return;
+    }
+
+    // Écoute en temps réel les changements sur le document utilisateur
+    const unsub = onSnapshot(doc(db, 'users', user.uid), (docSnap) => {
+        // Le Webhook Stripe met à jour ce champ
+        setIsPremium(docSnap.data()?.isPremium === true);
+        setLoading(false);
+    }, (error) => {
+        console.error("Erreur check premium", error);
+        setLoading(false);
+    });
+
+    return () => unsub();
+  }, [user]);
+
+  return { isPremium, loading };
+}
+</file>
+
+<file path="public/manifest.json">
+{
+  "name": "MagicWish",
+  "short_name": "MagicWish",
+  "description": "Votre wishlist et collection de cartes Magic",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#2563eb",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "/file.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}
+</file>
 
 <file path=".gitignore">
 # See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
@@ -134,6 +457,9 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# local tools
+stripe.exe
 </file>
 
 <file path="app/actions/trade.ts">
@@ -144,9 +470,29 @@ import { getAdminFirestore } from '@/lib/firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
 import { CardType } from '@/hooks/useCardCollection';
 
+const createCardData = (card: CardType) => {
+    return {
+        name: card.name,
+        imageUrl: card.imageUrl,
+        imageBackUrl: card.imageBackUrl || null,
+        setName: card.setName || '',
+        setCode: card.setCode || '',
+        price: card.price || 0,
+        quantity: card.quantity, 
+        isFoil: card.isFoil || false,
+        isSpecificVersion: card.isSpecificVersion || false,
+        scryfallData: card.scryfallData || null,
+        addedAt: FieldValue.serverTimestamp(),
+        wishlistId: null,
+        isForTrade: false 
+    };
+};
+
+// --- ACTION 1 : ÉCHANGE P2P AVEC VALIDATION STATUS ---
 export async function executeServerTrade(
+    tradeId: string, // <-- Nouveau paramètre
     senderUid: string,
-    receiverUid: string, // On force le string ici, pas de null
+    receiverUid: string,
     itemsGiven: CardType[],
     itemsReceived: CardType[]
 ) {
@@ -154,92 +500,165 @@ export async function executeServerTrade(
 
     try {
         await db.runTransaction(async (t) => {
-            // --- 1. SENDER DONNE (Suppression/Décrémentation) ---
+            // PHASE 1 : TOUTES LES LECTURES
+            
+            // A. Vérifier que l'échange est toujours 'pending'
+            const tradeRef = db.doc(`trades/${tradeId}`);
+            const tradeSnap = await t.get(tradeRef);
+            if (!tradeSnap.exists) throw new Error("Échange introuvable");
+            if (tradeSnap.data()?.status !== 'pending') throw new Error("Cet échange n'est plus en attente.");
+
+            // B. Lire les stocks Expéditeur
+            const senderStockSnaps = [];
             for (const card of itemsGiven) {
                 const ref = db.doc(`users/${senderUid}/collection/${card.id}`);
-                const docSnap = await t.get(ref);
-                if (!docSnap.exists || (docSnap.data()?.quantity || 0) < card.quantity) {
-                    throw new Error(`Erreur: ${card.name} manquante chez l'expéditeur.`);
-                }
-                // Si quantité exacte, on supprime, sinon on décrémente
-                if (docSnap.data()?.quantity === card.quantity) {
-                    t.delete(ref);
-                } else {
-                    t.update(ref, { quantity: FieldValue.increment(-card.quantity) });
-                }
+                const snap = await t.get(ref);
+                senderStockSnaps.push({ ref, card, snap });
             }
 
-            // --- 2. RECEIVER DONNE (Suppression/Décrémentation) ---
+            // C. Lire les stocks Receveur
+            const receiverStockSnaps = [];
             for (const card of itemsReceived) {
                 const ref = db.doc(`users/${receiverUid}/collection/${card.id}`);
-                const docSnap = await t.get(ref);
-                if (!docSnap.exists || (docSnap.data()?.quantity || 0) < card.quantity) {
-                    throw new Error(`Erreur: ${card.name} manquante chez le partenaire.`);
-                }
-                if (docSnap.data()?.quantity === card.quantity) {
-                    t.delete(ref);
-                } else {
-                    t.update(ref, { quantity: FieldValue.increment(-card.quantity) });
-                }
+                const snap = await t.get(ref);
+                receiverStockSnaps.push({ ref, card, snap });
             }
 
-            // --- 3. SENDER REÇOIT (Ajout) ---
+            // D. Lire les destinations
+            const senderDestSnaps = [];
             for (const card of itemsReceived) {
-                const colRef = db.doc(`users/${senderUid}/collection/${card.id}`);
-                const wishRef = db.doc(`users/${senderUid}/wishlist/${card.id}`);
-                
-                // Astuce Admin: set({ ... }, { merge: true }) permet de créer ou update
-                // Mais pour incrémenter proprement, on fait un get ou un increment
-                // Ici version simple : Set + Increment
-                t.set(colRef, { 
-                    name: card.name,
-                    imageUrl: card.imageUrl,
-                    setName: card.setName || '',
-                    setCode: card.setCode || '',
-                    price: card.price || 0,
-                    isFoil: card.isFoil || false,
-                    addedAt: FieldValue.serverTimestamp()
-                }, { merge: true });
-                t.update(colRef, { quantity: FieldValue.increment(card.quantity) });
-                
-                // Nettoyage wishlist
-                t.delete(wishRef);
+                const ref = db.doc(`users/${senderUid}/collection/${card.id}`);
+                const snap = await t.get(ref);
+                senderDestSnaps.push({ ref, card, snap });
             }
 
-            // --- 4. RECEIVER REÇOIT (Ajout) ---
+            const receiverDestSnaps = [];
             for (const card of itemsGiven) {
-                const colRef = db.doc(`users/${receiverUid}/collection/${card.id}`);
-                const wishRef = db.doc(`users/${receiverUid}/wishlist/${card.id}`);
-                
-                t.set(colRef, { 
-                    name: card.name,
-                    imageUrl: card.imageUrl,
-                    setName: card.setName || '',
-                    setCode: card.setCode || '',
-                    price: card.price || 0,
-                    isFoil: card.isFoil || false,
-                    addedAt: FieldValue.serverTimestamp()
-                }, { merge: true });
-                t.update(colRef, { quantity: FieldValue.increment(card.quantity) });
-                
+                const ref = db.doc(`users/${receiverUid}/collection/${card.id}`);
+                const snap = await t.get(ref);
+                receiverDestSnaps.push({ ref, card, snap });
+            }
+
+            // PHASE 2 : TOUTES LES ÉCRITURES
+
+            // 1. Mise à jour du statut de l'échange (IMPORTANT)
+            t.update(tradeRef, { 
+                status: 'completed',
+                completedAt: FieldValue.serverTimestamp()
+            });
+
+            // 2. RETIRER les cartes de l'Expéditeur
+            for (const item of senderStockSnaps) {
+                if (!item.snap.exists || (item.snap.data()?.quantity || 0) < item.card.quantity) {
+                    throw new Error(`Erreur: ${item.card.name} manquante chez l'expéditeur.`);
+                }
+                if (item.snap.data()?.quantity === item.card.quantity) {
+                    t.delete(item.ref);
+                } else {
+                    t.update(item.ref, { quantity: FieldValue.increment(-item.card.quantity) });
+                }
+            }
+
+            // 3. RETIRER les cartes du Receveur
+            for (const item of receiverStockSnaps) {
+                if (!item.snap.exists || (item.snap.data()?.quantity || 0) < item.card.quantity) {
+                    throw new Error(`Erreur: ${item.card.name} manquante chez le partenaire.`);
+                }
+                if (item.snap.data()?.quantity === item.card.quantity) {
+                    t.delete(item.ref);
+                } else {
+                    t.update(item.ref, { quantity: FieldValue.increment(-item.card.quantity) });
+                }
+            }
+
+            // 4. AJOUTER chez l'Expéditeur + Clean Wishlist
+            for (const item of senderDestSnaps) {
+                const wishRef = db.doc(`users/${senderUid}/wishlist/${item.card.id}`);
+                if (item.snap.exists) {
+                    t.update(item.ref, { quantity: FieldValue.increment(item.card.quantity) });
+                } else {
+                    t.set(item.ref, createCardData(item.card));
+                }
+                t.delete(wishRef); 
+            }
+
+            // 5. AJOUTER chez le Receveur + Clean Wishlist
+            for (const item of receiverDestSnaps) {
+                const wishRef = db.doc(`users/${receiverUid}/wishlist/${item.card.id}`);
+                if (item.snap.exists) {
+                    t.update(item.ref, { quantity: FieldValue.increment(item.card.quantity) });
+                } else {
+                    t.set(item.ref, createCardData(item.card));
+                }
                 t.delete(wishRef);
             }
         });
 
         return { success: true };
 
-    } catch (error: unknown) { // 1. On utilise 'unknown' au lieu de 'any'
+    } catch (error: unknown) {
         console.error("Trade Error:", error);
-        
-        // 2. On vérifie le type de l'erreur pour extraire le message proprement
         let errorMessage = "Une erreur inconnue est survenue";
-        
-        if (error instanceof Error) {
-            errorMessage = error.message;
-        } else if (typeof error === "string") {
-            errorMessage = error;
-        }
+        if (error instanceof Error) errorMessage = error.message;
+        else if (typeof error === "string") errorMessage = error;
+        return { success: false, error: errorMessage };
+    }
+}
 
+// --- ACTION 2 : ÉCHANGE MANUEL (SOLO) ---
+export async function executeManualTrade(
+    userId: string,
+    itemsGiven: CardType[],    
+    itemsReceived: CardType[]  
+) {
+    const db = getAdminFirestore();
+
+    try {
+        await db.runTransaction(async (t) => {
+            // PHASE 1 : LECTURES
+            const stockSnaps = [];
+            for (const card of itemsGiven) {
+                const ref = db.doc(`users/${userId}/collection/${card.id}`);
+                const snap = await t.get(ref);
+                stockSnaps.push({ ref, card, snap });
+            }
+
+            const destSnaps = [];
+            for (const card of itemsReceived) {
+                const ref = db.doc(`users/${userId}/collection/${card.id}`);
+                const snap = await t.get(ref);
+                destSnaps.push({ ref, card, snap });
+            }
+
+            // PHASE 2 : ÉCRITURES
+            for (const item of stockSnaps) {
+                if (!item.snap.exists || (item.snap.data()?.quantity || 0) < item.card.quantity) {
+                    throw new Error(`Erreur: Vous ne possédez pas assez de "${item.card.name}".`);
+                }
+                if (item.snap.data()?.quantity === item.card.quantity) {
+                    t.delete(item.ref);
+                } else {
+                    t.update(item.ref, { quantity: FieldValue.increment(-item.card.quantity) });
+                }
+            }
+
+            for (const item of destSnaps) {
+                const wishRef = db.doc(`users/${userId}/wishlist/${item.card.id}`);
+                if (item.snap.exists) {
+                    t.update(item.ref, { quantity: FieldValue.increment(item.card.quantity) });
+                } else {
+                    t.set(item.ref, createCardData(item.card));
+                }
+                t.delete(wishRef);
+            }
+        });
+
+        return { success: true };
+
+    } catch (error: unknown) {
+        console.error("Manual Trade Error:", error);
+        let errorMessage = "Erreur lors de l'échange manuel";
+        if (error instanceof Error) errorMessage = error.message;
         return { success: false, error: errorMessage };
     }
 }
@@ -439,6 +858,7 @@ export default function UserProfilePage({ params }: { params: Promise<{ uid: str
 'use client';
 
 import { useState } from 'react';
+import AdContainer from './AdContainer';
 
 type CollectionToolsModalProps = {
   isOpen: boolean;
@@ -529,6 +949,16 @@ export default function CollectionToolsModal({
             {/* SECTION 2 : ACTUALISATION */}
             <div>
                 <h3 className="text-sm font-bold text-gray-500 uppercase mb-3 border-b border-gray-200 dark:border-gray-700 pb-1">Données & Prix</h3>
+                
+                {isRefreshing && (
+                    <div className="mb-4">
+                        <AdContainer /> {/* <--- LA PUB APPARAIT PENDANT L'ATTENTE */}
+                        <p className="text-center text-sm text-blue-600 animate-pulse mt-2">
+                            Analyse des prix en cours...
+                        </p>
+                    </div>
+                )}
+                
                 <button 
                     onClick={handleRefresh}
                     disabled={isRefreshing}
@@ -1185,13 +1615,14 @@ import './globals.css';
 import { AuthProvider } from '@/lib/AuthContext';
 import Header from '@/components/Header'; 
 import { Toaster } from 'react-hot-toast';
-import UsernameSetupModal from '@/components/UsernameSetupModal'; // <--- IMPORT
+import UsernameSetupModal from '@/components/UsernameSetupModal'; 
 
 const inter = Inter({ subsets: ['latin'] });
 
 export const metadata: Metadata = {
   title: 'MagicWish',
   description: 'Votre wishlist de cartes Magic',
+  manifest: '/manifest.json', // N'oublie pas le manifest pour le mobile
 };
 
 export default function RootLayout({
@@ -1203,11 +1634,11 @@ export default function RootLayout({
     <html lang="fr">
       <body className={inter.className}>
         <AuthProvider>
+          
           <Header />
           {children}
           
-          {/* Composants Globaux */}
-          <UsernameSetupModal /> {/* <--- AJOUTE ÇA ICI */}
+          <UsernameSetupModal />
           <Toaster position="bottom-right" />
         </AuthProvider>
       </body>
@@ -1279,236 +1710,6 @@ const nextConfig: NextConfig = {
 };
 
 export default nextConfig;
-</file>
-
-<file path="app/search/page.tsx">
-// app/search/page.tsx
-'use client';
-
-import { useState, useMemo } from 'react';
-import { useAuth } from '@/lib/AuthContext';
-import { db } from '@/lib/firebase';
-import { doc, setDoc, increment, serverTimestamp } from 'firebase/firestore';
-import { ScryfallRawData } from '@/lib/cardUtils';
-import { CardType } from '@/hooks/useCardCollection';
-import { useWishlists } from '@/hooks/useWishlists';
-import CardVersionPickerModal from '@/components/CardVersionPickerModal';
-import toast from 'react-hot-toast';
-
-export default function SearchPage() {
-  const { user } = useAuth();
-  const { lists } = useWishlists();
-  
-  // États de recherche
-  const [query, setQuery] = useState('');
-  const [results, setResults] = useState<ScryfallRawData[]>([]);
-  const [isSearching, setIsSearching] = useState(false);
-  const [hasSearched, setHasSearched] = useState(false);
-
-  // États du Modal
-  const [modalOpen, setModalOpen] = useState(false);
-  const [selectedBaseCard, setSelectedBaseCard] = useState<ScryfallRawData | null>(null);
-  const [targetDestination, setTargetDestination] = useState<'collection' | 'wishlist'>('collection');
-
-  // --- 1. FONCTION DE RECHERCHE ---
-  const handleSearch = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!query.trim()) return;
-
-    setIsSearching(true);
-    setHasSearched(true);
-    setResults([]);
-
-    try {
-        const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
-        const data = await res.json();
-        
-        if (data.data) {
-            setResults(data.data);
-        } else {
-            toast.error("Aucune carte trouvée.");
-        }
-    } catch (error) {
-        console.error(error);
-        toast.error("Erreur de recherche.");
-    } finally {
-        setIsSearching(false);
-    }
-  };
-
-  // --- 2. OUVERTURE DU MODAL ---
-  const openPicker = (card: ScryfallRawData, destination: 'collection' | 'wishlist') => {
-      setSelectedBaseCard(card);
-      setTargetDestination(destination);
-      setModalOpen(true);
-  };
-
-  // --- 3. SAUVEGARDE EN BASE ---
-  const handleConfirmAdd = async (card: CardType, targetListId: string = 'default') => {
-      if (!user) return;
-
-      const destLabel = targetDestination === 'collection' ? 'Collection' : 'Wishlist';
-      const toastId = toast.loading(`Ajout à : ${destLabel}...`);
-      
-      try {
-          // Détermination du chemin Firestore
-          let collectionPath = 'collection';
-          if (targetDestination === 'wishlist') {
-              if (targetListId === 'default') {
-                  collectionPath = 'wishlist';
-              } else {
-                  collectionPath = `wishlists_data/${targetListId}/cards`;
-              }
-          }
-
-          const cardRef = doc(db, 'users', user.uid, collectionPath, card.id);
-
-          // Construction de l'objet (NETTOYAGE ET SÉCURISATION)
-          // On évite les doublons de clés ici
-          const dataToSave = {
-              ...card, // On copie toutes les propriétés de base
-              
-              // SÉCURITÉ FIRESTORE : On écrase imageBackUrl pour garantir qu'il n'est pas undefined
-              imageBackUrl: card.imageBackUrl || null,
-              
-              // Métadonnées système
-              addedAt: serverTimestamp(),
-              
-              // Logique métier
-              wishlistId: targetDestination === 'wishlist' ? targetListId : null, 
-              isForTrade: false 
-          };
-
-          // Sauvegarde (set avec merge pour gérer l'incrément si existant)
-          await setDoc(cardRef, {
-              ...dataToSave,
-              quantity: increment(card.quantity)
-          }, { merge: true });
-
-          toast.success(`Ajouté avec succès !`, { id: toastId });
-
-      } catch (error) {
-          console.error(error);
-          toast.error("Erreur lors de l'ajout", { id: toastId });
-      }
-  };
-
-  // Filtre visuel pour éviter les doublons de noms
-  const uniqueResults = useMemo(() => {
-    const seen = new Set();
-    return results.filter(c => {
-        const name = c.name.split(' // ')[0];
-        if (seen.has(name)) return false;
-        seen.add(name);
-        return true;
-    });
-  }, [results]);
-
-  return (
-    <main className="container mx-auto p-4 max-w-5xl min-h-[85vh]">
-      
-      {/* HEADER */}
-      <div className="text-center mb-8 pt-4">
-          <h1 className="text-3xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent mb-2">
-              🔍 Centre de Recherche
-          </h1>
-          <p className="text-gray-500">
-              Trouvez n&apos;importe quelle carte et ajoutez-la à votre Collection ou votre Wishlist.
-          </p>
-      </div>
-
-      {/* BARRE DE RECHERCHE */}
-      <div className="max-w-2xl mx-auto mb-10 sticky top-4 z-20">
-          <form onSubmit={handleSearch} className="relative shadow-lg rounded-full">
-              <input 
-                  type="text" 
-                  className="w-full p-4 pl-6 pr-14 rounded-full border-2 border-transparent bg-white dark:bg-gray-800 dark:text-white focus:border-blue-500 outline-none transition text-lg"
-                  placeholder="Nom de la carte (ex: Black Lotus, Sol Ring...)"
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  autoFocus
-              />
-              <button 
-                  type="submit"
-                  disabled={isSearching || !query.trim()}
-                  className="absolute right-2 top-2 bottom-2 bg-blue-600 hover:bg-blue-700 text-white rounded-full w-12 flex items-center justify-center transition disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                  {isSearching ? '...' : '🔎'}
-              </button>
-          </form>
-      </div>
-
-      {/* RÉSULTATS */}
-      {isSearching ? (
-          <div className="text-center py-20">
-              <div className="inline-block w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mb-4"></div>
-              <p className="text-gray-400">Interrogation de Scryfall...</p>
-          </div>
-      ) : uniqueResults.length > 0 ? (
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-              {uniqueResults.map((card) => (
-                  <div key={card.id} className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden flex flex-col group hover:shadow-md transition">
-                      {/* Image */}
-                      <div className="relative aspect-[2.5/3.5] bg-gray-200 overflow-hidden">
-                          {card.image_uris?.normal ? (
-                              <img src={card.image_uris.normal} alt={card.name} className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110" loading="lazy" />
-                          ) : (
-                             <div className="flex items-center justify-center h-full text-gray-400 text-xs">Pas d&apos;image</div>
-                          )}
-                          
-                          {/* Overlay au survol */}
-                          <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center gap-3 p-4">
-                              <button 
-                                  onClick={() => openPicker(card, 'collection')}
-                                  className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 rounded-lg text-sm shadow-lg transform translate-y-4 group-hover:translate-y-0 transition-transform duration-300"
-                              >
-                                  + Collection
-                              </button>
-                              <button 
-                                  onClick={() => openPicker(card, 'wishlist')}
-                                  className="w-full bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 rounded-lg text-sm shadow-lg transform translate-y-4 group-hover:translate-y-0 transition-transform duration-300 delay-75"
-                              >
-                                  + Wishlist
-                              </button>
-                          </div>
-                      </div>
-
-                      <div className="p-3">
-                          <h3 className="font-bold text-gray-900 dark:text-white truncate" title={card.name}>{card.name}</h3>
-                          <p className="text-xs text-gray-500">{card.set_name}</p>
-                      </div>
-                  </div>
-              ))}
-          </div>
-      ) : hasSearched ? (
-          <div className="text-center py-20 bg-gray-50 dark:bg-gray-800/50 rounded-2xl border-2 border-dashed border-gray-200 dark:border-gray-700">
-              <p className="text-xl text-gray-500">Aucun résultat trouvé pour &quot;{query}&quot;.</p>
-          </div>
-      ) : (
-          <div className="grid md:grid-cols-2 gap-4 max-w-3xl mx-auto opacity-50 hover:opacity-100 transition-opacity">
-               <div className="p-6 border-2 border-dashed border-gray-200 dark:border-gray-700 rounded-xl text-center">
-                   <span className="text-4xl mb-2 block">📚</span>
-                   <h3 className="font-bold">Compléter ma Collection</h3>
-               </div>
-               <div className="p-6 border-2 border-dashed border-gray-200 dark:border-gray-700 rounded-xl text-center">
-                   <span className="text-4xl mb-2 block">✨</span>
-                   <h3 className="font-bold">Remplir ma Wishlist</h3>
-               </div>
-          </div>
-      )}
-
-      <CardVersionPickerModal 
-          isOpen={modalOpen}
-          onClose={() => setModalOpen(false)}
-          baseCard={selectedBaseCard}
-          onConfirm={handleConfirmAdd}
-          destination={targetDestination}
-          availableLists={lists}
-      />
-
-    </main>
-  );
-}
 </file>
 
 <file path="app/trades/new/[uid]/page.tsx">
@@ -1797,7 +1998,9 @@ export default function SingleWishlistView({ listId, listName }: Props) {
                     transaction.update(collectionRef, { quantity: increment(card.quantity) });
                 } else {
                     transaction.set(collectionRef, { 
-                        ...card, 
+                        ...card,
+                        // CORRECTION CRITIQUE ICI : On force null si undefined
+                        imageBackUrl: card.imageBackUrl || null, 
                         wishlistId: null, 
                         addedAt: new Date(),
                         isFoil: card.isFoil || false
@@ -1808,7 +2011,7 @@ export default function SingleWishlistView({ listId, listName }: Props) {
             toast.success("Ajoutée à la collection !", { id: toastId });
         } catch (error) {
             console.error(error);
-            toast.error("Erreur", { id: toastId });
+            toast.error("Erreur technique (voir console)", { id: toastId });
         }
     };
 
@@ -1840,7 +2043,6 @@ export default function SingleWishlistView({ listId, listName }: Props) {
                                 if(card.quantity === 1) { if(confirm("Supprimer ?")) removeCard(card.id); } 
                                 else { updateQuantity(card.id, -1, card.quantity); }
                             }}
-                            // PLUS DE onDelete ICI
                             onMove={() => moveToCollection(card)}
                             onToggleAttribute={(field, val) => toggleAttribute(card.id, field, val)}
                         />
@@ -2053,7 +2255,8 @@ export function useFriends() {
     "papaparse": "^5.5.3",
     "react": "^19.2.1",
     "react-dom": "^19.2.1",
-    "react-hot-toast": "^2.6.0"
+    "react-hot-toast": "^2.6.0",
+    "stripe": "^20.0.0"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
@@ -2113,167 +2316,211 @@ export async function GET(request: Request) {
 }
 </file>
 
-<file path="hooks/useTradeSystem.ts">
-// hooks/useTradeSystem.ts
-import { useState, useEffect } from 'react';
-import { db } from '@/lib/firebase';
-import { 
-  collection, addDoc, query, where, onSnapshot, 
-  doc, updateDoc, serverTimestamp, orderBy, 
-  Timestamp
-} from 'firebase/firestore';
+<file path="app/search/page.tsx">
+'use client';
+
+import { useState, useMemo } from 'react';
 import { useAuth } from '@/lib/AuthContext';
-import { CardType } from './useCardCollection';
-import { executeServerTrade } from '@/app/actions/trade'; 
+import { db } from '@/lib/firebase';
+import { doc, setDoc, increment, serverTimestamp } from 'firebase/firestore';
+import { ScryfallRawData } from '@/lib/cardUtils';
+import { CardType } from '@/hooks/useCardCollection';
+import { useWishlists } from '@/hooks/useWishlists';
+import CardVersionPickerModal from '@/components/CardVersionPickerModal';
 import toast from 'react-hot-toast';
 
-export type TradeStatus = 'pending' | 'completed' | 'rejected' | 'cancelled';
-
-export type TradeRequest = {
-  id: string;
-  senderUid: string;
-  senderName: string;
-  receiverUid: string;
-  receiverName: string;
-  itemsGiven: CardType[];
-  itemsReceived: CardType[];
-  status: TradeStatus;
-  createdAt: Timestamp;
-};
-
-const cleanCardsForFirestore = (cards: CardType[]) => {
-    return cards.map(card => {
-        const clean = { ...card };
-        Object.keys(clean).forEach(key => {
-            const k = key as keyof CardType;
-            if (clean[k] === undefined) delete clean[k];
-        });
-        return clean;
-    });
-};
-
-export function useTradeSystem() {
-  const { user, username } = useAuth();
+export default function SearchPage() {
+  const { user } = useAuth();
+  const { lists } = useWishlists();
   
-  const [incomingTrades, setIncomingTrades] = useState<TradeRequest[]>([]);
-  const [outgoingTrades, setOutgoingTrades] = useState<TradeRequest[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [isProcessing, setIsProcessing] = useState(false);
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState<ScryfallRawData[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [hasSearched, setHasSearched] = useState(false);
 
-  // 1. Écouter les échanges
-  useEffect(() => {
-    if (!user) return;
+  const [modalOpen, setModalOpen] = useState(false);
+  const [selectedBaseCard, setSelectedBaseCard] = useState<ScryfallRawData | null>(null);
+  const [targetDestination, setTargetDestination] = useState<'collection' | 'wishlist'>('collection');
 
-    const qIn = query(
-      collection(db, 'trades'),
-      where('receiverUid', '==', user.uid),
-      where('status', '==', 'pending'),
-      orderBy('createdAt', 'desc')
-    );
+  const handleSearch = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!query.trim()) return;
 
-    const qOut = query(
-      collection(db, 'trades'),
-      where('senderUid', '==', user.uid),
-      where('status', '==', 'pending'),
-      orderBy('createdAt', 'desc')
-    );
-
-    const unsubIn = onSnapshot(qIn, (snap) => {
-      setIncomingTrades(snap.docs.map(d => ({ id: d.id, ...d.data() } as TradeRequest)));
-    });
-
-    const unsubOut = onSnapshot(qOut, (snap) => {
-      setOutgoingTrades(snap.docs.map(d => ({ id: d.id, ...d.data() } as TradeRequest)));
-      setLoading(false);
-    });
-
-    return () => { unsubIn(); unsubOut(); };
-  }, [user]);
-
-  // 2. Proposer
-  const proposeTrade = async (receiverUid: string, receiverName: string, toGive: CardType[], toReceive: CardType[]) => {
-    if (!user) return;
-    const toastId = toast.loading("Envoi de la proposition...");
+    setIsSearching(true);
+    setHasSearched(true);
+    setResults([]);
 
     try {
-      const cleanGiven = cleanCardsForFirestore(toGive);
-      const cleanReceived = cleanCardsForFirestore(toReceive);
-
-      await addDoc(collection(db, 'trades'), {
-        senderUid: user.uid,
-        senderName: username || user.displayName || 'Inconnu',
-        receiverUid,
-        receiverName,
-        itemsGiven: cleanGiven,    
-        itemsReceived: cleanReceived, 
-        status: 'pending',
-        createdAt: serverTimestamp()
-      });
-      toast.success("Proposition envoyée !", { id: toastId });
-      return true;
-    } catch (e) {
-      console.error("Erreur Firestore:", e);
-      toast.error("Erreur envoi", { id: toastId });
-      return false;
-    }
-  };
-
-  // 3. Accepter
-  const acceptTrade = async (trade: TradeRequest) => {
-    if (!user) return;
-    
-    setIsProcessing(true);
-    const toastId = toast.loading("Validation sécurisée en cours...");
-
-    try {
-        const result = await executeServerTrade(
-            trade.senderUid,
-            user.uid, 
-            trade.itemsGiven,
-            trade.itemsReceived
-        );
-
-        if (result.success) {
-            await updateDoc(doc(db, 'trades', trade.id), { status: 'completed' });
-            toast.success("Échange terminé avec succès !", { id: toastId });
+        const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
+        const data = await res.json();
+        
+        if (data.data) {
+            setResults(data.data);
         } else {
-            throw new Error(result.error || "Erreur serveur inconnue");
+            toast.error("Aucune carte trouvee.");
         }
-
-    } catch (error: unknown) { // CORRECTION ICI : unknown au lieu de any
-        console.error("Erreur Accept Trade:", error);
-        
-        let msg = "Échec de l'échange";
-        if (error instanceof Error) {
-            msg = error.message;
-        } else if (typeof error === "string") {
-            msg = error;
-        }
-        
-        toast.error(msg, { id: toastId });
+    } catch (error) {
+        console.error(error);
+        toast.error("Erreur de recherche.");
     } finally {
-        setIsProcessing(false);
+        setIsSearching(false);
     }
   };
 
-  // 4. Refuser / Annuler
-  const rejectTrade = async (tradeId: string) => {
-    if(!confirm("Refuser cet échange ?")) return;
-    await updateDoc(doc(db, 'trades', tradeId), { status: 'rejected' });
-    toast.success("Échange refusé");
+  const openPicker = (card: ScryfallRawData, destination: 'collection' | 'wishlist') => {
+      setSelectedBaseCard(card);
+      setTargetDestination(destination);
+      setModalOpen(true);
   };
 
-  const cancelTrade = async (tradeId: string) => {
-    if(!confirm("Annuler cette proposition ?")) return;
-    await updateDoc(doc(db, 'trades', tradeId), { status: 'cancelled' });
-    toast.success("Proposition annulée");
+  const handleConfirmAdd = async (card: CardType, targetListId: string = 'default') => {
+      if (!user) return;
+
+      const destLabel = targetDestination === 'collection' ? 'Collection' : 'Wishlist';
+      const toastId = toast.loading(`Ajout a : ${destLabel}...`);
+      
+      try {
+          let collectionPath = 'collection';
+          if (targetDestination === 'wishlist') {
+              if (targetListId === 'default') {
+                  collectionPath = 'wishlist';
+              } else {
+                  collectionPath = `wishlists_data/${targetListId}/cards`;
+              }
+          }
+
+          const cardRef = doc(db, 'users', user.uid, collectionPath, card.id);
+
+          const dataToSave = {
+              ...card,
+              imageBackUrl: card.imageBackUrl || null,
+              addedAt: serverTimestamp(),
+              wishlistId: targetDestination === 'wishlist' ? targetListId : null, 
+              isForTrade: false 
+          };
+
+          await setDoc(cardRef, {
+              ...dataToSave,
+              quantity: increment(card.quantity)
+          }, { merge: true });
+
+          toast.success(`Ajoute avec succes !`, { id: toastId });
+
+      } catch (error) {
+          console.error(error);
+          toast.error("Erreur lors de l'ajout", { id: toastId });
+      }
   };
 
-  return { 
-    incomingTrades, outgoingTrades, loading, 
-    proposeTrade, acceptTrade, rejectTrade, cancelTrade,
-    isProcessing 
-  };
+  const uniqueResults = useMemo(() => {
+    const seen = new Set();
+    return results.filter(c => {
+        const name = c.name.split(' // ')[0];
+        if (seen.has(name)) return false;
+        seen.add(name);
+        return true;
+    });
+  }, [results]);
+
+  return (
+    <main className="container mx-auto p-4 max-w-5xl min-h-[85vh]">
+      
+      <div className="text-center mb-8 pt-4">
+          <h1 className="text-3xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent mb-2">
+              Centre de Recherche
+          </h1>
+          <p className="text-gray-500">
+              Trouvez n&apos;importe quelle carte et ajoutez-la a votre Collection ou votre Wishlist.
+          </p>
+      </div>
+
+      <div className="max-w-2xl mx-auto mb-10 sticky top-4 z-20">
+          <form onSubmit={handleSearch} className="relative shadow-lg rounded-full">
+              <input 
+                  type="text" 
+                  className="w-full p-4 pl-6 pr-14 rounded-full border-2 border-transparent bg-white dark:bg-gray-800 dark:text-white focus:border-blue-500 outline-none transition text-lg"
+                  placeholder="Nom de la carte (ex: Black Lotus, Sol Ring...)"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  autoFocus
+              />
+              <button 
+                  type="submit"
+                  disabled={isSearching || !query.trim()}
+                  className="absolute right-2 top-2 bottom-2 bg-blue-600 hover:bg-blue-700 text-white rounded-full w-12 flex items-center justify-center transition disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                  {isSearching ? '...' : 'Go'}
+              </button>
+          </form>
+      </div>
+
+      {isSearching ? (
+          <div className="text-center py-20">
+              <div className="inline-block w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mb-4"></div>
+              <p className="text-gray-400">Interrogation de Scryfall...</p>
+          </div>
+      ) : uniqueResults.length > 0 ? (
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+              {uniqueResults.map((card) => (
+                  <div key={card.id} className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden flex flex-col group hover:shadow-md transition">
+                      <div className="relative aspect-[2.5/3.5] bg-gray-200 overflow-hidden">
+                          {card.image_uris?.normal ? (
+                              <img src={card.image_uris.normal} alt={card.name} className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110" loading="lazy" />
+                          ) : (
+                             <div className="flex items-center justify-center h-full text-gray-400 text-xs">Pas d&apos;image</div>
+                          )}
+                          
+                          <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center gap-3 p-4">
+                              <button 
+                                  onClick={() => openPicker(card, 'collection')}
+                                  className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 rounded-lg text-sm shadow-lg transform translate-y-4 group-hover:translate-y-0 transition-transform duration-300"
+                              >
+                                  + Collection
+                              </button>
+                              <button 
+                                  onClick={() => openPicker(card, 'wishlist')}
+                                  className="w-full bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 rounded-lg text-sm shadow-lg transform translate-y-4 group-hover:translate-y-0 transition-transform duration-300 delay-75"
+                              >
+                                  + Wishlist
+                              </button>
+                          </div>
+                      </div>
+
+                      <div className="p-3">
+                          <h3 className="font-bold text-gray-900 dark:text-white truncate" title={card.name}>{card.name}</h3>
+                          <p className="text-xs text-gray-500">{card.set_name}</p>
+                      </div>
+                  </div>
+              ))}
+          </div>
+      ) : hasSearched ? (
+          <div className="text-center py-20 bg-gray-50 dark:bg-gray-800/50 rounded-2xl border-2 border-dashed border-gray-200 dark:border-gray-700">
+              <p className="text-xl text-gray-500">Aucun resultat trouve pour &quot;{query}&quot;.</p>
+          </div>
+      ) : (
+          <div className="grid md:grid-cols-2 gap-4 max-w-3xl mx-auto opacity-50 hover:opacity-100 transition-opacity">
+               <div className="p-6 border-2 border-dashed border-gray-200 dark:border-gray-700 rounded-xl text-center">
+                   <span className="text-4xl mb-2 block font-bold text-gray-300">COLLECTION</span>
+                   <h3 className="font-bold">Completer ma Collection</h3>
+               </div>
+               <div className="p-6 border-2 border-dashed border-gray-200 dark:border-gray-700 rounded-xl text-center">
+                   <span className="text-4xl mb-2 block font-bold text-gray-300">WISHLIST</span>
+                   <h3 className="font-bold">Remplir ma Wishlist</h3>
+               </div>
+          </div>
+      )}
+
+      <CardVersionPickerModal 
+          isOpen={modalOpen}
+          onClose={() => setModalOpen(false)}
+          baseCard={selectedBaseCard}
+          onConfirm={handleConfirmAdd}
+          destination={targetDestination}
+          availableLists={lists}
+      />
+
+    </main>
+  );
 }
 </file>
 
@@ -2537,12 +2784,14 @@ export function useTradeMatcher() {
     return cardsMap;
   };
 
-  // --- 2. MISE À JOUR PRIX CIBLÉE (Uniquement sur les matchs) ---
+  // --- 2. MISE À JOUR PRIX CIBLÉE (CORRIGÉE : SEULEMENT MES CARTES) ---
   const refreshPricesForProposals = async (currentProposals: TradeProposal[], myUid: string) => {
      // On extrait toutes les cartes uniques impliquées
      const cardsToUpdateMap = new Map<string, { card: CardType, ownerUid: string, collection: string }>();
 
      currentProposals.forEach(p => {
+         // IMPORTANT: On ne mettra pas à jour les cartes de l'ami ici car on n'a pas les droits d'écriture
+         // On peut les lire pour le calcul de balance, mais pas les update en base.
          p.toReceive.forEach(c => cardsToUpdateMap.set(`${p.friend.uid}_${c.id}`, { card: c, ownerUid: p.friend.uid, collection: 'collection' }));
          p.toGive.forEach(c => cardsToUpdateMap.set(`${myUid}_${c.id}`, { card: c, ownerUid: myUid, collection: 'collection' }));
      });
@@ -2580,17 +2829,19 @@ export function useTradeMatcher() {
                  const newPrice = parseFloat(scryCard.prices?.eur || "0");
                  
                  // On retrouve les cartes locales qui correspondent à cet ID Scryfall
-                 // (Il peut y en avoir plusieurs si moi et mon ami avons la même carte)
                  const localMatches = chunk.filter(item => item.card.id === scryCard.id);
 
                  localMatches.forEach(match => {
-                     // Si le prix a changé, on met à jour l'objet en mémoire ET Firestore
+                     // Update mémoire (ref) pour l'affichage immédiat
                      if (match.card.price !== newPrice) {
-                         match.card.price = newPrice; // Update mémoire (ref)
+                         match.card.price = newPrice;
                          
-                         const ref = doc(db, 'users', match.ownerUid, match.collection, match.card.id);
-                         batch.update(ref, { price: newPrice });
-                         hasUpdates = true;
+                         // Update Firestore : UNIQUEMENT SI C'EST MA CARTE
+                         if (match.ownerUid === myUid) {
+                             const ref = doc(db, 'users', match.ownerUid, match.collection, match.card.id);
+                             batch.update(ref, { price: newPrice });
+                             hasUpdates = true;
+                         }
                      }
                  });
              });
@@ -2624,14 +2875,12 @@ export function useTradeMatcher() {
         });
 
         // C. Indexation de MON Trade Binder
-        // On ne garde que celles que je veux échanger
         const myTradeCards = Array.from(myCollectionMap.values()).filter(c => c.isForTrade);
 
         setStatus(`Analyse simultanée de ${friends.length} amis...`);
 
         // D. SCAN PARALLÈLE DES AMIS
         const matchPromises = friends.map(async (friend) => {
-            // Chargement parallèle des données de l'ami
             const [friendCollectionMap, friendWishlistMap] = await Promise.all([
                 fetchCardsAsMap(friend.uid, 'collection'),
                 fetchCardsAsMap(friend.uid, 'wishlist')
@@ -2642,7 +2891,7 @@ export function useTradeMatcher() {
 
             // 1. Check ce que JE reçois (Sa Collection vs Ma Wishlist)
             friendCollectionMap.forEach(card => {
-                if (card.isForTrade) { // Il doit vouloir l'échanger
+                if (card.isForTrade) { 
                     if (myWishlistIds.has(card.id) || myWishlistNames.has(card.name)) {
                         toReceive.push(card);
                     }
@@ -2650,7 +2899,6 @@ export function useTradeMatcher() {
             });
 
             // 2. Check ce que JE donne (Ma Collection vs Sa Wishlist)
-            // Indexation rapide de SA wishlist
             const friendWishlistIds = new Set<string>();
             const friendWishlistNames = new Set<string>();
             friendWishlistMap.forEach(c => {
@@ -2669,13 +2917,12 @@ export function useTradeMatcher() {
                     friend,
                     toReceive,
                     toGive,
-                    balance: 0 // Sera calculé après refresh
+                    balance: 0 
                 } as TradeProposal;
             }
             return null;
         });
 
-        // Attente de tous les scans
         const results = await Promise.all(matchPromises);
         const validProposals = results.filter((p): p is TradeProposal => p !== null);
 
@@ -2684,7 +2931,6 @@ export function useTradeMatcher() {
             setStatus("Actualisation des prix...");
             await refreshPricesForProposals(validProposals, user.uid);
             
-            // Recalcul des balances avec les prix frais
             validProposals.forEach(p => {
                 const valReceive = p.toReceive.reduce((sum, c) => sum + (c.customPrice ?? c.price ?? 0), 0);
                 const valGive = p.toGive.reduce((sum, c) => sum + (c.customPrice ?? c.price ?? 0), 0);
@@ -2706,200 +2952,181 @@ export function useTradeMatcher() {
 }
 </file>
 
-<file path="hooks/useTradeTransaction.ts">
-// hooks/useTradeTransaction.ts
-import { useState } from 'react';
+<file path="hooks/useTradeSystem.ts">
+// hooks/useTradeSystem.ts
+import { useState, useEffect } from 'react';
 import { db } from '@/lib/firebase';
-import { doc, runTransaction, serverTimestamp, increment, DocumentReference, DocumentSnapshot } from 'firebase/firestore';
+import { 
+  collection, addDoc, query, where, onSnapshot, 
+  doc, updateDoc, serverTimestamp, orderBy, 
+  Timestamp
+} from 'firebase/firestore';
 import { useAuth } from '@/lib/AuthContext';
 import { CardType } from './useCardCollection';
+import { executeServerTrade } from '@/app/actions/trade'; 
 import toast from 'react-hot-toast';
 
-// Helper pour nettoyer l'objet avant écriture (Sécurité & Propreté)
-// On ne garde que ce qui est pertinent pour la DB, on vire les états UI
-const createCardData = (card: CardType) => {
-    return {
-        name: card.name,
-        imageUrl: card.imageUrl,
-        imageBackUrl: card.imageBackUrl || null,
-        setName: card.setName || '',
-        setCode: card.setCode || '',
-        price: card.price || 0,
-        // On force la quantité à celle de l'échange lors de la création
-        quantity: card.quantity, 
-        isFoil: card.isFoil || false,
-        isSpecificVersion: card.isSpecificVersion || false,
-        scryfallData: card.scryfallData || null,
-        addedAt: serverTimestamp(),
-        // On s'assure que ces champs sont reset
-        wishlistId: null,
-        isForTrade: false 
-    };
+export type TradeStatus = 'pending' | 'completed' | 'rejected' | 'cancelled';
+
+export type TradeRequest = {
+  id: string;
+  senderUid: string;
+  senderName: string;
+  receiverUid: string;
+  receiverName: string;
+  itemsGiven: CardType[];
+  itemsReceived: CardType[];
+  status: TradeStatus;
+  createdAt: Timestamp;
 };
 
-export function useTradeTransaction() {
-  const { user } = useAuth();
+// Fonction de nettoyage
+const cleanCardsForServer = (cards: CardType[]) => {
+    return cards.map(card => {
+        const clean = { ...card };
+        // @ts-expect-error: Timestamp Firestore non sérialisable
+        delete clean.addedAt;
+        // @ts-expect-error: Timestamp Firestore non sérialisable
+        delete clean.importedAt;
+        // @ts-expect-error: Timestamp Firestore non sérialisable
+        delete clean.createdAt;
+        // @ts-expect-error: Timestamp Firestore non sérialisable
+        delete clean.lastUpdated;
+        
+        Object.keys(clean).forEach(key => {
+            const k = key as keyof CardType;
+            if (clean[k] === undefined) delete clean[k];
+        });
+        
+        return clean;
+    });
+};
+
+export function useTradeSystem() {
+  const { user, username } = useAuth();
+  
+  const [incomingTrades, setIncomingTrades] = useState<TradeRequest[]>([]);
+  const [outgoingTrades, setOutgoingTrades] = useState<TradeRequest[]>([]);
+  const [loading, setLoading] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
 
-  const getRef = (uid: string, collection: 'collection' | 'wishlist', cardId: string) => {
-      return doc(db, 'users', uid, collection, cardId);
-  };
+  useEffect(() => {
+    if (!user) return;
 
-  const executeTrade = async (
-      myCardsToGive: CardType[], 
-      cardsToReceive: CardType[], 
-      partnerUid: string | null = null
-  ) => {
-    if (!user) return false;
-    
-    setIsProcessing(true);
-    const toastId = toast.loading("Vérification des stocks et échange...");
+    const qIn = query(
+      collection(db, 'trades'),
+      where('receiverUid', '==', user.uid),
+      where('status', '==', 'pending'),
+      orderBy('createdAt', 'desc')
+    );
+
+    const qOut = query(
+      collection(db, 'trades'),
+      where('senderUid', '==', user.uid),
+      where('status', '==', 'pending'),
+      orderBy('createdAt', 'desc')
+    );
+
+    const unsubIn = onSnapshot(qIn, (snap) => {
+      setIncomingTrades(snap.docs.map(d => ({ id: d.id, ...d.data() } as TradeRequest)));
+    });
+
+    const unsubOut = onSnapshot(qOut, (snap) => {
+      setOutgoingTrades(snap.docs.map(d => ({ id: d.id, ...d.data() } as TradeRequest)));
+      setLoading(false);
+    });
+
+    return () => { unsubIn(); unsubOut(); };
+  }, [user]);
+
+  const proposeTrade = async (receiverUid: string, receiverName: string, toGive: CardType[], toReceive: CardType[]) => {
+    if (!user) return;
+    const toastId = toast.loading("Envoi de la proposition...");
 
     try {
-        await runTransaction(db, async (transaction) => {
-            // --- ÉTAPE 1 : LECTURES & VÉRIFICATIONS (READS) ---
-            // Dans une transaction Firestore, TOUTES les lectures doivent se faire AVANT les écritures.
+      const cleanGiven = cleanCardsForServer(toGive);
+      const cleanReceived = cleanCardsForServer(toReceive);
 
-            // 1.A. Vérifier MON inventaire (Je dois posséder ce que je donne)
-            const myGiveOps: { ref: DocumentReference; snap: DocumentSnapshot; card: CardType }[] = [];
-            
-            for (const card of myCardsToGive) {
-                const ref = getRef(user.uid, 'collection', card.id);
-                const snap = await transaction.get(ref);
-                
-                if (!snap.exists()) {
-                    throw new Error(`Annulé : Vous ne possédez pas (ou plus) la carte "${card.name}".`);
-                }
-                
-                const currentQty = snap.data()?.quantity || 0;
-                if (currentQty < card.quantity) {
-                    throw new Error(`Annulé : Stock insuffisant pour "${card.name}" (Requis: ${card.quantity}, Dispo: ${currentQty}).`);
-                }
-                
-                myGiveOps.push({ ref, snap, card });
-            }
+      await addDoc(collection(db, 'trades'), {
+        senderUid: user.uid,
+        senderName: username || user.displayName || 'Inconnu',
+        receiverUid,
+        receiverName,
+        itemsGiven: cleanGiven,    
+        itemsReceived: cleanReceived, 
+        status: 'pending',
+        createdAt: serverTimestamp()
+      });
+      toast.success("Proposition envoyee !", { id: toastId });
+      return true;
+    } catch (e) {
+      console.error("Erreur Firestore:", e);
+      toast.error("Erreur envoi", { id: toastId });
+      return false;
+    }
+  };
 
-            // 1.B. Vérifier inventaire PARTENAIRE (Si échange entre utilisateurs)
-            const partnerGiveOps: { ref: DocumentReference; snap: DocumentSnapshot; card: CardType }[] = [];
-            
-            if (partnerUid) {
-                for (const card of cardsToReceive) {
-                    const ref = getRef(partnerUid, 'collection', card.id);
-                    const snap = await transaction.get(ref);
+  const acceptTrade = async (trade: TradeRequest) => {
+    if (!user) return;
+    
+    setIsProcessing(true);
+    const toastId = toast.loading("Validation securisee en cours...");
 
-                    if (!snap.exists()) {
-                        throw new Error(`Annulé : Le partenaire ne possède plus "${card.name}".`);
-                    }
-                    
-                    const currentQty = snap.data()?.quantity || 0;
-                    if (currentQty < card.quantity) {
-                         throw new Error(`Annulé : Stock partenaire insuffisant pour "${card.name}".`);
-                    }
+    try {
+        const safeItemsGiven = cleanCardsForServer(trade.itemsGiven);
+        const safeItemsReceived = cleanCardsForServer(trade.itemsReceived);
 
-                    partnerGiveOps.push({ ref, snap, card });
-                }
-            }
+        // Appel Server Action (qui gère stocks + status)
+        const result = await executeServerTrade(
+            trade.id, // <-- On passe l'ID de l'échange
+            trade.senderUid,
+            user.uid, 
+            safeItemsGiven,
+            safeItemsReceived
+        );
 
-            // 1.C. Préparer les lectures pour les RÉCEPTIONS (Pour savoir si on update ou create)
-            // MOI je reçois
-            const myReceiveOps = [];
-            for (const card of cardsToReceive) {
-                const colRef = getRef(user.uid, 'collection', card.id);
-                const wishRef = getRef(user.uid, 'wishlist', card.id);
-                // On lit les deux potentiels (Collection pour update, Wishlist pour delete)
-                const colSnap = await transaction.get(colRef);
-                const wishSnap = await transaction.get(wishRef);
-                myReceiveOps.push({ colRef, wishRef, colSnap, wishSnap, card });
-            }
+        if (result.success) {
+            // Note: On ne fait plus updateDoc ici pour 'completed', 
+            // le serveur l'a fait. Le onSnapshot mettra l'UI à jour.
+            toast.success("Echange termine avec succes !", { id: toastId });
+        } else {
+            throw new Error(result.error || "Erreur serveur inconnue");
+        }
 
-            // PARTENAIRE reçoit (ce que je donne)
-            const partnerReceiveOps = [];
-            if (partnerUid) {
-                for (const card of myCardsToGive) {
-                    const colRef = getRef(partnerUid, 'collection', card.id);
-                    const wishRef = getRef(partnerUid, 'wishlist', card.id);
-                    const colSnap = await transaction.get(colRef);
-                    const wishSnap = await transaction.get(wishRef);
-                    partnerReceiveOps.push({ colRef, wishRef, colSnap, wishSnap, card });
-                }
-            }
-
-            // --- ÉTAPE 2 : ÉCRITURES (WRITES) ---
-            
-            // 2.A. MOI : Je donne (Décrémenter ou Supprimer)
-            for (const { ref, snap, card } of myGiveOps) {
-                const currentQty = snap.data()?.quantity || 0;
-                // Si stock exact, on supprime le document
-                if (currentQty === card.quantity) {
-                    transaction.delete(ref);
-                } else {
-                    transaction.update(ref, { quantity: increment(-card.quantity) });
-                }
-            }
-
-            // 2.B. PARTENAIRE : Il donne (Décrémenter ou Supprimer)
-            if (partnerUid) {
-                for (const { ref, snap, card } of partnerGiveOps) {
-                    const currentQty = snap.data()?.quantity || 0;
-                    if (currentQty === card.quantity) {
-                        transaction.delete(ref);
-                    } else {
-                        transaction.update(ref, { quantity: increment(-card.quantity) });
-                    }
-                }
-            }
-
-            // 2.C. MOI : Je reçois (Incrémenter ou Créer + Nettoyer Wishlist)
-            for (const { colRef, wishRef, colSnap, wishSnap, card } of myReceiveOps) {
-                if (colSnap.exists()) {
-                    transaction.update(colRef, { quantity: increment(card.quantity) });
-                } else {
-                    // C'est ici qu'on utilise le Helper pour être sûr des données insérées
-                    transaction.set(colRef, createCardData(card));
-                }
-                
-                // Si la carte était dans ma wishlist, je l'enlève !
-                if (wishSnap.exists()) {
-                    transaction.delete(wishRef);
-                }
-            }
-
-            // 2.D. PARTENAIRE : Il reçoit (Incrémenter ou Créer + Nettoyer Wishlist)
-            if (partnerUid) {
-                for (const { colRef, wishRef, colSnap, wishSnap, card } of partnerReceiveOps) {
-                    if (colSnap.exists()) {
-                        transaction.update(colRef, { quantity: increment(card.quantity) });
-                    } else {
-                        transaction.set(colRef, createCardData(card));
-                    }
-                    
-                    if (wishSnap.exists()) {
-                        transaction.delete(wishRef);
-                    }
-                }
-            }
-        });
-
-        toast.success("Échange validé avec succès !", { id: toastId });
-        return true;
-
-    } catch (error: unknown) {
-        console.error("Erreur Transaction:", error);
-        // Gestion propre de l'erreur pour l'utilisateur
-        const errMsg = error instanceof Error ? error.message : "Erreur inconnue lors de l'échange";
-        toast.error(errMsg, { id: toastId, duration: 5000 });
-        return false;
+    } catch (error: unknown) { 
+        console.error("Erreur Accept Trade:", error);
+        let msg = "Echec de l'echange";
+        if (error instanceof Error) msg = error.message;
+        else if (typeof error === "string") msg = error;
+        toast.error(msg, { id: toastId });
     } finally {
         setIsProcessing(false);
     }
   };
 
-  return { executeTrade, isProcessing };
+  // 'rejected' reste autorisé côté client dans les nouvelles règles
+  const rejectTrade = async (tradeId: string) => {
+    if(!confirm("Refuser cet echange ?")) return;
+    await updateDoc(doc(db, 'trades', tradeId), { status: 'rejected' });
+    toast.success("Echange refuse");
+  };
+
+  // 'cancelled' reste autorisé côté client dans les nouvelles règles
+  const cancelTrade = async (tradeId: string) => {
+    if(!confirm("Annuler cette proposition ?")) return;
+    await updateDoc(doc(db, 'trades', tradeId), { status: 'cancelled' });
+    toast.success("Proposition annulee");
+  };
+
+  return { 
+    incomingTrades, outgoingTrades, loading, 
+    proposeTrade, acceptTrade, rejectTrade, cancelTrade,
+    isProcessing 
+  };
 }
 </file>
 
 <file path="app/contacts/page.tsx">
-// app/contacts/page.tsx
 'use client';
 
 import { useState, useEffect } from 'react';
@@ -2908,7 +3135,6 @@ import { useAuth } from '@/lib/AuthContext';
 import { useFriends, FriendProfile } from '@/hooks/useFriends';
 import toast from 'react-hot-toast';
 
-// Liste des Planeswalkers pour l'exemple aléatoire
 const PLANESWALKERS = [
   "Jace", "Liliana", "Chandra", "Ajani", "Garruk", 
   "Teferi", "Nissa", "Gideon", "Nicol_Bolas", "Ugin", 
@@ -2929,16 +3155,14 @@ export default function ContactsPage() {
   const [searchResults, setSearchResults] = useState<FriendProfile[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   
-  // État pour le placeholder aléatoire
   const [randomPlaceholder, setRandomPlaceholder] = useState("ex: Jace...");
 
-  // Au chargement, on choisit un nom au hasard
   useEffect(() => {
     const randomName = PLANESWALKERS[Math.floor(Math.random() * PLANESWALKERS.length)];
     setRandomPlaceholder(`ex: ${randomName} (pour trouver ${randomName.toLowerCase()}_fan...)`);
   }, []);
 
-  if (!user) return <div className="p-10 text-center">Veuillez vous connecter pour gérer vos contacts.</div>;
+  if (!user) return <div className="p-10 text-center">Veuillez vous connecter pour gerer vos contacts.</div>;
 
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -2952,12 +3176,11 @@ export default function ContactsPage() {
       setSearchResults(results);
       
       if (results.length === 0) {
-        toast("Aucun utilisateur trouvé", { icon: '🤷‍♂️' });
+        toast("Aucun utilisateur trouve");
       }
-    } catch (err: unknown) { // 1. On utilise 'unknown' au lieu de 'any'
+    } catch (err: unknown) { 
         console.error(err);
         
-        // 2. On vérifie que c'est bien une Erreur standard avant de lire '.message'
         if (err instanceof Error && err.message.includes("indexes")) {
             toast.error("Configuration serveur requise (voir console F12)");
         } else {
@@ -2971,15 +3194,13 @@ export default function ContactsPage() {
   return (
     <main className="container mx-auto p-4 max-w-4xl min-h-[80vh]">
       <h1 className="text-3xl font-bold mb-8 text-blue-600 dark:text-blue-400 flex items-center gap-2">
-        👥 Mes Contacts
+        Mes Contacts
       </h1>
 
       <div className="grid md:grid-cols-2 gap-8">
         
-        {/* --- COLONNE GAUCHE : RECHERCHE & DEMANDES --- */}
         <div className="space-y-8">
             
-            {/* 1. MODULE DE RECHERCHE */}
             <div className="bg-white dark:bg-gray-800 p-6 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700">
                 <h2 className="font-bold text-lg mb-4 text-gray-800 dark:text-white">Chercher un ami</h2>
                 
@@ -2999,42 +3220,37 @@ export default function ContactsPage() {
                         disabled={isSearching}
                         className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-bold transition disabled:opacity-50"
                     >
-                        {isSearching ? '...' : '🔍'}
+                        {isSearching ? '...' : 'Chercher'}
                     </button>
                 </form>
 
-                {/* LISTE DES RÉSULTATS DE RECHERCHE */}
                 <div className="space-y-2 max-h-60 overflow-y-auto custom-scrollbar">
                     {searchResults.map(result => (
                         <div key={result.uid} className="flex items-center justify-between bg-blue-50 dark:bg-blue-900/20 p-3 rounded-lg border border-blue-100 dark:border-blue-800 animate-in fade-in">
                             <div className="flex items-center gap-3">
-                                {/* Avatar */}
                                 <div className="w-8 h-8 rounded-full bg-blue-200 flex items-center justify-center text-blue-700 font-bold text-xs overflow-hidden">
                                     {result.photoURL ? <img src={result.photoURL} alt="" className="w-full h-full object-cover"/> : result.username[0].toUpperCase()}
                                 </div>
-                                {/* Infos */}
                                 <div>
                                     <p className="font-bold text-sm text-gray-900 dark:text-white">{result.displayName}</p>
                                     <p className="text-xs text-blue-600 dark:text-blue-400">@{result.username}</p>
                                 </div>
                             </div>
-                            {/* Bouton Ajouter */}
                             <button 
                                 onClick={() => sendFriendRequest(result)}
                                 className="text-xs bg-blue-600 text-white px-3 py-1.5 rounded-full hover:bg-blue-700 transition shadow-sm"
                             >
-                                Ajouter +
+                                Ajouter
                             </button>
                         </div>
                     ))}
                 </div>
             </div>
 
-            {/* 2. DEMANDES D'AMIS REÇUES */}
             {requestsReceived.length > 0 && (
                 <div className="bg-white dark:bg-gray-800 p-6 rounded-xl shadow-sm border border-orange-200 dark:border-orange-900/50 animate-in slide-in-from-left-4">
                     <h2 className="font-bold text-lg mb-4 text-orange-600 dark:text-orange-400 flex items-center gap-2">
-                        🔔 Demandes reçues <span className="bg-orange-100 text-orange-800 text-xs px-2 py-0.5 rounded-full">{requestsReceived.length}</span>
+                        Demandes recues <span className="bg-orange-100 text-orange-800 text-xs px-2 py-0.5 rounded-full">{requestsReceived.length}</span>
                     </h2>
                     <div className="space-y-3">
                         {requestsReceived.map(req => (
@@ -3049,8 +3265,8 @@ export default function ContactsPage() {
                                     </div>
                                 </div>
                                 <div className="flex gap-2">
-                                    <button onClick={() => acceptRequest(req)} className="p-2 bg-green-100 text-green-700 hover:bg-green-200 rounded-full transition" title="Accepter">✓</button>
-                                    <button onClick={() => declineRequest(req.uid)} className="p-2 bg-red-100 text-red-700 hover:bg-red-200 rounded-full transition" title="Refuser">✕</button>
+                                    <button onClick={() => acceptRequest(req)} className="p-2 bg-green-100 text-green-700 hover:bg-green-200 rounded-full transition" title="Accepter">V</button>
+                                    <button onClick={() => declineRequest(req.uid)} className="p-2 bg-red-100 text-red-700 hover:bg-red-200 rounded-full transition" title="Refuser">X</button>
                                 </div>
                             </div>
                         ))}
@@ -3059,7 +3275,6 @@ export default function ContactsPage() {
             )}
         </div>
 
-        {/* --- COLONNE DROITE : LISTE MES AMIS --- */}
         <div className="bg-white dark:bg-gray-800 p-6 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 h-fit">
             <h2 className="font-bold text-lg mb-4 flex items-center gap-2 text-gray-800 dark:text-white">
                 Mes Amis <span className="text-gray-400 font-normal">({friends.length})</span>
@@ -3076,7 +3291,6 @@ export default function ContactsPage() {
                     {friends.map(friend => (
                         <div key={friend.uid} className="group flex items-center justify-between p-3 hover:bg-gray-50 dark:hover:bg-gray-700/50 rounded-lg transition border border-transparent hover:border-gray-100 dark:hover:border-gray-600">
                             
-                            {/* Identité Ami */}
                             <div className="flex items-center gap-3">
                                 <div className="w-10 h-10 rounded-full bg-gradient-to-br from-purple-500 to-blue-500 flex items-center justify-center text-white font-bold shadow-sm overflow-hidden">
                                     {friend.photoURL ? <img src={friend.photoURL} alt="" className="w-full h-full object-cover" /> : friend.username[0].toUpperCase()}
@@ -3087,9 +3301,7 @@ export default function ContactsPage() {
                                 </div>
                             </div>
                             
-                            {/* Actions (Visibles au survol sur desktop) */}
                             <div className="flex items-center gap-2 opacity-100 md:opacity-0 group-hover:opacity-100 transition-opacity">
-                                {/* BOUTON VOIR PROFIL */}
                                 <Link 
                                     href={`/user/${friend.uid}`}
                                     className="text-xs bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300 px-3 py-1.5 rounded hover:bg-blue-200 dark:hover:bg-blue-800 transition font-medium"
@@ -3097,12 +3309,11 @@ export default function ContactsPage() {
                                     Voir
                                 </Link>
 
-                                {/* --- NOUVEAU : BOUTON ÉCHANGER --- */}
                                 <Link 
                                     href={`/trades/new/${friend.uid}`}
                                     className="text-xs bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300 px-3 py-1.5 rounded hover:bg-purple-200 dark:hover:bg-purple-800 transition font-medium flex items-center gap-1"
                                 >
-                                    🤝 Échanger
+                                    Echanger
                                 </Link>
                                 
                                 <button 
@@ -3110,7 +3321,7 @@ export default function ContactsPage() {
                                     className="text-red-400 hover:text-red-600 text-xs px-2 py-1"
                                     title="Retirer cet ami"
                                 >
-                                    ✕
+                                    X
                                 </button>
                             </div>
                         </div>
@@ -3128,43 +3339,39 @@ export default function ContactsPage() {
 <file path="app/trades/manual/page.tsx">
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useTransition } from 'react';
 import { useAuth } from '@/lib/AuthContext';
 import { useCardCollection, CardType } from '@/hooks/useCardCollection';
-import { useTradeTransaction } from '@/hooks/useTradeTransaction';
+import { executeManualTrade } from '@/app/actions/trade'; // <--- Import de la Server Action
 import toast from 'react-hot-toast';
 import CardVersionPickerModal from '@/components/CardVersionPickerModal';
-// CORRECTION ICI : On importe le type depuis l'utilitaire, pas le composant
 import { ScryfallRawData } from '@/lib/cardUtils';
 
 export default function ManualTradePage() {
   const { user } = useAuth();
   const { cards: myCollection, loading } = useCardCollection('collection'); 
-  const { executeTrade, isProcessing } = useTradeTransaction();
+  
+  // useTransition gère l'état "pending" pendant que le serveur travaille
+  const [isPending, startTransition] = useTransition();
 
-  // --- ÉTATS ---
   const [toGive, setToGive] = useState<CardType[]>([]);
   const [toReceive, setToReceive] = useState<CardType[]>([]);
   
   const [localSearch, setLocalSearch] = useState('');
   
   const [remoteSearch, setRemoteSearch] = useState('');
-  // CORRECTION TYPE ICI
   const [searchResults, setSearchResults] = useState<ScryfallRawData[]>([]);
   const [isSearching, setIsSearching] = useState(false);
 
-  // CORRECTION TYPE ICI
   const [cardToPick, setCardToPick] = useState<ScryfallRawData | null>(null);
 
-  // --- LOGIQUE AJOUT / RETRAIT ---
-  
   const handleAddToGive = (card: CardType) => {
       const existing = toGive.find(c => c.id === card.id);
       if (existing) {
           if (existing.quantity < card.quantity) { 
               setToGive(prev => prev.map(c => c.id === card.id ? { ...c, quantity: c.quantity + 1 } : c));
           } else {
-              toast.error("Max quantité atteinte");
+              toast.error("Stock max atteint");
           }
       } else {
           setToGive(prev => [...prev, { ...card, quantity: 1 }]);
@@ -3183,13 +3390,10 @@ export default function ManualTradePage() {
       finally { setIsSearching(false); }
   };
 
-  // Click sur résultat recherche -> Ouvre la modale
-  // CORRECTION TYPE ICI
   const handleSearchResultClick = (scryfallCard: ScryfallRawData) => {
     setCardToPick(scryfallCard);
   };
 
-  // Retour de la modale -> Ajoute à la liste "Je reçois"
   const handleConfirmReceive = (card: CardType) => {
       const existing = toReceive.find(c => c.id === card.id && c.isFoil === card.isFoil); 
       
@@ -3203,34 +3407,40 @@ export default function ManualTradePage() {
           setToReceive(prev => [...prev, card]);
       }
       
-      // On vide la recherche pour nettoyer l'interface
       setSearchResults([]); 
       setRemoteSearch("");
       toast.success(`Ajouté : ${card.name}`);
   };
 
-  // --- VALIDATION ---
+  // --- NOUVELLE LOGIQUE DE VALIDATION SÉCURISÉE ---
   const handleValidate = async () => {
+      if (!user) return;
       if (toGive.length === 0 && toReceive.length === 0) return;
       if (!confirm("Confirmer cet échange ? Vos cartes données seront retirées de votre collection.")) return;
 
-      const success = await executeTrade(toGive, toReceive, null);
-      if (success) {
-          setToGive([]);
-          setToReceive([]);
-          setLocalSearch("");
-      }
+      const toastId = toast.loading("Validation sécurisée...");
+
+      startTransition(async () => {
+        // On appelle le serveur
+        const result = await executeManualTrade(user.uid, toGive, toReceive);
+        
+        if (result.success) {
+            toast.success("Echange validé !", { id: toastId });
+            setToGive([]);
+            setToReceive([]);
+            setLocalSearch("");
+        } else {
+            toast.error(result.error || "Erreur lors de l'échange", { id: toastId });
+        }
+      });
   };
 
-  // --- CALCULS & FILTRES ---
   const valGive = toGive.reduce((acc, c) => acc + (c.customPrice ?? c.price ?? 0) * c.quantity, 0);
   const valReceive = toReceive.reduce((acc, c) => acc + (c.price || 0) * c.quantity, 0);
 
-  // ⚡ On filtre les doublons de nom pour l'affichage
   const uniqueSearchResults = useMemo(() => {
     const seen = new Set();
     return searchResults.filter(card => {
-      // Sécurisation : on vérifie que le nom existe (pour éviter crash sur data corrompue)
       const rawName = card.name || "";
       const name = rawName.split(' // ')[0];
       if (seen.has(name)) return false;
@@ -3242,20 +3452,18 @@ export default function ManualTradePage() {
   if (!user) return <div className="p-10 text-center">Connectez-vous.</div>;
 
   return (
-    // CONTENEUR PRINCIPAL FIXE (Hauteur écran - Header)
     <div className="container mx-auto p-4 h-[calc(100vh-64px)] flex flex-col">
         
         <h1 className="text-2xl font-bold mb-4 flex-none flex items-center gap-2">
-            🖐️ Échange Manuel / Externe
+            Échange Manuel / Externe
         </h1>
 
-        {/* GRILLE QUI PREND TOUT L'ESPACE RESTANT */}
         <div className="grid lg:grid-cols-2 gap-6 grow overflow-hidden pb-24">
             
-            {/* --- COLONNE GAUCHE : JE DONNE --- */}
+            {/* COLONNE GAUCHE : JE DONNE */}
             <div className="flex flex-col h-full bg-red-50/50 dark:bg-red-900/10 rounded-xl border border-red-100 dark:border-red-900 overflow-hidden relative shadow-sm">
                 <div className="p-4 pb-0 flex-none">
-                    <h2 className="font-bold text-red-600 mb-2">📤 Je donne (De ma collection)</h2>
+                    <h2 className="font-bold text-red-600 mb-2">Je donne (De ma collection)</h2>
                     <input 
                         type="text" 
                         placeholder="Chercher dans ma collection..." 
@@ -3265,10 +3473,8 @@ export default function ManualTradePage() {
                     />
                 </div>
                 
-                {/* LISTE DÉFILANTE */}
                  <div className="grow overflow-y-auto custom-scrollbar p-4 pt-0 space-y-4">
-                    
-                    {/* SÉLECTIONNÉS */}
+                    {/* Liste des cartes sélectionnées */}
                     {toGive.length > 0 && (
                         <div className="bg-white dark:bg-gray-800 rounded-lg border border-red-200 dark:border-red-800 overflow-hidden">
                             <div className="bg-red-100 dark:bg-red-900/30 px-3 py-1 text-xs font-bold text-red-700 dark:text-red-300">
@@ -3277,13 +3483,13 @@ export default function ManualTradePage() {
                             {toGive.map(card => (
                                 <div key={card.id} className="flex justify-between items-center text-sm p-2 border-b dark:border-gray-700 last:border-0 hover:bg-gray-50 dark:hover:bg-gray-700/50">
                                     <span className="truncate">{card.quantity}x {card.name}</span>
-                                    <button onClick={() => setToGive(p => p.filter(c => c.id !== card.id))} className="text-red-500 hover:bg-red-50 rounded px-1">✕</button>
+                                    <button onClick={() => setToGive(p => p.filter(c => c.id !== card.id))} className="text-red-500 hover:bg-red-50 rounded px-1">X</button>
                                 </div>
                             ))}
                         </div>
                     )}
 
-                    {/* DISPONIBLES */}
+                    {/* Liste de la collection */}
                     <div className="space-y-1">
                         <p className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Ma Collection</p>
                         {loading ? <p className="text-sm">Chargement...</p> : 
@@ -3306,17 +3512,16 @@ export default function ManualTradePage() {
                     </div>
                 </div>
 
-                {/* TOTAL */}
                 <div className="flex-none bg-red-50 dark:bg-red-900/20 p-3 border-t border-red-100 dark:border-red-900 text-center">
                     <span className="text-xs text-red-600 dark:text-red-400 font-bold uppercase">Total Donné</span>
-                    <div className="text-xl font-bold text-red-700 dark:text-red-300">{valGive.toFixed(2)} €</div>
+                    <div className="text-xl font-bold text-red-700 dark:text-red-300">{valGive.toFixed(2)} EUR</div>
                 </div>
             </div>
 
-            {/* --- COLONNE DROITE : JE REÇOIS --- */}
+            {/* COLONNE DROITE : JE REÇOIS */}
             <div className="flex flex-col h-full bg-green-50/50 dark:bg-green-900/10 rounded-xl border border-green-100 dark:border-green-900 overflow-hidden relative shadow-sm">
                 <div className="p-4 pb-0 flex-none">
-                    <h2 className="font-bold text-green-600 mb-2">📥 Je reçois (Ajout libre)</h2>
+                    <h2 className="font-bold text-green-600 mb-2">Je reçois (Ajout libre)</h2>
                     <form onSubmit={handleSearchScryfall} className="flex gap-2 mb-2">
                         <input 
                             type="text" 
@@ -3325,14 +3530,12 @@ export default function ManualTradePage() {
                             value={remoteSearch}
                             onChange={e => setRemoteSearch(e.target.value)}
                         />
-                        <button type="submit" className="bg-green-600 hover:bg-green-700 text-white px-3 rounded shadow-sm">🔍</button>
+                        <button type="submit" className="bg-green-600 hover:bg-green-700 text-white px-3 rounded shadow-sm">V</button>
                     </form>
                 </div>
 
-                {/* LISTE DÉFILANTE */}
                  <div className="grow overflow-y-auto custom-scrollbar p-4 pt-0 space-y-4">
                     
-                    {/* SÉLECTIONNÉS */}
                     {toReceive.length > 0 && (
                         <div className="bg-white dark:bg-gray-800 rounded-lg border border-green-200 dark:border-green-800 overflow-hidden">
                             <div className="bg-green-100 dark:bg-green-900/30 px-3 py-1 text-xs font-bold text-green-700 dark:text-green-300">
@@ -3345,17 +3548,16 @@ export default function ManualTradePage() {
                                         <div className="flex flex-col truncate">
                                             <span className="dark:text-gray-200 truncate">{card.name}</span>
                                             <span className="text-[10px] text-gray-500 truncate">
-                                                {card.setName} {card.isFoil && '✨'}
+                                                {card.setName} {card.isFoil && 'Foil'}
                                             </span>
                                         </div>
                                     </div>
-                                    <button onClick={() => setToReceive(p => p.filter((_, i) => i !== idx))} className="text-red-500 hover:bg-red-50 rounded px-1 ml-2">✕</button>
+                                    <button onClick={() => setToReceive(p => p.filter((_, i) => i !== idx))} className="text-red-500 hover:bg-red-50 rounded px-1 ml-2">X</button>
                                 </div>
                             ))}
                         </div>
                     )}
 
-                    {/* RÉSULTATS SCRYFALL */}
                      <div className="space-y-1">
                         <p className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Résultats Scryfall</p>
                         {isSearching && <p className="text-xs text-center py-4">Recherche...</p>}
@@ -3369,47 +3571,42 @@ export default function ManualTradePage() {
                                     <p className="font-bold text-xs truncate dark:text-gray-200">{card.name}</p>
                                     <p className="text-[10px] text-gray-500 italic">Sélectionner version...</p>
                                  </div>
-                                 <span className="text-xs font-bold text-gray-400 group-hover:text-green-500 shrink-0">Choisir ›</span>
+                                 <span className="text-xs font-bold text-gray-400 group-hover:text-green-500 shrink-0">Choisir</span>
                             </div>
                         ))}
                     </div>
                 </div>
 
-                {/* TOTAL */}
                 <div className="flex-none bg-green-50 dark:bg-green-900/20 p-3 border-t border-green-100 dark:border-green-900 text-center">
                     <span className="text-xs text-green-600 dark:text-green-400 font-bold uppercase">Total Reçu</span>
-                    <div className="text-xl font-bold text-green-700 dark:text-green-300">{valReceive.toFixed(2)} €</div>
+                    <div className="text-xl font-bold text-green-700 dark:text-green-300">{valReceive.toFixed(2)} EUR</div>
                 </div>
             </div>
         </div>
 
-        {/* --- FOOTER DE VALIDATION --- */}
         <div className="fixed bottom-0 left-0 right-0 h-20 bg-white dark:bg-gray-900 border-t dark:border-gray-800 flex justify-between items-center px-6 z-40 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)]">
             
-            {/* Espace vide pour centrer */}
             <div className="flex-1"></div>
 
-            {/* BALANCE */}
             <div className="flex-1 flex flex-col items-center justify-center">
                 <span className="text-xs text-gray-400 font-bold uppercase tracking-widest">Balance</span>
                 <div className={`text-2xl font-black ${valGive - valReceive >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                    {valGive - valReceive > 0 ? '+' : ''}{(valGive - valReceive).toFixed(2)} €
+                    {valGive - valReceive > 0 ? '+' : ''}{(valGive - valReceive).toFixed(2)} EUR
                 </div>
             </div>
 
-            {/* BOUTON */}
             <div className="flex-1 flex justify-end">
                 <button 
                     onClick={handleValidate}
-                    disabled={isProcessing || (toGive.length === 0 && toReceive.length === 0)}
+                    // Désactivé pendant le chargement (isPending) ou si vide
+                    disabled={isPending || (toGive.length === 0 && toReceive.length === 0)}
                     className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-3 rounded-xl font-bold disabled:opacity-50 transition shadow-lg transform active:scale-95"
                 >
-                    {isProcessing ? 'Validation...' : '✅ Valider l\'échange'}
+                    {isPending ? 'Validation...' : 'Valider l\'échange'}
                 </button>
             </div>
         </div>
 
-        {/* MODALE DE SÉLECTION DE VERSION */}
         <CardVersionPickerModal 
             isOpen={!!cardToPick}
             baseCard={cardToPick}
@@ -3422,8 +3619,132 @@ export default function ManualTradePage() {
 }
 </file>
 
+<file path="components/Header.tsx">
+'use client';
+
+import { useState } from 'react';
+import Link from 'next/link';
+import { useAuth } from '@/lib/AuthContext';
+import { usePathname } from 'next/navigation';
+
+export default function Header() {
+  const { user, logOut, friendRequestCount } = useAuth();
+  const pathname = usePathname();
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+
+  const linkClass = (path: string) => `
+    font-medium transition-colors block py-2 md:py-0
+    ${pathname === path 
+      ? 'text-blue-600 dark:text-blue-400 font-bold' 
+      : 'text-gray-700 dark:text-gray-200 hover:text-blue-600 dark:hover:text-blue-400'}
+  `;
+
+  return (
+    <header className="bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-700 p-4 shadow-sm sticky top-0 z-40">
+      <div className="container mx-auto">
+        <div className="flex justify-between items-center">
+          <Link 
+            href="/" 
+            className="text-xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-purple-600 hover:opacity-80 transition"
+            onClick={() => setIsMenuOpen(false)}
+          >
+            MagicWish
+          </Link>
+
+          <div className="flex items-center gap-4">
+            {user ? (
+              <>
+                <nav className="hidden md:flex gap-6 mr-4 items-center">
+                  <Link href="/search" className={linkClass('/search')}>Recherche</Link> 
+                  <Link href="/wishlist" className={linkClass('/wishlist')}>Wishlist</Link>
+                  <Link href="/collection" className={linkClass('/collection')}>Collection</Link>
+                  <Link href="/trades" className={linkClass('/trades')}>Echanges</Link>
+                  <Link href="/contacts" className={`${linkClass('/contacts')} relative flex items-center gap-1`}>
+                    Contacts
+                    {friendRequestCount > 0 && (
+                      <span className="absolute -top-2 -right-3 bg-red-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full">
+                        {friendRequestCount}
+                      </span>
+                    )}
+                  </Link>
+                </nav>
+
+                <div className="h-6 w-px bg-gray-300 dark:bg-gray-600 hidden md:block"></div>
+
+                <div className="flex items-center gap-3">
+                  {user.photoURL && (
+                    <img 
+                      src={user.photoURL} 
+                      alt="Avatar" 
+                      className="w-8 h-8 rounded-full border border-gray-300"
+                      title={user.displayName || ''}
+                    />
+                  )}
+                  <button
+                    onClick={logOut}
+                    className="hidden md:block text-sm text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 px-3 py-1 rounded transition"
+                  >
+                    Deconnexion
+                  </button>
+
+                  <button 
+                    onClick={() => setIsMenuOpen(!isMenuOpen)}
+                    className="md:hidden p-2 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg focus:outline-none"
+                  >
+                    Menu
+                  </button>
+                </div>
+              </>
+            ) : (
+              <Link
+                href="/login"
+                className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 transition"
+              >
+                Se connecter
+              </Link>
+            )}
+          </div>
+        </div>
+        
+        {user && isMenuOpen && (
+          <div className="md:hidden mt-4 pt-4 border-t border-gray-100 dark:border-gray-800 animate-in slide-in-from-top-2 duration-200">
+             <nav className="flex flex-col space-y-2">
+               <Link href="/search" className={linkClass('/search')} onClick={() => setIsMenuOpen(false)}>
+                 Recherche
+               </Link>
+               <Link href="/wishlist" className={linkClass('/wishlist')} onClick={() => setIsMenuOpen(false)}>
+                 Wishlist
+               </Link>
+               <Link href="/collection" className={linkClass('/collection')} onClick={() => setIsMenuOpen(false)}>
+                 Collection
+               </Link>
+               <Link href="/trades" className={linkClass('/trades')} onClick={() => setIsMenuOpen(false)}>
+                 Echanges
+               </Link>
+               <Link href="/contacts" className={`${linkClass('/contacts')} flex items-center justify-between`} onClick={() => setIsMenuOpen(false)}>
+                 <span>Contacts</span>
+                 {friendRequestCount > 0 && (
+                    <span className="bg-red-500 text-white text-xs font-bold px-2 py-0.5 rounded-full">
+                        {friendRequestCount}
+                    </span>
+                 )}
+               </Link>
+               <button 
+                 onClick={() => { logOut(); setIsMenuOpen(false); }}
+                 className="text-left py-2 text-red-600 font-medium hover:bg-red-50 dark:hover:bg-red-900/10 rounded"
+               >
+                 Deconnexion
+               </button>
+             </nav>
+          </div>
+        )}
+      </div>
+    </header>
+  );
+}
+</file>
+
 <file path="app/trades/page.tsx">
-// app/trades/page.tsx
 'use client';
 
 import { useState } from 'react';
@@ -3434,8 +3755,8 @@ import Link from 'next/link';
 import { useCardCollection, CardType } from '@/hooks/useCardCollection'; 
 import MagicCard from '@/components/MagicCard'; 
 
-// --- COMPOSANT : CARTE DE DEMANDE (INBOX) ---
 const IncomingRequestCard = ({ trade }: { trade: TradeRequest }) => {
+    // ... (Code existant inchangé)
     const { acceptTrade, rejectTrade, isProcessing } = useTradeSystem();
     const [isOpen, setIsOpen] = useState(false);
 
@@ -3444,17 +3765,17 @@ const IncomingRequestCard = ({ trade }: { trade: TradeRequest }) => {
 
     return (
         <div className="bg-white dark:bg-gray-800 rounded-xl border-l-4 border-blue-500 shadow-sm p-4 mb-4">
-            <div className="flex justify-between items-center">
+            <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-3">
                 <div>
                     <h3 className="font-bold text-gray-900 dark:text-white">Proposition de {trade.senderName}</h3>
                     <p className="text-sm text-gray-500">
-                        Tu reçois <span className="text-green-600 font-bold">{trade.itemsGiven.length} cartes</span> (~{valReceive.toFixed(0)}€) 
-                        contre <span className="text-red-600 font-bold">{trade.itemsReceived.length} cartes</span> (~{valGive.toFixed(0)}€)
+                        Tu recois <span className="text-green-600 font-bold">{trade.itemsGiven.length} cartes</span> (~{valReceive.toFixed(0)}EUR) 
+                        contre <span className="text-red-600 font-bold">{trade.itemsReceived.length} cartes</span> (~{valGive.toFixed(0)}EUR)
                     </p>
                 </div>
-                <div className="flex gap-2">
+                <div className="flex gap-2 self-end sm:self-auto">
                     <button onClick={() => setIsOpen(!isOpen)} className="text-sm text-gray-500 underline mr-2">
-                        {isOpen ? 'Masquer' : 'Détails'}
+                        {isOpen ? 'Masquer' : 'Details'}
                     </button>
                     <button 
                         onClick={() => rejectTrade(trade.id)}
@@ -3468,7 +3789,7 @@ const IncomingRequestCard = ({ trade }: { trade: TradeRequest }) => {
                         disabled={isProcessing}
                         className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition shadow-sm"
                     >
-                        {isProcessing ? '...' : 'Accepter & Échanger'}
+                        {isProcessing ? '...' : 'Accepter'}
                     </button>
                 </div>
             </div>
@@ -3476,7 +3797,7 @@ const IncomingRequestCard = ({ trade }: { trade: TradeRequest }) => {
             {isOpen && (
                 <div className="mt-4 pt-4 border-t border-gray-100 dark:border-gray-700 grid md:grid-cols-2 gap-4">
                     <div className="bg-green-50/50 p-3 rounded">
-                        <p className="text-xs font-bold text-green-700 mb-2">⬇️ Tu vas recevoir :</p>
+                        <p className="text-xs font-bold text-green-700 mb-2">Tu vas recevoir :</p>
                         <div className="flex flex-wrap gap-2">
                             {trade.itemsGiven.map((c: CardType) => (
                                 <div key={c.id} className="relative group w-12 h-16 bg-gray-200 rounded overflow-hidden">
@@ -3487,7 +3808,7 @@ const IncomingRequestCard = ({ trade }: { trade: TradeRequest }) => {
                         </div>
                     </div>
                     <div className="bg-red-50/50 p-3 rounded">
-                        <p className="text-xs font-bold text-red-700 mb-2">⬆️ Tu vas donner :</p>
+                        <p className="text-xs font-bold text-red-700 mb-2">Tu vas donner :</p>
                          <div className="flex flex-wrap gap-2">
                             {trade.itemsReceived.map((c: CardType) => (
                                 <div key={c.id} className="relative group w-12 h-16 bg-gray-200 rounded overflow-hidden">
@@ -3503,8 +3824,8 @@ const IncomingRequestCard = ({ trade }: { trade: TradeRequest }) => {
     );
 };
 
-// --- COMPOSANT : LIGNE DE SCANNER ---
 const TradeRowProposal = ({ proposal, onProposalSent }: { proposal: TradeProposal, onProposalSent: () => void }) => {
+    // ... (Code existant inchangé)
     const { setCustomPrice } = useCardCollection('collection');
     const { proposeTrade } = useTradeSystem(); 
 
@@ -3536,9 +3857,9 @@ const TradeRowProposal = ({ proposal, onProposalSent }: { proposal: TradeProposa
                 </div>
                 <button
                     onClick={handlePropose}
-                    className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg font-bold shadow-sm transition text-sm flex items-center gap-2"
+                    className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg font-bold shadow-sm transition text-sm flex items-center gap-2 w-full sm:w-auto justify-center"
                 >
-                    📤 Proposer l&apos;échange
+                    Proposer l&apos;echange
                 </button>
             </div>
 
@@ -3546,7 +3867,7 @@ const TradeRowProposal = ({ proposal, onProposalSent }: { proposal: TradeProposa
                 <div className="p-4 bg-red-50/30 dark:bg-red-900/10">
                     <h3 className="font-bold text-red-600 dark:text-red-400 mb-4 flex justify-between">
                         Tu donnerais ({proposal.toGive.length})
-                        <span className="text-sm bg-white dark:bg-gray-800 px-2 py-1 rounded shadow-sm">{totalGive.toFixed(2)} €</span>
+                        <span className="text-sm bg-white dark:bg-gray-800 px-2 py-1 rounded shadow-sm">{totalGive.toFixed(2)} EUR</span>
                     </h3>
                     <div className="space-y-3">
                         {proposal.toGive.map(card => (
@@ -3561,7 +3882,7 @@ const TradeRowProposal = ({ proposal, onProposalSent }: { proposal: TradeProposa
                 <div className="p-4 bg-green-50/30 dark:bg-green-900/10">
                     <h3 className="font-bold text-green-600 dark:text-green-400 mb-4 flex justify-between">
                         Tu recevrais ({proposal.toReceive.length})
-                        <span className="text-sm bg-white dark:bg-gray-800 px-2 py-1 rounded shadow-sm">{totalReceive.toFixed(2)} €</span>
+                        <span className="text-sm bg-white dark:bg-gray-800 px-2 py-1 rounded shadow-sm">{totalReceive.toFixed(2)} EUR</span>
                     </h3>
                     <div className="space-y-3">
                          {proposal.toReceive.map(card => (
@@ -3572,7 +3893,7 @@ const TradeRowProposal = ({ proposal, onProposalSent }: { proposal: TradeProposa
             </div>
             
             <div className="p-2 text-center text-xs text-gray-400 border-t border-gray-100 dark:border-gray-700">
-                Balance : {delta.toFixed(2)} €
+                Balance : {delta.toFixed(2)} EUR
             </div>
         </div>
     );
@@ -3587,43 +3908,40 @@ export default function TradesPage() {
   if (!user) return <div className="p-10 text-center">Connectez-vous.</div>;
 
   return (
-    // CONTENEUR FIXE
     <main className="container mx-auto p-4 max-w-5xl h-[calc(100vh-64px)] flex flex-col">
         
-        {/* HEADER & TABS (FIXE) */}
         <div className="flex-none flex flex-col md:flex-row justify-between items-end mb-4 gap-4 border-b border-gray-200 dark:border-gray-700 pb-4">
             <div>
-                <h1 className="text-3xl font-bold text-purple-600 dark:text-purple-400">🤝 Centre d&apos;Échanges</h1>
+                <h1 className="text-3xl font-bold text-purple-600 dark:text-purple-400">Centre d&apos;Echanges</h1>
             </div>
             <div className="flex gap-4">
                 <button 
                     onClick={() => setActiveTab('scan')}
                     className={`pb-2 px-2 font-bold transition ${activeTab === 'scan' ? 'text-purple-600 border-b-2 border-purple-600' : 'text-gray-500 hover:text-gray-700'}`}
                 >
-                    🔍 Scanner ({proposals.length})
+                    Scanner ({proposals.length})
                 </button>
                 <button 
                     onClick={() => setActiveTab('requests')}
                     className={`pb-2 px-2 font-bold transition relative ${activeTab === 'requests' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-500 hover:text-gray-700'}`}
                 >
-                    📬 Demandes 
+                    Demandes 
                     {incomingTrades.length > 0 && <span className="ml-2 bg-red-500 text-white text-[10px] px-1.5 rounded-full align-top">{incomingTrades.length}</span>}
                 </button>
             </div>
         </div>
 
-        {/* CONTENU SCROLLABLE */}
         <div className="grow overflow-y-auto custom-scrollbar pb-10">
             
-            {/* --- TAB 1 : SCANNER --- */}
             {activeTab === 'scan' && (
                 <div className="animate-in fade-in">
-                    <div className="flex justify-end mb-6 gap-2 sticky top-0 bg-white/80 dark:bg-gray-900/80 backdrop-blur-sm z-10 py-2">
-                         <Link href="/trades/manual" className="bg-gray-100 hover:bg-gray-200 text-gray-800 px-4 py-2 rounded-lg font-bold transition text-sm flex items-center">
-                            🖐️ Mode Manuel
+                    {/* EN-TÊTE SCANNER MOBILE FRIENDLY */}
+                    <div className="flex flex-col sm:flex-row justify-end mb-6 gap-3 sticky top-0 bg-white/80 dark:bg-gray-900/80 backdrop-blur-sm z-10 py-2">
+                         <Link href="/trades/manual" className="bg-gray-100 hover:bg-gray-200 text-gray-800 px-4 py-2 rounded-lg font-bold transition text-sm flex items-center justify-center">
+                            Mode Manuel
                         </Link>
-                        <button onClick={runScan} disabled={loading} className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg font-bold shadow transition text-sm disabled:opacity-50">
-                            {loading ? status : "🚀 Lancer le Scanner"}
+                        <button onClick={runScan} disabled={loading} className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg font-bold shadow transition text-sm disabled:opacity-50 w-full sm:w-auto">
+                            {loading ? status : "Lancer le Scanner"}
                         </button>
                     </div>
 
@@ -3641,189 +3959,33 @@ export default function TradesPage() {
                 </div>
             )}
 
-            {/* --- TAB 2 : DEMANDES (INBOX) --- */}
+            {/* ... (Reste inchangé) ... */}
             {activeTab === 'requests' && (
                 <div className="animate-in fade-in space-y-8">
-                    
-                    {/* 1. REÇUES */}
                     <div>
-                        <h2 className="font-bold text-gray-500 uppercase text-xs mb-4 sticky top-0 bg-white dark:bg-gray-900 py-2 z-10">À traiter ({incomingTrades.length})</h2>
+                        <h2 className="font-bold text-gray-500 uppercase text-xs mb-4 sticky top-0 bg-white dark:bg-gray-900 py-2 z-10">A traiter ({incomingTrades.length})</h2>
                         {incomingTrades.length === 0 && <p className="text-gray-400 italic text-sm">Aucune demande en attente.</p>}
-                        
                         {incomingTrades.map((trade: TradeRequest) => (
                             <IncomingRequestCard key={trade.id} trade={trade} />
                         ))}
                     </div>
-
-                    {/* 2. ENVOYÉES */}
                     <div>
-                        <h2 className="font-bold text-gray-500 uppercase text-xs mb-4 pt-4 border-t dark:border-gray-700">En attente de réponse ({outgoingTrades.length})</h2>
+                        <h2 className="font-bold text-gray-500 uppercase text-xs mb-4 pt-4 border-t dark:border-gray-700">En attente de reponse ({outgoingTrades.length})</h2>
                         {outgoingTrades.length === 0 && <p className="text-gray-400 italic text-sm">Aucune proposition en cours.</p>}
-                        
                         {outgoingTrades.map((trade: TradeRequest) => (
                              <div key={trade.id} className="flex justify-between items-center p-3 bg-gray-50 dark:bg-gray-800/50 rounded-lg border border-gray-100 dark:border-gray-700 mb-2">
                                 <span className="text-sm text-gray-600 dark:text-gray-300">
-                                    Envoyée à <span className="font-bold">{trade.receiverName}</span> (le {new Date(trade.createdAt?.seconds * 1000).toLocaleDateString()})
+                                    Envoyee a <span className="font-bold">{trade.receiverName}</span>
                                 </span>
                                 <button onClick={() => cancelTrade(trade.id)} className="text-xs text-red-500 hover:underline">Annuler</button>
                             </div>
                         ))}
                     </div>
-
                 </div>
             )}
         </div>
 
     </main>
-  );
-}
-</file>
-
-<file path="components/Header.tsx">
-// components/Header.tsx
-'use client';
-
-import { useState } from 'react';
-import Link from 'next/link';
-import { useAuth } from '@/lib/AuthContext';
-import { usePathname } from 'next/navigation';
-
-export default function Header() {
-  const { user, logOut, friendRequestCount } = useAuth();
-  const pathname = usePathname();
-  const [isMenuOpen, setIsMenuOpen] = useState(false);
-
-  // Petite fonction pour styliser le lien actif
-  const linkClass = (path: string) => `
-    font-medium transition-colors block py-2 md:py-0
-    ${pathname === path 
-      ? 'text-blue-600 dark:text-blue-400 font-bold' 
-      : 'text-gray-700 dark:text-gray-200 hover:text-blue-600 dark:hover:text-blue-400'}
-  `;
-
-  return (
-    <header className="bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-700 p-4 shadow-sm sticky top-0 z-40">
-      <div className="container mx-auto">
-        <div className="flex justify-between items-center">
-          {/* LOGO */}
-          <Link 
-            href="/" 
-            className="text-xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-purple-600 hover:opacity-80 transition"
-            onClick={() => setIsMenuOpen(false)}
-          >
-            ✨ MagicWish
-          </Link>
-
-          <div className="flex items-center gap-4">
-            {user ? (
-              <>
-                {/* NAVIGATION DESKTOP (Cachée sur mobile) */}
-                <nav className="hidden md:flex gap-6 mr-4 items-center">
-                  {/* MODIFICATION ICI : Lien vers /search */}
-                  <Link href="/search" className={linkClass('/search')}>🔍 Recherche</Link> 
-                  
-                  <Link href="/wishlist" className={linkClass('/wishlist')}>Ma Wishlist</Link>
-                  <Link href="/collection" className={linkClass('/collection')}>Ma Collection</Link>
-                  
-                  <Link href="/trades" className={linkClass('/trades')}>🤝 Échanges</Link>
-
-                  <Link href="/contacts" className={`${linkClass('/contacts')} relative flex items-center gap-1`}>
-                    👥 Contacts
-                    {friendRequestCount > 0 && (
-                      <span className="absolute -top-2 -right-3 bg-red-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full animate-bounce">
-                        {friendRequestCount}
-                      </span>
-                    )}
-                  </Link>
-                </nav>
-
-                <div className="h-6 w-px bg-gray-300 dark:bg-gray-600 hidden md:block"></div>
-
-                {/* AVATAR + LOGOUT */}
-                <div className="flex items-center gap-3">
-                  {user.photoURL && (
-                    <img 
-                      src={user.photoURL} 
-                      alt="Avatar" 
-                      className="w-8 h-8 rounded-full border border-gray-300"
-                      title={user.displayName || ''}
-                    />
-                  )}
-                  <button
-                    onClick={logOut}
-                    className="hidden md:block text-sm text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 px-3 py-1 rounded transition"
-                  >
-                    Déconnexion
-                  </button>
-
-                  {/* BOUTON BURGER MOBILE */}
-                  <button 
-                    onClick={() => setIsMenuOpen(!isMenuOpen)}
-                    className="md:hidden p-2 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg focus:outline-none"
-                  >
-                    {isMenuOpen ? (
-                      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6">
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                      </svg>
-                    ) : (
-                      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6">
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" />
-                      </svg>
-                    )}
-                  </button>
-                </div>
-              </>
-            ) : (
-              <Link
-                href="/login"
-                className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 transition"
-              >
-                Se connecter
-              </Link>
-            )}
-          </div>
-        </div>
-        
-        {/* MENU MOBILE */}
-        {user && isMenuOpen && (
-          <div className="md:hidden mt-4 pt-4 border-t border-gray-100 dark:border-gray-800 animate-in slide-in-from-top-2 duration-200">
-             <nav className="flex flex-col space-y-2">
-               {/* MODIFICATION ICI : Lien vers /search */}
-               <Link href="/search" className={linkClass('/search')} onClick={() => setIsMenuOpen(false)}>
-                 🔍 Recherche
-               </Link>
-               
-               <Link href="/wishlist" className={linkClass('/wishlist')} onClick={() => setIsMenuOpen(false)}>
-                 ✨ Ma Wishlist
-               </Link>
-               <Link href="/collection" className={linkClass('/collection')} onClick={() => setIsMenuOpen(false)}>
-                 📚 Ma Collection
-               </Link>
-               
-               <Link href="/trades" className={linkClass('/trades')} onClick={() => setIsMenuOpen(false)}>
-                 🤝 Centre d&apos;Échanges
-               </Link>
-
-               <Link href="/contacts" className={`${linkClass('/contacts')} flex items-center justify-between`} onClick={() => setIsMenuOpen(false)}>
-                 <span>👥 Mes Contacts</span>
-                 {friendRequestCount > 0 && (
-                    <span className="bg-red-500 text-white text-xs font-bold px-2 py-0.5 rounded-full">
-                        {friendRequestCount}
-                    </span>
-                 )}
-               </Link>
-
-               <button 
-                 onClick={() => { logOut(); setIsMenuOpen(false); }}
-                 className="text-left py-2 text-red-600 font-medium hover:bg-red-50 dark:hover:bg-red-900/10 rounded"
-               >
-                 🚪 Déconnexion
-               </button>
-             </nav>
-          </div>
-        )}
-      </div>
-    </header>
   );
 }
 </file>
@@ -3917,7 +4079,7 @@ export default function CardVersionPickerModal({
         setName: setName,
         setCode: setCode,
         isFoil: isFoil,
-        isSpecificVersion: !anyVersion, // Si AnyVersion est coché, Specific est false
+        isSpecificVersion: !anyVersion,
         scryfallData: currentCardRaw,
         wishlistId: destination === 'wishlist' ? selectedListId : undefined 
     };
@@ -3926,13 +4088,10 @@ export default function CardVersionPickerModal({
     onClose();
   };
 
-  // --- LOGIQUE AJOUTÉE ICI : Sélection de la version la plus récente ---
   const handleAnyVersionChange = (checked: boolean) => {
       setAnyVersion(checked);
       
       if (checked && versions.length > 0) {
-          // On trie les versions par date de sortie (la plus récente en premier)
-          // Scryfall renvoie souvent déjà trié, mais on assure le coup avec un sort JS
           const sorted = [...versions].sort((a, b) => 
               (b.released_at || '').localeCompare(a.released_at || '')
           );
@@ -3940,7 +4099,6 @@ export default function CardVersionPickerModal({
           const newest = sorted[0];
           if (newest) {
               setSelectedVersionId(newest.id);
-              // On reset les options visuelles car on change de carte
               setIsFoil(false);
               setIsFlipped(false);
           }
@@ -3951,16 +4109,13 @@ export default function CardVersionPickerModal({
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 backdrop-blur-sm animate-in fade-in duration-200">
       <div className="bg-gray-900 w-full max-w-md rounded-2xl overflow-hidden shadow-2xl border border-gray-700 flex flex-col max-h-[90vh]">
         
-        {/* HEADER */}
         <div className="p-4 flex justify-between items-center border-b border-gray-800">
             <h3 className="text-white font-bold truncate pr-4">{name}</h3>
-            <button onClick={onClose} className="text-gray-400 hover:text-white px-2 text-xl">✕</button>
+            <button onClick={onClose} className="text-gray-400 hover:text-white px-2 text-xl">X</button>
         </div>
 
-        {/* CONTENU */}
         <div className="overflow-y-auto p-6 flex flex-col items-center space-y-6 custom-scrollbar">
             
-            {/* IMAGE */}
             <div className="relative w-64 aspect-[2.5/3.5] rounded-xl overflow-hidden shadow-lg ring-1 ring-white/10 group cursor-pointer" onClick={() => imageBackUrl && setIsFlipped(!isFlipped)}>
                 {loading ? (
                     <div className="w-full h-full bg-gray-800 animate-pulse flex items-center justify-center text-gray-500">Chargement...</div>
@@ -3969,16 +4124,15 @@ export default function CardVersionPickerModal({
                 )}
                 {anyVersion && (
                     <div className="absolute inset-0 flex items-center justify-center bg-black/40 backdrop-blur-[2px]">
-                        <span className="bg-blue-600 text-white font-bold px-3 py-1 rounded-full text-sm shadow-lg border border-white/20">✨ Générique</span>
+                        <span className="bg-blue-600 text-white font-bold px-3 py-1 rounded-full text-sm shadow-lg border border-white/20">Generique</span>
                     </div>
                 )}
                 {isFoil && !anyVersion && <div className="absolute inset-0 bg-gradient-to-tr from-purple-500/30 to-transparent mix-blend-overlay pointer-events-none" />}
             </div>
 
-            {/* SÉLECTION WISHLIST */}
             {destination === 'wishlist' && availableLists && availableLists.length > 0 && (
                 <div className="w-full space-y-1 bg-purple-900/20 p-3 rounded-xl border border-purple-500/30">
-                    <label className="text-xs text-purple-300 font-bold uppercase tracking-wider">Ajouter à la liste :</label>
+                    <label className="text-xs text-purple-300 font-bold uppercase tracking-wider">Ajouter a la liste :</label>
                     <select 
                         value={selectedListId}
                         onChange={(e) => setSelectedListId(e.target.value)}
@@ -3991,9 +4145,8 @@ export default function CardVersionPickerModal({
                 </div>
             )}
 
-            {/* ÉDITION */}
             <div className={`w-full space-y-2 transition-opacity ${anyVersion ? 'opacity-50 pointer-events-none' : 'opacity-100'}`}>
-                <label className="text-xs text-gray-400 uppercase font-bold tracking-wider">Édition / Set</label>
+                <label className="text-xs text-gray-400 uppercase font-bold tracking-wider">Edition / Set</label>
                 <div className="relative">
                     <select 
                         className="w-full bg-gray-800 text-white border border-gray-700 rounded-xl p-3 appearance-none focus:ring-2 focus:ring-blue-500 outline-none text-sm"
@@ -4004,17 +4157,15 @@ export default function CardVersionPickerModal({
                             <option key={v.id} value={v.id}>{v.set_name} ({v.set.toUpperCase()}) #{v.collector_number}</option>
                         ))}
                     </select>
-                    <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-gray-400">▼</div>
+                    <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-gray-400">V</div>
                 </div>
             </div>
 
-            {/* OPTIONS */}
             <div className="w-full space-y-4">
-                {/* Switch Generic - MODIFIÉ */}
                 <label className="flex items-center justify-between bg-blue-900/20 p-3 rounded-xl border border-blue-900/50 cursor-pointer hover:bg-blue-900/30 transition">
                     <div className="flex flex-col">
-                        <span className="text-sm font-bold text-blue-100">Peu importe l&apos;édition</span>
-                        <span className="text-[10px] text-blue-300">Sélectionnera la version la plus récente</span>
+                        <span className="text-sm font-bold text-blue-100">Peu importe l&apos;edition</span>
+                        <span className="text-[10px] text-blue-300">Selectionnera la version la plus recente</span>
                     </div>
                     <div className="relative inline-flex items-center cursor-pointer">
                         <input 
@@ -4027,7 +4178,6 @@ export default function CardVersionPickerModal({
                     </div>
                 </label>
 
-                {/* Finition & Quantité */}
                 <div className="flex gap-4">
                     <div className={`flex-1 bg-gray-800 rounded-xl p-2 flex flex-col items-center justify-center gap-1 border border-gray-700 transition-opacity ${anyVersion ? 'opacity-30 pointer-events-none' : ''}`}>
                         <span className="text-[10px] text-gray-400 font-bold uppercase">Finition</span>
@@ -4037,7 +4187,7 @@ export default function CardVersionPickerModal({
                         </div>
                     </div>
                     <div className="flex-1 bg-gray-800 rounded-xl p-2 flex flex-col items-center justify-center gap-1 border border-gray-700">
-                         <span className="text-[10px] text-gray-400 font-bold uppercase">Quantité</span>
+                         <span className="text-[10px] text-gray-400 font-bold uppercase">Quantite</span>
                          <div className="flex items-center gap-3">
                             <button onClick={() => setQuantity(Math.max(1, quantity - 1))} className="w-6 h-6 rounded-full bg-gray-700 text-white font-bold">-</button>
                             <span className="text-lg font-bold text-white w-4 text-center">{quantity}</span>
@@ -4048,13 +4198,12 @@ export default function CardVersionPickerModal({
             </div>
         </div>
 
-        {/* FOOTER */}
         <div className="p-4 bg-gray-800 border-t border-gray-700">
             <button 
                 onClick={handleConfirm}
                 className={`w-full font-bold py-4 rounded-xl text-lg transition shadow-lg transform active:scale-95 flex justify-center items-center gap-2 ${anyVersion ? 'bg-blue-600 hover:bg-blue-500 text-white' : 'bg-amber-500 hover:bg-amber-400 text-black'}`}
             >
-                <span>{anyVersion ? '✨ Ajouter (Générique)' : '+ Ajouter (Exact)'}</span>
+                <span>{anyVersion ? 'Ajouter (Generique)' : 'Ajouter (Exact)'}</span>
                 {quantity > 1 && <span className="bg-black/20 px-2 py-0.5 rounded text-sm">{quantity}</span>}
             </button>
         </div>
@@ -4340,551 +4489,6 @@ export function useCardCollection(
 }
 </file>
 
-<file path="components/MagicCard.tsx">
-// components/MagicCard.tsx
-'use client';
-
-import { useState, useEffect, memo } from 'react';
-
-type MagicCardProps = {
-  id?: string;
-  name: string;
-  imageUrl: string;
-  imageBackUrl?: string | null;
-  quantity?: number;
-  price?: number;
-  customPrice?: number; 
-  setName?: string;
-  
-  isFoil?: boolean;
-  isSpecificVersion?: boolean;
-  isForTrade?: boolean; 
-  
-  onIncrement?: () => void;
-  onDecrement?: () => void;
-  onMove?: () => void;
-  
-  onEditPrice?: (newPrice: number) => void;
-  onToggleAttribute?: (field: 'isFoil' | 'isSpecificVersion' | 'isForTrade', currentValue: boolean) => void;
-  
-  isWishlist?: boolean;
-  readOnly?: boolean;
-  isTradeView?: boolean;
-  allowPriceEdit?: boolean;
-
-  isSelectMode?: boolean;
-  isSelected?: boolean;
-  onSelect?: () => void;
-};
-
-const CARD_BACK_URL = "https://cards.scryfall.io/large/front/a/6/a6984342-f723-4e80-8e69-902d287a915f.jpg";
-
-function MagicCard(props: MagicCardProps) {
-  const { 
-      name, imageUrl, imageBackUrl, quantity = 1, 
-      price, customPrice, setName, 
-      isFoil, isSpecificVersion, isForTrade,
-      isTradeView, allowPriceEdit, 
-      onEditPrice, onToggleAttribute, 
-      readOnly, isWishlist,
-      onIncrement, onDecrement, onMove,
-      isSelectMode, isSelected, onSelect
-  } = props;
-  
-  const [isFlipped, setIsFlipped] = useState(false);
-  const [isEditingPrice, setIsEditingPrice] = useState(false);
-  const [tempPrice, setTempPrice] = useState(customPrice?.toString() || price?.toString() || "0");
-
-  useEffect(() => {
-    if (!isEditingPrice) {
-        const newVal = customPrice?.toString() || price?.toString() || "0";
-        // CORRECTION ICI : Vérifier avant d'appliquer
-        setTempPrice(prev => (prev !== newVal ? newVal : prev));
-    }
-  }, [customPrice, price, isEditingPrice]);
-
-  const effectivePrice = customPrice !== undefined ? customPrice : (price || 0);
-
-  const handleSavePrice = () => {
-      if (onEditPrice) {
-          onEditPrice(parseFloat(tempPrice));
-          setIsEditingPrice(false);
-      }
-  };
-
-  const currentImage = isFlipped && imageBackUrl ? imageBackUrl : imageUrl;
-
-  const handleCardClick = () => {
-      if (isSelectMode && onSelect) {
-          onSelect();
-      } else if (imageBackUrl) {
-          setIsFlipped(!isFlipped);
-      }
-  };
-
-  // --- VUE LISTE (TRADE) ---
-  if (isTradeView) {
-      return (
-        <div className="flex items-center gap-3 bg-white dark:bg-gray-800 p-2 rounded-lg border border-gray-100 dark:border-gray-700 content-visibility-auto">
-            <div className="w-10 h-14 bg-gray-200 rounded overflow-hidden flex-shrink-0 relative group cursor-pointer" onClick={() => setIsFlipped(!isFlipped)}>
-                 <img src={currentImage} className="w-full h-full object-cover" alt={name} loading="lazy" />
-                 {isFoil && <div className="absolute top-0 right-0 bg-purple-600/80 text-white text-[8px] px-1 font-bold">✨</div>}
-            </div>
-            
-            <div className="flex-grow min-w-0">
-                <div className="flex items-center gap-2">
-                    <p className="font-bold text-sm truncate" title={name}>{name}</p>
-                    {isFoil && <span className="text-xs" title="Foil">✨</span>}
-                </div>
-                <div className="flex items-center gap-2 text-xs text-gray-500">
-                    <p className="truncate">{setName}</p>
-                    {isSpecificVersion && <span className="bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300 px-1 rounded text-[9px] border border-blue-200" title="Édition exacte requise">🔒 EXACT</span>}
-                </div>
-            </div>
-
-            <div className="text-right flex flex-col items-end">
-                {isEditingPrice ? (
-                    <div className="flex items-center gap-1">
-                        <input type="number" value={tempPrice} onChange={(e) => setTempPrice(e.target.value)} className="w-16 p-1 text-xs border rounded text-black" autoFocus />
-                        <button onClick={handleSavePrice} className="text-green-600 text-xs font-bold">OK</button>
-                    </div>
-                ) : (
-                    <div 
-                        className={`font-bold text-sm ${customPrice ? 'text-orange-600' : 'text-gray-700 dark:text-gray-300'} ${allowPriceEdit ? 'cursor-pointer hover:underline' : ''}`}
-                        onClick={() => { if (allowPriceEdit) { setTempPrice(effectivePrice.toString()); setIsEditingPrice(true); }}}
-                        title={customPrice ? "Prix personnalisé" : "Prix Scryfall"}
-                    >
-                        {effectivePrice.toFixed(2)} €
-                        {customPrice && <span className="text-[8px] align-top ml-0.5">*</span>}
-                    </div>
-                )}
-            </div>
-        </div>
-      );
-  }
-
-  // --- VUE NORMALE (GRILLE) ---
-  return (
-    <div 
-        onClick={handleCardClick}
-        className={`relative group flex flex-col bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden p-3 gap-2 border transition-all duration-200 h-full content-visibility-auto
-        ${isSelected 
-            ? 'border-blue-500 ring-2 ring-blue-500 bg-blue-50 dark:bg-blue-900/20' 
-            : isFoil 
-                ? 'border-purple-300 dark:border-purple-800' 
-                : 'border-gray-100 dark:border-gray-700 hover:border-blue-300 dark:hover:border-blue-500'
-        }
-        ${isSelectMode ? 'cursor-pointer' : ''}
-        `}
-    >
-      
-      {!readOnly && !isSelectMode && isWishlist && onMove && (
-        <div className="absolute top-2 left-2 right-2 flex justify-end z-20 pointer-events-none">
-            <button onClick={(e) => { e.stopPropagation(); onMove(); }} className="pointer-events-auto p-1.5 bg-green-100 text-green-700 hover:bg-green-600 hover:text-white rounded-full transition opacity-100 md:opacity-0 md:group-hover:opacity-100 shadow-sm" title="Déplacer vers Collection">📦</button>
-        </div>
-      )}
-
-      {isSelectMode && (
-          <div className="absolute top-2 right-2 z-30 pointer-events-none">
-              <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center transition-colors shadow-sm ${isSelected ? 'bg-blue-600 border-blue-600' : 'bg-white/90 border-gray-400'}`}>
-                  {isSelected && <span className="text-white text-sm font-bold">✓</span>}
-              </div>
-          </div>
-      )}
-
-      <div className="relative w-full aspect-[2.5/3.5] bg-gray-200 rounded-lg overflow-hidden shrink-0">
-        <img
-          src={currentImage || CARD_BACK_URL}
-          alt={name}
-          loading="lazy"
-          className="w-full h-full object-cover transition-transform duration-300"
-          onError={(e) => { e.currentTarget.src = CARD_BACK_URL; }}
-        />
-        {isFoil && <div className="absolute inset-0 bg-gradient-to-tr from-purple-500/20 to-transparent pointer-events-none mix-blend-overlay"></div>}
-
-        {imageBackUrl && !isSelectMode && (
-          <button onClick={(e) => { e.stopPropagation(); setIsFlipped(!isFlipped); }} className="absolute top-1/2 right-2 -translate-y-1/2 bg-black/50 hover:bg-black/80 text-white p-2 rounded-full backdrop-blur-sm transition-all shadow-lg border border-white/20 z-10 pointer-events-auto">
-            🔄
-          </button>
-        )}
-      </div>
-      
-      <div className="flex-1 flex flex-col min-w-0">
-        <div className="flex justify-between items-start mb-1">
-            <h3 className="font-bold text-sm md:text-base truncate flex-grow" title={name}>{name}</h3>
-        </div>
-        
-        <p className="text-xs text-blue-600 dark:text-blue-400 truncate font-medium mb-2">{setName}</p>
-
-        <div className={`flex flex-wrap gap-1.5 mb-2 ${isSelectMode ? 'pointer-events-none opacity-50' : ''}`}>
-            
-            {onToggleAttribute ? (
-                <button 
-                    onClick={(e) => { e.stopPropagation(); onToggleAttribute('isFoil', !!isFoil); }}
-                    className={`text-[10px] px-2 py-0.5 rounded border transition-colors font-medium flex-1 text-center ${
-                        isFoil 
-                        ? 'bg-purple-100 text-purple-700 border-purple-200 hover:bg-purple-200 dark:bg-purple-900/30 dark:text-purple-300' 
-                        : 'bg-gray-50 text-gray-400 border-gray-200 hover:bg-gray-100 dark:bg-gray-800 dark:border-gray-600'
-                    }`}
-                >
-                    {isFoil ? '✨ Foil' : 'Normal'}
-                </button>
-            ) : isFoil && ( <span className="text-[10px] bg-purple-100 text-purple-700 px-2 py-0.5 rounded border border-purple-200 font-medium">✨ Foil</span> )}
-
-            {isWishlist ? (
-                onToggleAttribute && (
-                    <button 
-                        onClick={(e) => { e.stopPropagation(); onToggleAttribute('isSpecificVersion', !!isSpecificVersion); }}
-                        className={`text-[10px] px-2 py-0.5 rounded border transition-colors font-medium flex-1 text-center ${
-                            isSpecificVersion ? 'bg-blue-100 text-blue-700 border-blue-200' : 'bg-gray-50 text-gray-400 border-gray-200'
-                        }`}
-                    >
-                        {isSpecificVersion ? '🔒 Exact' : 'Auto'}
-                    </button>
-                )
-            ) : (
-                onToggleAttribute && (
-                    <button 
-                        onClick={(e) => { e.stopPropagation(); onToggleAttribute('isForTrade', !!isForTrade); }}
-                        className={`text-[10px] px-2 py-0.5 rounded border transition-colors font-medium flex-1 text-center ${
-                            isForTrade 
-                            ? 'bg-green-100 text-green-700 border-green-200 hover:bg-green-200 dark:bg-green-900/30 dark:text-green-300' 
-                            : 'bg-gray-50 text-gray-400 border-gray-200 hover:bg-gray-100 dark:bg-gray-800 dark:border-gray-600'
-                        }`}
-                    >
-                        {isForTrade ? '🤝 Échange' : 'Privé'}
-                    </button>
-                )
-            )}
-            
-            {isWishlist && !readOnly && !isSelectMode && onMove && (
-                <button 
-                    onClick={(e) => { e.stopPropagation(); onMove(); }}
-                    className="text-[10px] px-2 py-0.5 rounded border transition-colors font-bold flex-1 text-center bg-green-50 text-green-700 border-green-200 hover:bg-green-100 dark:bg-green-900/30 dark:text-green-300 dark:border-green-800"
-                    title="Déplacer vers Collection"
-                >
-                    📥 J&apos;ai acheté
-                </button>
-            )}
-        </div>
-        
-        <div className={`mt-auto flex justify-between items-end border-t border-gray-100 dark:border-gray-700 pt-2 ${isSelectMode ? 'pointer-events-none opacity-50' : ''}`}>
-          <div className="flex items-center gap-1.5">
-            {!readOnly && <button onClick={(e) => {e.stopPropagation(); onDecrement?.()}} className="bg-gray-200 dark:bg-gray-700 w-6 h-6 rounded hover:bg-gray-300 font-bold flex items-center justify-center text-sm">-</button>}
-            <span className={`font-mono text-base ${readOnly ? 'font-bold text-gray-800 dark:text-white' : 'w-4 text-center'}`}>{readOnly && "x"}{quantity}</span>
-            {!readOnly && <button onClick={(e) => {e.stopPropagation(); onIncrement?.()}} className="bg-blue-100 dark:bg-blue-900 text-blue-600 font-bold w-6 h-6 rounded hover:bg-blue-200 flex items-center justify-center text-sm">+</button>}
-          </div>
-          
-          <div className="text-right">
-             <p className="text-[10px] text-gray-400">Unit: {effectivePrice.toFixed(2)}€</p>
-             <p className={`font-bold text-sm ${customPrice ? 'text-orange-600' : 'text-gray-700 dark:text-gray-200'}`}>
-                 {(effectivePrice * quantity).toFixed(2)} €
-             </p>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// Utilisation de memo pour éviter les re-renders inutiles
-export default memo(MagicCard);
-</file>
-
-<file path="app/collection/page.tsx">
-// app/collection/page.tsx
-'use client';
-
-import { useState, useMemo, useEffect } from 'react';
-import { useAuth } from '@/lib/AuthContext';
-import { useCardCollection } from '@/hooks/useCardCollection'; 
-import MagicCard from '@/components/MagicCard';
-import ImportModal from '@/components/ImportModal';
-import ConfirmModal from '@/components/ConfirmModal';
-import DeleteAllButton from '@/components/DeleteAllButton';
-import CollectionToolsModal from '@/components/CollectionToolsModal';
-
-type SortOption = 'name' | 'price_desc' | 'price_asc' | 'quantity' | 'date';
-
-const ITEMS_PER_PAGE = 50; // Nombre de cartes affichées par bloc
-
-export default function CollectionPage() {
-  const { user } = useAuth();
-  
-  const { 
-    cards, loading, updateQuantity, removeCard, 
-    setCustomPrice, toggleAttribute, refreshCollectionPrices, bulkSetTradeStatus,
-    bulkRemoveCards, bulkUpdateAttribute, 
-    totalPrice 
-  } = useCardCollection('collection');
-
-  const [isImportOpen, setIsImportOpen] = useState(false);
-  const [isToolsOpen, setIsToolsOpen] = useState(false);
-  const [cardToDelete, setCardToDelete] = useState<string | null>(null);
-
-  // --- SÉLECTION & UI ---
-  const [isSelectMode, setIsSelectMode] = useState(false);
-  const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  
-  // --- PAGINATION ---
-  const [visibleCount, setVisibleCount] = useState(ITEMS_PER_PAGE);
-
-  // --- FILTRES ---
-  const [searchQuery, setSearchQuery] = useState('');
-  const [sortBy, setSortBy] = useState<SortOption>('date');
-  const [filterSet, setFilterSet] = useState<string>('all');
-  const [filterTrade, setFilterTrade] = useState(false);
-  const [filterFoil, setFilterFoil] = useState(false);
-
-  // Reset pagination quand on filtre/trie
-  useEffect(() => {
-    // On ne met à jour QUE si la valeur n'est pas déjà celle par défaut
-    if (visibleCount !== ITEMS_PER_PAGE) {
-      setVisibleCount(ITEMS_PER_PAGE);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchQuery, sortBy, filterSet, filterTrade, filterFoil]);
-
-  const filteredAndSortedCards = useMemo(() => {
-    let result = [...cards];
-
-    if (searchQuery) {
-        const lowerQ = searchQuery.toLowerCase();
-        result = result.filter(c => c.name.toLowerCase().includes(lowerQ));
-    }
-    if (filterSet !== 'all') {
-        result = result.filter(c => c.setName === filterSet);
-    }
-    if (filterTrade) {
-        result = result.filter(c => c.isForTrade);
-    }
-    if (filterFoil) {
-        result = result.filter(c => c.isFoil);
-    }
-
-    result.sort((a, b) => {
-        const priceA = a.customPrice ?? a.price ?? 0;
-        const priceB = b.customPrice ?? b.price ?? 0;
-        switch (sortBy) {
-            case 'name': return a.name.localeCompare(b.name);
-            case 'price_desc': return priceB - priceA;
-            case 'price_asc': return priceA - priceB;
-            case 'quantity': return b.quantity - a.quantity;
-            case 'date': default: return 0; 
-        }
-    });
-
-    return result;
-  }, [cards, searchQuery, sortBy, filterSet, filterTrade, filterFoil]);
-
-  // Cartes actuellement visibles
-  const visibleCards = useMemo(() => {
-      return filteredAndSortedCards.slice(0, visibleCount);
-  }, [filteredAndSortedCards, visibleCount]);
-
-  const availableSets = useMemo(() => {
-      const sets = new Set(cards.map(c => c.setName).filter((s): s is string => !!s));
-      return Array.from(sets).sort();
-  }, [cards]);
-
-  const handleDecrement = async (cardId: string, currentQty: number) => {
-    const result = await updateQuantity(cardId, -1, currentQty);
-    if (result === 'shouldDelete') {
-      setCardToDelete(cardId);
-    }
-  };
-
-  const toggleSelection = (id: string) => {
-      setSelectedIds(prev => 
-          prev.includes(id) ? prev.filter(pid => pid !== id) : [...prev, id]
-      );
-  };
-
-  const handleSelectAll = () => {
-      if (selectedIds.length === filteredAndSortedCards.length) {
-          setSelectedIds([]); 
-      } else {
-          // On sélectionne TOUT, pas juste les visibles
-          setSelectedIds(filteredAndSortedCards.map(c => c.id)); 
-      }
-  };
-
-  const handleBulkDelete = async () => {
-      if (!confirm(`Supprimer ces ${selectedIds.length} cartes définitivement ?`)) return;
-      await bulkRemoveCards(selectedIds);
-      setSelectedIds([]);
-      setIsSelectMode(false);
-  };
-
-  const handleBulkTrade = async (isTrade: boolean) => {
-      await bulkUpdateAttribute(selectedIds, 'isForTrade', isTrade);
-      setSelectedIds([]);
-      setIsSelectMode(false);
-  };
-
-  if (loading) return <div className="flex h-screen items-center justify-center text-gray-500 animate-pulse">Chargement de votre collection...</div>;
-  if (!user) return <p className="text-center p-10">Veuillez vous connecter.</p>;
-
-  return (
-    <main className="container mx-auto p-4 pb-24 relative">
-      
-      {/* HEADER */}
-      <div className="flex flex-col md:flex-row justify-between items-center mb-6 gap-4">
-        <h1 className="text-3xl font-bold text-blue-700 dark:text-blue-400">
-            Ma Collection 
-            <span className="ml-3 text-lg font-normal text-gray-500">
-                ({filteredAndSortedCards.length} / {cards.reduce((acc, c) => acc + c.quantity, 0)})
-            </span>
-        </h1>
-        
-        <div className="flex items-center gap-2">
-           <button 
-             onClick={() => { setIsSelectMode(!isSelectMode); setSelectedIds([]); }}
-             className={`px-3 py-2 rounded-lg text-sm font-medium transition shadow-sm border flex items-center gap-2 ${isSelectMode ? 'bg-blue-600 text-white border-blue-600' : 'bg-white hover:bg-gray-100 text-gray-700 border-gray-300 dark:bg-gray-800 dark:border-gray-600 dark:text-gray-200'}`}
-           >
-             {isSelectMode ? 'Annuler' : '☑ Sélectionner'}
-           </button>
-
-           {!isSelectMode && (
-               <>
-                <button 
-                    onClick={() => setIsToolsOpen(true)}
-                    className="bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200 px-3 py-2 rounded-lg text-sm font-medium transition shadow-sm border border-gray-200 dark:border-gray-600 flex items-center gap-2"
-                >
-                    ⚙️ Gérer
-                </button>
-
-                <DeleteAllButton targetCollection="collection" />
-                
-                <button 
-                    onClick={() => setIsImportOpen(true)} 
-                    className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition shadow-sm"
-                >
-                    Importer CSV
-                </button>
-                <div className="bg-blue-50 dark:bg-blue-900/30 text-blue-800 dark:text-blue-100 px-4 py-2 rounded-lg border border-blue-200 dark:border-blue-700 text-right min-w-[100px]">
-                    <span className="text-[10px] uppercase tracking-wide opacity-70 block">Valeur Totale</span>
-                    <span className="font-bold">{totalPrice.toFixed(2)} €</span>
-                </div>
-               </>
-           )}
-        </div>
-      </div>
-
-      {/* FILTRES */}
-      <div className="bg-white dark:bg-gray-800 p-4 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm mb-6 space-y-4 md:space-y-0 md:flex md:items-end md:gap-4">
-          <div className="flex-grow">
-              <label className="block text-xs font-bold text-gray-500 mb-1 uppercase">Nom de la carte</label>
-              <input 
-                  type="text" 
-                  placeholder="Rechercher..." 
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full p-2.5 rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-900 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
-              />
-          </div>
-          <div className="min-w-[200px]">
-              <label className="block text-xs font-bold text-gray-500 mb-1 uppercase">Édition</label>
-              <select value={filterSet} onChange={(e) => setFilterSet(e.target.value)} className="w-full p-2.5 rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-900 text-sm cursor-pointer">
-                  <option value="all">Toutes les éditions</option>
-                  {availableSets.map(set => <option key={set} value={set}>{set}</option>)}
-              </select>
-          </div>
-          <div className="min-w-[180px]">
-              <label className="block text-xs font-bold text-gray-500 mb-1 uppercase">Trier par</label>
-              <select value={sortBy} onChange={(e) => setSortBy(e.target.value as SortOption)} className="w-full p-2.5 rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-900 text-sm cursor-pointer">
-                  <option value="date">Date d&apos;ajout</option>
-                  <option value="price_desc">Prix : Haut → Bas</option>
-                  <option value="price_asc">Prix : Bas → Haut</option>
-                  <option value="name">Nom : A → Z</option>
-                  <option value="quantity">Quantité</option>
-              </select>
-          </div>
-          <div className="flex items-center gap-4 pb-3">
-              <label className="flex items-center gap-2 cursor-pointer select-none">
-                  <input type="checkbox" checked={filterFoil} onChange={(e) => setFilterFoil(e.target.checked)} className="w-4 h-4 text-blue-600 rounded" />
-                  <span className="text-sm font-medium">Foil</span>
-              </label>
-              <label className="flex items-center gap-2 cursor-pointer select-none">
-                  <input type="checkbox" checked={filterTrade} onChange={(e) => setFilterTrade(e.target.checked)} className="w-4 h-4 text-green-600 rounded" />
-                  <span className="text-sm font-medium">Échange</span>
-              </label>
-          </div>
-      </div>
-
-      {isSelectMode && (
-          <div className="mb-4 flex items-center justify-between bg-blue-50 dark:bg-blue-900/20 p-3 rounded-lg border border-blue-100 dark:border-blue-800 animate-in fade-in slide-in-from-top-2">
-              <span className="font-bold text-blue-800 dark:text-blue-200 pl-2">
-                  {selectedIds.length} carte(s) sélectionnée(s)
-              </span>
-              <button onClick={handleSelectAll} className="text-sm text-blue-600 hover:text-blue-800 font-medium px-3 py-1 rounded hover:bg-blue-100 transition">
-                  {selectedIds.length === filteredAndSortedCards.length ? 'Tout désélectionner' : 'Tout sélectionner'}
-              </button>
-          </div>
-      )}
-
-      {/* GRILLE */}
-      {filteredAndSortedCards.length === 0 ? (
-        <div className="text-center py-20 bg-gray-50 dark:bg-gray-800/50 rounded-xl border-2 border-dashed border-gray-200 dark:border-gray-700">
-          <p className="text-xl text-gray-500 mb-4">Aucun résultat ne correspond à vos filtres.</p>
-          <button onClick={() => { setSearchQuery(''); setFilterSet('all'); setFilterTrade(false); setFilterFoil(false); }} className="text-blue-600 hover:underline">Réinitialiser les filtres</button>
-        </div>
-      ) : (
-        <>
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
-            {visibleCards.map((card) => (
-                <MagicCard 
-                    key={card.id}
-                    {...card}
-                    onIncrement={() => updateQuantity(card.id, 1, card.quantity)}
-                    onDecrement={() => handleDecrement(card.id, card.quantity)}
-                    onEditPrice={(newPrice) => setCustomPrice(card.id, newPrice)}
-                    onToggleAttribute={(field, val) => toggleAttribute(card.id, field, val)}
-                    isSelectMode={isSelectMode}
-                    isSelected={selectedIds.includes(card.id)}
-                    onSelect={() => toggleSelection(card.id)}
-                />
-            ))}
-            </div>
-
-            {/* BOUTON CHARGER PLUS (Pagination) */}
-            {visibleCount < filteredAndSortedCards.length && (
-                <div className="mt-8 flex justify-center pb-10">
-                    <button 
-                        onClick={() => setVisibleCount(prev => prev + ITEMS_PER_PAGE)}
-                        className="bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-800 dark:text-gray-200 px-8 py-3 rounded-full font-bold shadow-sm transition flex items-center gap-2"
-                    >
-                        Afficher plus de cartes ({filteredAndSortedCards.length - visibleCount} restantes) ↓
-                    </button>
-                </div>
-            )}
-        </>
-      )}
-
-      {/* BARRE FLOTTANTE ACTIONS */}
-      {isSelectMode && selectedIds.length > 0 && (
-          <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-white dark:bg-gray-800 shadow-2xl border border-gray-200 dark:border-gray-700 p-2 rounded-2xl flex items-center gap-2 z-50 animate-in slide-in-from-bottom-6 duration-300">
-              <button onClick={() => handleBulkTrade(true)} className="px-4 py-2 bg-green-100 hover:bg-green-200 text-green-800 rounded-xl text-sm font-bold transition flex flex-col items-center leading-none gap-1">
-                  <span>🤝</span><span className="text-[10px]">Ajouter Trade</span>
-              </button>
-              <button onClick={() => handleBulkTrade(false)} className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-800 rounded-xl text-sm font-bold transition flex flex-col items-center leading-none gap-1">
-                  <span>🔒</span><span className="text-[10px]">Retirer Trade</span>
-              </button>
-              <div className="w-px h-8 bg-gray-300 mx-1"></div>
-              <button onClick={handleBulkDelete} className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-xl text-sm font-bold transition flex flex-col items-center leading-none gap-1 shadow-md">
-                  <span>🗑️</span><span className="text-[10px]">Supprimer</span>
-              </button>
-          </div>
-      )}
-
-      <ImportModal isOpen={isImportOpen} onClose={() => setIsImportOpen(false)} targetCollection="collection" />
-      <CollectionToolsModal isOpen={isToolsOpen} onClose={() => setIsToolsOpen(false)} totalCards={cards.length} onRefreshPrices={refreshCollectionPrices} onBulkTrade={bulkSetTradeStatus} />
-      <ConfirmModal isOpen={!!cardToDelete} onClose={() => setCardToDelete(null)} onConfirm={() => { if(cardToDelete) removeCard(cardToDelete); }} title="Retirer ?" message="Cette carte sera retirée de votre collection." />
-    </main>
-  );
-}
-</file>
-
 <file path="app/wishlist/page.tsx">
 // app/wishlist/page.tsx
 'use client';
@@ -5016,6 +4620,250 @@ export default function WishlistPage() {
 }
 </file>
 
+<file path="components/MagicCard.tsx">
+'use client';
+
+import { useState, useEffect, memo } from 'react';
+
+type MagicCardProps = {
+  id?: string;
+  name: string;
+  imageUrl: string;
+  imageBackUrl?: string | null;
+  quantity?: number;
+  price?: number;
+  customPrice?: number; 
+  setName?: string;
+  
+  isFoil?: boolean;
+  isSpecificVersion?: boolean;
+  isForTrade?: boolean; 
+  
+  onIncrement?: () => void;
+  onDecrement?: () => void;
+  onMove?: () => void;
+  
+  onEditPrice?: (newPrice: number) => void;
+  onToggleAttribute?: (field: 'isFoil' | 'isSpecificVersion' | 'isForTrade', currentValue: boolean) => void;
+  
+  isWishlist?: boolean;
+  readOnly?: boolean;
+  isTradeView?: boolean;
+  allowPriceEdit?: boolean;
+
+  isSelectMode?: boolean;
+  isSelected?: boolean;
+  onSelect?: () => void;
+};
+
+const CARD_BACK_URL = "https://cards.scryfall.io/large/front/a/6/a6984342-f723-4e80-8e69-902d287a915f.jpg";
+
+function MagicCard(props: MagicCardProps) {
+  const { 
+      name, imageUrl, imageBackUrl, quantity = 1, 
+      price, customPrice, setName, 
+      isFoil, isSpecificVersion, isForTrade,
+      isTradeView, allowPriceEdit, 
+      onEditPrice, onToggleAttribute, 
+      readOnly, isWishlist,
+      onIncrement, onDecrement, onMove,
+      isSelectMode, isSelected, onSelect
+  } = props;
+  
+  const [isFlipped, setIsFlipped] = useState(false);
+  const [isEditingPrice, setIsEditingPrice] = useState(false);
+  const [tempPrice, setTempPrice] = useState(customPrice?.toString() || price?.toString() || "0");
+
+  useEffect(() => {
+    if (!isEditingPrice) {
+        const newVal = customPrice?.toString() || price?.toString() || "0";
+        setTempPrice(prev => (prev !== newVal ? newVal : prev));
+    }
+  }, [customPrice, price, isEditingPrice]);
+
+  const effectivePrice = customPrice !== undefined ? customPrice : (price || 0);
+
+  const handleSavePrice = () => {
+      if (onEditPrice) {
+          onEditPrice(parseFloat(tempPrice));
+          setIsEditingPrice(false);
+      }
+  };
+
+  const currentImage = isFlipped && imageBackUrl ? imageBackUrl : imageUrl;
+
+  const handleCardClick = () => {
+      if (isSelectMode && onSelect) {
+          onSelect();
+      } else if (imageBackUrl) {
+          setIsFlipped(!isFlipped);
+      }
+  };
+
+  // --- VUE LISTE (TRADE) ---
+  if (isTradeView) {
+      return (
+        <div className="flex items-center gap-3 bg-white dark:bg-gray-800 p-2 rounded-lg border border-gray-100 dark:border-gray-700 content-visibility-auto">
+            <div className="w-10 h-14 bg-gray-200 rounded overflow-hidden flex-shrink-0 relative group cursor-pointer" onClick={() => setIsFlipped(!isFlipped)}>
+                 <img src={currentImage} className="w-full h-full object-cover" alt={name} loading="lazy" />
+                 {isFoil && <div className="absolute top-0 right-0 bg-purple-600/80 text-white text-[8px] px-1 font-bold">FOIL</div>}
+            </div>
+            
+            <div className="flex-grow min-w-0">
+                <div className="flex items-center gap-2">
+                    <p className="font-bold text-sm truncate" title={name}>{name}</p>
+                    {isFoil && <span className="text-xs font-bold text-purple-600">FOIL</span>}
+                </div>
+                <div className="flex items-center gap-2 text-xs text-gray-500">
+                    <p className="truncate">{setName}</p>
+                    {isSpecificVersion && <span className="bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300 px-1 rounded text-[9px] border border-blue-200">EXACT</span>}
+                </div>
+            </div>
+
+            <div className="text-right flex flex-col items-end">
+                {isEditingPrice ? (
+                    <div className="flex items-center gap-1">
+                        <input type="number" value={tempPrice} onChange={(e) => setTempPrice(e.target.value)} className="w-16 p-1 text-xs border rounded text-black" autoFocus />
+                        <button onClick={handleSavePrice} className="text-green-600 text-xs font-bold">OK</button>
+                    </div>
+                ) : (
+                    <div 
+                        className={`font-bold text-sm ${customPrice ? 'text-orange-600' : 'text-gray-700 dark:text-gray-300'} ${allowPriceEdit ? 'cursor-pointer hover:underline' : ''}`}
+                        onClick={() => { if (allowPriceEdit) { setTempPrice(effectivePrice.toString()); setIsEditingPrice(true); }}}
+                        title={customPrice ? "Prix personnalise" : "Prix Scryfall"}
+                    >
+                        {effectivePrice.toFixed(2)} EUR
+                        {customPrice && <span className="text-[8px] align-top ml-0.5">*</span>}
+                    </div>
+                )}
+            </div>
+        </div>
+      );
+  }
+
+  // --- VUE NORMALE (GRILLE) ---
+  return (
+    <div 
+        onClick={handleCardClick}
+        className={`relative group flex flex-col bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden p-3 gap-2 border transition-all duration-200 h-full content-visibility-auto
+        ${isSelected 
+            ? 'border-blue-500 ring-2 ring-blue-500 bg-blue-50 dark:bg-blue-900/20' 
+            : isFoil 
+                ? 'border-purple-300 dark:border-purple-800' 
+                : 'border-gray-100 dark:border-gray-700 hover:border-blue-300 dark:hover:border-blue-500'
+        }
+        ${isSelectMode ? 'cursor-pointer' : ''}
+        `}
+    >
+      
+
+      {isSelectMode && (
+          <div className="absolute top-2 right-2 z-30 pointer-events-none">
+              <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center transition-colors shadow-sm ${isSelected ? 'bg-blue-600 border-blue-600' : 'bg-white/90 border-gray-400'}`}>
+                  {isSelected && <span className="text-white text-sm font-bold">V</span>}
+              </div>
+          </div>
+      )}
+
+      <div className="relative w-full aspect-[2.5/3.5] bg-gray-200 rounded-lg overflow-hidden shrink-0">
+        <img
+          src={currentImage || CARD_BACK_URL}
+          alt={name}
+          loading="lazy"
+          className="w-full h-full object-cover transition-transform duration-300"
+          onError={(e) => { e.currentTarget.src = CARD_BACK_URL; }}
+        />
+        {isFoil && <div className="absolute inset-0 bg-gradient-to-tr from-purple-500/20 to-transparent pointer-events-none mix-blend-overlay"></div>}
+
+        {imageBackUrl && !isSelectMode && (
+          <button onClick={(e) => { e.stopPropagation(); setIsFlipped(!isFlipped); }} className="absolute top-1/2 right-2 -translate-y-1/2 bg-black/50 hover:bg-black/80 text-white p-2 rounded-full backdrop-blur-sm transition-all shadow-lg border border-white/20 z-10 pointer-events-auto font-bold text-xs">
+            FLIP
+          </button>
+        )}
+      </div>
+      
+      <div className="flex-1 flex flex-col min-w-0">
+        <div className="flex justify-between items-start mb-1">
+            <h3 className="font-bold text-sm md:text-base truncate flex-grow" title={name}>{name}</h3>
+        </div>
+        
+        <p className="text-xs text-blue-600 dark:text-blue-400 truncate font-medium mb-2">{setName}</p>
+
+        <div className={`flex flex-wrap gap-1.5 mb-2 ${isSelectMode ? 'pointer-events-none opacity-50' : ''}`}>
+            
+            {onToggleAttribute ? (
+                <button 
+                    onClick={(e) => { e.stopPropagation(); onToggleAttribute('isFoil', !!isFoil); }}
+                    className={`text-[10px] px-2 py-0.5 rounded border transition-colors font-medium flex-1 text-center ${
+                        isFoil 
+                        ? 'bg-purple-100 text-purple-700 border-purple-200 hover:bg-purple-200 dark:bg-purple-900/30 dark:text-purple-300' 
+                        : 'bg-gray-50 text-gray-400 border-gray-200 hover:bg-gray-100 dark:bg-gray-800 dark:border-gray-600'
+                    }`}
+                >
+                    {isFoil ? 'Foil' : 'Normal'}
+                </button>
+            ) : isFoil && ( <span className="text-[10px] bg-purple-100 text-purple-700 px-2 py-0.5 rounded border border-purple-200 font-medium">Foil</span> )}
+
+            {isWishlist ? (
+                onToggleAttribute && (
+                    <button 
+                        onClick={(e) => { e.stopPropagation(); onToggleAttribute('isSpecificVersion', !!isSpecificVersion); }}
+                        className={`text-[10px] px-2 py-0.5 rounded border transition-colors font-medium flex-1 text-center ${
+                            isSpecificVersion ? 'bg-blue-100 text-blue-700 border-blue-200' : 'bg-gray-50 text-gray-400 border-gray-200'
+                        }`}
+                    >
+                        {isSpecificVersion ? 'Exact' : 'Auto'}
+                    </button>
+                )
+            ) : (
+                onToggleAttribute && (
+                    <button 
+                        onClick={(e) => { e.stopPropagation(); onToggleAttribute('isForTrade', !!isForTrade); }}
+                        className={`text-[10px] px-2 py-0.5 rounded border transition-colors font-medium flex-1 text-center ${
+                            isForTrade 
+                            ? 'bg-green-100 text-green-700 border-green-200 hover:bg-green-200 dark:bg-green-900/30 dark:text-green-300' 
+                            : 'bg-gray-50 text-gray-400 border-gray-200 hover:bg-gray-100 dark:bg-gray-800 dark:border-gray-600'
+                        }`}
+                    >
+                        {isForTrade ? 'Echange' : 'Prive'}
+                    </button>
+                )
+            )}
+            
+            {/* LE BOUTON ACHETÉ RESTE ICI */}
+            {isWishlist && !readOnly && !isSelectMode && onMove && (
+                <button 
+                    onClick={(e) => { e.stopPropagation(); onMove(); }}
+                    className="text-[10px] px-2 py-0.5 rounded border transition-colors font-bold flex-1 text-center bg-green-50 text-green-700 border-green-200 hover:bg-green-100 dark:bg-green-900/30 dark:text-green-300 dark:border-green-800"
+                    title="Deplacer vers Collection"
+                >
+                    Achete
+                </button>
+            )}
+        </div>
+        
+        <div className={`mt-auto flex justify-between items-end border-t border-gray-100 dark:border-gray-700 pt-2 ${isSelectMode ? 'pointer-events-none opacity-50' : ''}`}>
+          <div className="flex items-center gap-1.5">
+            {!readOnly && <button onClick={(e) => {e.stopPropagation(); onDecrement?.()}} className="bg-gray-200 dark:bg-gray-700 w-6 h-6 rounded hover:bg-gray-300 font-bold flex items-center justify-center text-sm">-</button>}
+            <span className={`font-mono text-base ${readOnly ? 'font-bold text-gray-800 dark:text-white' : 'w-4 text-center'}`}>{readOnly && "x"}{quantity}</span>
+            {!readOnly && <button onClick={(e) => {e.stopPropagation(); onIncrement?.()}} className="bg-blue-100 dark:bg-blue-900 text-blue-600 font-bold w-6 h-6 rounded hover:bg-blue-200 flex items-center justify-center text-sm">+</button>}
+          </div>
+          
+          <div className="text-right">
+             <p className="text-[10px] text-gray-400">Unit: {effectivePrice.toFixed(2)}</p>
+             <p className={`font-bold text-sm ${customPrice ? 'text-orange-600' : 'text-gray-700 dark:text-gray-200'}`}>
+                 {(effectivePrice * quantity).toFixed(2)} EUR
+             </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default memo(MagicCard);
+</file>
+
 <file path="app/page.tsx">
 'use client';
 
@@ -5030,12 +4878,11 @@ import { CardType } from '@/hooks/useCardCollection';
 
 export default function DashboardPage() {
   const { user, loading: authLoading, friendRequestCount, username } = useAuth();
-  const { totalPrice, cards } = useCardCollection('collection'); // Pour la valeur totale et stats
-  const { incomingTrades, outgoingTrades } = useTradeSystem(); // Pour les notifs d'échange
+  const { totalPrice, cards } = useCardCollection('collection'); 
+  const { incomingTrades, outgoingTrades } = useTradeSystem(); 
   
   const [recentCards, setRecentCards] = useState<CardType[]>([]);
 
-  // Charger les 5 dernières cartes ajoutées (Optimisation : requête dédiée)
   useEffect(() => {
     const fetchRecent = async () => {
       if (!user) return;
@@ -5052,9 +4899,8 @@ export default function DashboardPage() {
     fetchRecent();
   }, [user]);
 
-  if (authLoading) return <div className="flex h-screen items-center justify-center animate-pulse">Chargement MagicWish...</div>;
+  if (authLoading) return <div className="flex h-screen items-center justify-center animate-pulse">Chargement...</div>;
 
-  // Si pas connecté, Landing Page simple
   if (!user) {
     return (
       <div className="flex flex-col items-center justify-center min-h-[80vh] text-center p-4">
@@ -5062,7 +4908,7 @@ export default function DashboardPage() {
           MagicWish
         </h1>
         <p className="text-xl text-gray-600 dark:text-gray-300 max-w-lg mb-8">
-          Gérez votre collection Magic: The Gathering, créez vos wishlists et trouvez automatiquement des échanges avec vos amis.
+          Gerez votre collection Magic: The Gathering, creez vos wishlists et trouvez automatiquement des echanges avec vos amis.
         </p>
         <Link 
           href="/login"
@@ -5074,64 +4920,52 @@ export default function DashboardPage() {
     );
   }
 
-  // --- DASHBOARD CONNECTÉ ---
   return (
     <main className="container mx-auto p-4 max-w-5xl">
       <div className="mb-8">
         <h1 className="text-3xl font-bold text-gray-900 dark:text-white">
-          Bonjour, <span className="text-blue-600">{username || user.displayName}</span> 👋
+          Bonjour, <span className="text-blue-600">{username || user.displayName}</span>
         </h1>
         <p className="text-gray-500">Voici ce qui se passe sur votre compte.</p>
       </div>
 
-      {/* 1. BLOCS DE STATUTS (Alertes) */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
-        
-        {/* CARTE : ÉCHANGES */}
         <Link href="/trades" className={`p-6 rounded-2xl border transition shadow-sm hover:shadow-md ${incomingTrades.length > 0 ? 'bg-orange-50 border-orange-200 dark:bg-orange-900/20 dark:border-orange-800' : 'bg-white border-gray-100 dark:bg-gray-800 dark:border-gray-700'}`}>
             <div className="flex justify-between items-start mb-2">
-                <span className="text-2xl">🤝</span>
+                <span className="font-bold text-lg">Echanges</span>
                 {incomingTrades.length > 0 && <span className="bg-orange-500 text-white text-xs font-bold px-2 py-1 rounded-full">{incomingTrades.length} Attente</span>}
             </div>
-            <h3 className="font-bold text-lg mb-1">Échanges</h3>
             <p className="text-sm text-gray-500">
                 {incomingTrades.length > 0 
-                    ? "Vous avez des propositions à valider !" 
-                    : `${outgoingTrades.length} propositions envoyées.`}
+                    ? "Vous avez des propositions a valider !" 
+                    : `${outgoingTrades.length} propositions envoyees.`}
             </p>
         </Link>
 
-        {/* CARTE : AMIS */}
         <Link href="/contacts" className={`p-6 rounded-2xl border transition shadow-sm hover:shadow-md ${friendRequestCount > 0 ? 'bg-blue-50 border-blue-200 dark:bg-blue-900/20 dark:border-blue-800' : 'bg-white border-gray-100 dark:bg-gray-800 dark:border-gray-700'}`}>
             <div className="flex justify-between items-start mb-2">
-                <span className="text-2xl">👥</span>
-                {friendRequestCount > 0 && <span className="bg-blue-500 text-white text-xs font-bold px-2 py-1 rounded-full">{friendRequestCount} Reçues</span>}
+                <span className="font-bold text-lg">Contacts</span>
+                {friendRequestCount > 0 && <span className="bg-blue-500 text-white text-xs font-bold px-2 py-1 rounded-full">{friendRequestCount} Recues</span>}
             </div>
-            <h3 className="font-bold text-lg mb-1">Contacts</h3>
             <p className="text-sm text-gray-500">
                 {friendRequestCount > 0 
                     ? "De nouveaux joueurs veulent vous ajouter." 
-                    : "Gérez votre liste d'amis."}
+                    : "Gerez votre liste d'amis."}
             </p>
         </Link>
 
-        {/* CARTE : VALEUR */}
         <Link href="/collection" className="p-6 rounded-2xl border border-gray-100 dark:border-gray-700 bg-white dark:bg-gray-800 transition shadow-sm hover:shadow-md group">
             <div className="flex justify-between items-start mb-2">
-                <span className="text-2xl">📈</span>
-                <span className="text-green-600 font-bold bg-green-50 dark:bg-green-900/30 px-2 py-1 rounded text-xs">Total</span>
+                <span className="font-bold text-lg">Total</span>
+                <span className="text-green-600 font-bold bg-green-50 dark:bg-green-900/30 px-2 py-1 rounded text-xs">{totalPrice.toFixed(2)} EUR</span>
             </div>
-            <h3 className="font-bold text-lg mb-1">{totalPrice.toFixed(2)} €</h3>
             <p className="text-sm text-gray-500 group-hover:text-blue-500 transition-colors">
-                Valeur estimée de vos {cards.length} cartes.
+                Valeur estimee de vos {cards.length} cartes.
             </p>
         </Link>
       </div>
 
-      {/* 2. DERNIERS AJOUTS & ACTIONS RAPIDES */}
       <div className="grid lg:grid-cols-3 gap-8">
-          
-          {/* COLONNE GAUCHE : Derniers ajouts */}
           <div className="lg:col-span-2 space-y-4">
               <div className="flex justify-between items-center">
                   <h2 className="font-bold text-lg">Derniers ajouts</h2>
@@ -5151,10 +4985,10 @@ export default function DashboardPage() {
                               </div>
                               <div className="flex-grow">
                                   <p className="font-bold text-sm text-gray-900 dark:text-white">{card.name}</p>
-                                  <p className="text-xs text-gray-500">{card.setName} {card.isFoil && '✨ Foil'}</p>
+                                  <p className="text-xs text-gray-500">{card.setName} {card.isFoil && 'Foil'}</p>
                               </div>
                               <div className="text-right">
-                                  <span className="font-bold text-gray-700 dark:text-gray-300 text-sm">{(card.customPrice ?? card.price ?? 0).toFixed(2)} €</span>
+                                  <span className="font-bold text-gray-700 dark:text-gray-300 text-sm">{(card.customPrice ?? card.price ?? 0).toFixed(2)} EUR</span>
                               </div>
                           </div>
                       ))
@@ -5162,36 +4996,337 @@ export default function DashboardPage() {
               </div>
           </div>
 
-          {/* COLONNE DROITE : Actions */}
           <div className="space-y-6">
-              
-              {/* Box Raccourcis */}
               <div className="bg-gradient-to-br from-purple-600 to-blue-600 rounded-xl p-6 text-white shadow-lg">
                   <h3 className="font-bold text-lg mb-2">Action Rapide</h3>
                   <p className="text-white/80 text-sm mb-6">Vous revenez de tournoi ou d&apos;ouverture de boosters ?</p>
                   
-                  {/* MODIFICATION ICI : Lien vers /search au lieu de /collection */}
                   <Link href="/search" className="block w-full bg-white text-blue-600 font-bold text-center py-3 rounded-lg hover:bg-gray-50 transition shadow-sm">
-                      + Ajouter des cartes
+                      Ajouter des cartes
                   </Link>
                   <Link href="/trades/manual" className="block w-full mt-3 bg-blue-700 hover:bg-blue-800 text-white font-bold text-center py-3 rounded-lg border border-blue-500 transition">
-                      🖐️ Échange Manuel
+                      Echange Manuel
                   </Link>
               </div>
 
-              {/* Box Wishlist Suggestion (Statique pour l'instant) */}
               <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-100 dark:border-gray-700 p-6">
-                  <h3 className="font-bold text-gray-900 dark:text-white mb-2">Astuce 💡</h3>
+                  <h3 className="font-bold text-gray-900 dark:text-white mb-2">Astuce</h3>
                   <p className="text-sm text-gray-500 mb-4">
-                      Remplissez votre Wishlist pour permettre au scanner de trouver des échanges automatiquement avec vos amis.
+                      Remplissez votre Wishlist pour permettre au scanner de trouver des echanges automatiquement avec vos amis.
                   </p>
                   <Link href="/wishlist" className="text-sm font-bold text-purple-600 hover:text-purple-700">
-                      Gérer ma Wishlist →
+                      Gerer ma Wishlist
                   </Link>
               </div>
-
           </div>
       </div>
+    </main>
+  );
+}
+</file>
+
+<file path="app/collection/page.tsx">
+'use client';
+
+import { useState, useMemo, useEffect } from 'react';
+import { useAuth } from '@/lib/AuthContext';
+import { useCardCollection } from '@/hooks/useCardCollection'; 
+import MagicCard from '@/components/MagicCard';
+import ImportModal from '@/components/ImportModal';
+import ConfirmModal from '@/components/ConfirmModal';
+import DeleteAllButton from '@/components/DeleteAllButton';
+import CollectionToolsModal from '@/components/CollectionToolsModal';
+
+type SortOption = 'name' | 'price_desc' | 'price_asc' | 'quantity' | 'date';
+
+const ITEMS_PER_PAGE = 50; 
+
+export default function CollectionPage() {
+  const { user } = useAuth();
+  
+  const { 
+    cards, loading, updateQuantity, removeCard, 
+    setCustomPrice, toggleAttribute, refreshCollectionPrices, bulkSetTradeStatus,
+    bulkRemoveCards, bulkUpdateAttribute, 
+    totalPrice 
+  } = useCardCollection('collection');
+
+  const [isImportOpen, setIsImportOpen] = useState(false);
+  const [isToolsOpen, setIsToolsOpen] = useState(false);
+  const [cardToDelete, setCardToDelete] = useState<string | null>(null);
+
+  const [isSelectMode, setIsSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  
+  const [visibleCount, setVisibleCount] = useState(ITEMS_PER_PAGE);
+  const [showFilters, setShowFilters] = useState(false); // Pour plier/déplier sur mobile
+
+  const [searchQuery, setSearchQuery] = useState('');
+  const [sortBy, setSortBy] = useState<SortOption>('date');
+  const [filterSet, setFilterSet] = useState<string>('all');
+  const [filterTrade, setFilterTrade] = useState(false);
+  const [filterFoil, setFilterFoil] = useState(false);
+
+  useEffect(() => {
+    if (visibleCount !== ITEMS_PER_PAGE) {
+      setVisibleCount(ITEMS_PER_PAGE);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchQuery, sortBy, filterSet, filterTrade, filterFoil]);
+
+  const filteredAndSortedCards = useMemo(() => {
+    let result = [...cards];
+
+    if (searchQuery) {
+        const lowerQ = searchQuery.toLowerCase();
+        result = result.filter(c => c.name.toLowerCase().includes(lowerQ));
+    }
+    if (filterSet !== 'all') {
+        result = result.filter(c => c.setName === filterSet);
+    }
+    if (filterTrade) {
+        result = result.filter(c => c.isForTrade);
+    }
+    if (filterFoil) {
+        result = result.filter(c => c.isFoil);
+    }
+
+    result.sort((a, b) => {
+        const priceA = a.customPrice ?? a.price ?? 0;
+        const priceB = b.customPrice ?? b.price ?? 0;
+        switch (sortBy) {
+            case 'name': return a.name.localeCompare(b.name);
+            case 'price_desc': return priceB - priceA;
+            case 'price_asc': return priceA - priceB;
+            case 'quantity': return b.quantity - a.quantity;
+            case 'date': default: return 0; 
+        }
+    });
+
+    return result;
+  }, [cards, searchQuery, sortBy, filterSet, filterTrade, filterFoil]);
+
+  const visibleCards = useMemo(() => {
+      return filteredAndSortedCards.slice(0, visibleCount);
+  }, [filteredAndSortedCards, visibleCount]);
+
+  const availableSets = useMemo(() => {
+      const sets = new Set(cards.map(c => c.setName).filter((s): s is string => !!s));
+      return Array.from(sets).sort();
+  }, [cards]);
+
+  const handleDecrement = async (cardId: string, currentQty: number) => {
+    const result = await updateQuantity(cardId, -1, currentQty);
+    if (result === 'shouldDelete') {
+      setCardToDelete(cardId);
+    }
+  };
+
+  const toggleSelection = (id: string) => {
+      setSelectedIds(prev => 
+          prev.includes(id) ? prev.filter(pid => pid !== id) : [...prev, id]
+      );
+  };
+
+  const handleSelectAll = () => {
+      if (selectedIds.length === filteredAndSortedCards.length) {
+          setSelectedIds([]); 
+      } else {
+          setSelectedIds(filteredAndSortedCards.map(c => c.id)); 
+      }
+  };
+
+  const handleBulkDelete = async () => {
+      if (!confirm(`Supprimer ces ${selectedIds.length} cartes definitivement ?`)) return;
+      await bulkRemoveCards(selectedIds);
+      setSelectedIds([]);
+      setIsSelectMode(false);
+  };
+
+  const handleBulkTrade = async (isTrade: boolean) => {
+      await bulkUpdateAttribute(selectedIds, 'isForTrade', isTrade);
+      setSelectedIds([]);
+      setIsSelectMode(false);
+  };
+
+  if (loading) return <div className="flex h-screen items-center justify-center text-gray-500 animate-pulse">Chargement de votre collection...</div>;
+  if (!user) return <p className="text-center p-10">Veuillez vous connecter.</p>;
+
+  return (
+    <main className="container mx-auto p-4 pb-24 relative">
+      
+      {/* HEADER AMÉLIORÉ POUR MOBILE */}
+      <div className="flex flex-col gap-4 mb-6">
+        
+        {/* Ligne 1 : Titre + Valeur (Layout Mobile Friendly) */}
+        <div className="flex justify-between items-center">
+            <h1 className="text-2xl md:text-3xl font-bold text-blue-700 dark:text-blue-400 truncate">
+                Ma Collection 
+                <span className="ml-2 text-base font-normal text-gray-500">
+                    ({filteredAndSortedCards.length})
+                </span>
+            </h1>
+            <div className="flex-shrink-0 bg-blue-50 dark:bg-blue-900/30 text-blue-800 dark:text-blue-100 px-3 py-1.5 rounded-lg border border-blue-200 dark:border-blue-700 text-right">
+                <span className="text-[10px] uppercase tracking-wide opacity-70 block">Total</span>
+                <span className="font-bold whitespace-nowrap">{totalPrice.toFixed(2)} EUR</span>
+            </div>
+        </div>
+        
+        {/* Ligne 2 : Actions (Scrollable horizontalement sur mobile pour ne pas écraser les boutons) */}
+        {/* 'overflow-x-auto' permet de scroller si ça dépasse */}
+        <div className="flex items-center gap-2 overflow-x-auto pb-2 -mx-4 px-4 md:mx-0 md:px-0 no-scrollbar">
+           <button 
+             onClick={() => { setIsSelectMode(!isSelectMode); setSelectedIds([]); }}
+             className={`flex-shrink-0 px-3 py-2 rounded-lg text-sm font-medium transition shadow-sm border flex items-center gap-2 whitespace-nowrap ${isSelectMode ? 'bg-blue-600 text-white border-blue-600' : 'bg-white hover:bg-gray-100 text-gray-700 border-gray-300 dark:bg-gray-800 dark:border-gray-600 dark:text-gray-200'}`}
+           >
+             {isSelectMode ? 'Annuler' : 'Selectionner'}
+           </button>
+
+           {!isSelectMode && (
+               <>
+                <button 
+                    onClick={() => setIsToolsOpen(true)}
+                    className="flex-shrink-0 bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200 px-3 py-2 rounded-lg text-sm font-medium transition shadow-sm border border-gray-200 dark:border-gray-600 flex items-center gap-2 whitespace-nowrap"
+                >
+                    Gerer
+                </button>
+
+                <div className="flex-shrink-0">
+                    <DeleteAllButton targetCollection="collection" />
+                </div>
+                
+                <button 
+                    onClick={() => setIsImportOpen(true)} 
+                    className="flex-shrink-0 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition shadow-sm whitespace-nowrap"
+                >
+                    Importer CSV
+                </button>
+               </>
+           )}
+        </div>
+      </div>
+
+      {/* FILTRES COMPACTS */}
+      <div className="bg-white dark:bg-gray-800 p-4 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm mb-6">
+          <div className="flex gap-2 items-center">
+              <div className="flex-grow">
+                  <input 
+                      type="text" 
+                      placeholder="Rechercher une carte..." 
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      className="w-full p-2.5 rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-900 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                  />
+              </div>
+              {/* Bouton Toggle Filtres (Mobile uniquement) */}
+              <button 
+                onClick={() => setShowFilters(!showFilters)}
+                className="md:hidden flex-shrink-0 px-3 py-2 bg-gray-100 dark:bg-gray-700 rounded-lg text-gray-600 dark:text-gray-300 border border-gray-300 dark:border-gray-600 text-sm font-medium"
+              >
+                {showFilters ? 'Masquer' : 'Filtres'}
+              </button>
+          </div>
+
+          {/* Zone de filtres pliable sur mobile */}
+          <div className={`mt-4 space-y-4 md:space-y-0 md:flex md:items-end md:gap-4 ${showFilters ? 'block' : 'hidden md:flex'}`}>
+            <div className="min-w-[200px]">
+                <label className="block text-xs font-bold text-gray-500 mb-1 uppercase">Edition</label>
+                <select value={filterSet} onChange={(e) => setFilterSet(e.target.value)} className="w-full p-2.5 rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-900 text-sm cursor-pointer">
+                    <option value="all">Toutes les editions</option>
+                    {availableSets.map(set => <option key={set} value={set}>{set}</option>)}
+                </select>
+            </div>
+            <div className="min-w-[180px]">
+                <label className="block text-xs font-bold text-gray-500 mb-1 uppercase">Trier par</label>
+                <select value={sortBy} onChange={(e) => setSortBy(e.target.value as SortOption)} className="w-full p-2.5 rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-900 text-sm cursor-pointer">
+                    <option value="date">Date d&apos;ajout</option>
+                    <option value="price_desc">Prix : Haut - Bas</option>
+                    <option value="price_asc">Prix : Bas - Haut</option>
+                    <option value="name">Nom : A - Z</option>
+                    <option value="quantity">Quantite</option>
+                </select>
+            </div>
+            <div className="flex items-center gap-4 pb-3 pt-2 md:pt-0">
+                <label className="flex items-center gap-2 cursor-pointer select-none">
+                    <input type="checkbox" checked={filterFoil} onChange={(e) => setFilterFoil(e.target.checked)} className="w-4 h-4 text-blue-600 rounded" />
+                    <span className="text-sm font-medium">Foil</span>
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer select-none">
+                    <input type="checkbox" checked={filterTrade} onChange={(e) => setFilterTrade(e.target.checked)} className="w-4 h-4 text-green-600 rounded" />
+                    <span className="text-sm font-medium">Echange</span>
+                </label>
+            </div>
+          </div>
+      </div>
+
+      {isSelectMode && (
+          <div className="mb-4 flex items-center justify-between bg-blue-50 dark:bg-blue-900/20 p-3 rounded-lg border border-blue-100 dark:border-blue-800 animate-in fade-in slide-in-from-top-2">
+              <span className="font-bold text-blue-800 dark:text-blue-200 pl-2">
+                  {selectedIds.length} carte(s)
+              </span>
+              <button onClick={handleSelectAll} className="text-sm text-blue-600 hover:text-blue-800 font-medium px-3 py-1 rounded hover:bg-blue-100 transition">
+                  {selectedIds.length === filteredAndSortedCards.length ? 'Deselectionner' : 'Tout selectionner'}
+              </button>
+          </div>
+      )}
+
+      {/* GRILLE */}
+      {filteredAndSortedCards.length === 0 ? (
+        <div className="text-center py-20 bg-gray-50 dark:bg-gray-800/50 rounded-xl border-2 border-dashed border-gray-200 dark:border-gray-700">
+          <p className="text-xl text-gray-500 mb-4">Aucun resultat ne correspond a vos filtres.</p>
+          <button onClick={() => { setSearchQuery(''); setFilterSet('all'); setFilterTrade(false); setFilterFoil(false); }} className="text-blue-600 hover:underline">Reinitialiser les filtres</button>
+        </div>
+      ) : (
+        <>
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+            {visibleCards.map((card) => (
+                <MagicCard 
+                    key={card.id}
+                    {...card}
+                    onIncrement={() => updateQuantity(card.id, 1, card.quantity)}
+                    onDecrement={() => handleDecrement(card.id, card.quantity)}
+                    onEditPrice={(newPrice) => setCustomPrice(card.id, newPrice)}
+                    onToggleAttribute={(field, val) => toggleAttribute(card.id, field, val)}
+                    isSelectMode={isSelectMode}
+                    isSelected={selectedIds.includes(card.id)}
+                    onSelect={() => toggleSelection(card.id)}
+                />
+            ))}
+            </div>
+
+            {/* BOUTON CHARGER PLUS */}
+            {visibleCount < filteredAndSortedCards.length && (
+                <div className="mt-8 flex justify-center pb-10">
+                    <button 
+                        onClick={() => setVisibleCount(prev => prev + ITEMS_PER_PAGE)}
+                        className="bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-800 dark:text-gray-200 px-8 py-3 rounded-full font-bold shadow-sm transition flex items-center gap-2"
+                    >
+                        Afficher plus ({filteredAndSortedCards.length - visibleCount}) V
+                    </button>
+                </div>
+            )}
+        </>
+      )}
+
+      {/* BARRE FLOTTANTE ACTIONS (Mobile Friendly) */}
+      {isSelectMode && selectedIds.length > 0 && (
+          <div className="fixed bottom-6 left-4 right-4 md:left-1/2 md:right-auto md:-translate-x-1/2 bg-white dark:bg-gray-800 shadow-2xl border border-gray-200 dark:border-gray-700 p-2 rounded-2xl flex items-center justify-around gap-2 z-50 animate-in slide-in-from-bottom-6 duration-300">
+              <button onClick={() => handleBulkTrade(true)} className="px-4 py-2 bg-green-100 hover:bg-green-200 text-green-800 rounded-xl text-sm font-bold transition flex flex-col items-center leading-none gap-1">
+                  <span>Trade</span>
+              </button>
+              <button onClick={() => handleBulkTrade(false)} className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-800 rounded-xl text-sm font-bold transition flex flex-col items-center leading-none gap-1">
+                  <span>Prive</span>
+              </button>
+              <div className="w-px h-8 bg-gray-300 mx-1"></div>
+              <button onClick={handleBulkDelete} className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-xl text-sm font-bold transition flex flex-col items-center leading-none gap-1 shadow-md">
+                  <span>Suppr</span>
+              </button>
+          </div>
+      )}
+
+      <ImportModal isOpen={isImportOpen} onClose={() => setIsImportOpen(false)} targetCollection="collection" />
+      <CollectionToolsModal isOpen={isToolsOpen} onClose={() => setIsToolsOpen(false)} totalCards={cards.length} onRefreshPrices={refreshCollectionPrices} onBulkTrade={bulkSetTradeStatus} />
+      <ConfirmModal isOpen={!!cardToDelete} onClose={() => setCardToDelete(null)} onConfirm={() => { if(cardToDelete) removeCard(cardToDelete); }} title="Retirer ?" message="Cette carte sera retiree de votre collection." />
     </main>
   );
 }

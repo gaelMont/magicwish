@@ -5,9 +5,29 @@ import { getAdminFirestore } from '@/lib/firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
 import { CardType } from '@/hooks/useCardCollection';
 
+const createCardData = (card: CardType) => {
+    return {
+        name: card.name,
+        imageUrl: card.imageUrl,
+        imageBackUrl: card.imageBackUrl || null,
+        setName: card.setName || '',
+        setCode: card.setCode || '',
+        price: card.price || 0,
+        quantity: card.quantity, 
+        isFoil: card.isFoil || false,
+        isSpecificVersion: card.isSpecificVersion || false,
+        scryfallData: card.scryfallData || null,
+        addedAt: FieldValue.serverTimestamp(),
+        wishlistId: null,
+        isForTrade: false 
+    };
+};
+
+// --- ACTION 1 : ÉCHANGE P2P AVEC VALIDATION STATUS ---
 export async function executeServerTrade(
+    tradeId: string, // <-- Nouveau paramètre
     senderUid: string,
-    receiverUid: string, // On force le string ici, pas de null
+    receiverUid: string,
     itemsGiven: CardType[],
     itemsReceived: CardType[]
 ) {
@@ -15,92 +35,165 @@ export async function executeServerTrade(
 
     try {
         await db.runTransaction(async (t) => {
-            // --- 1. SENDER DONNE (Suppression/Décrémentation) ---
+            // PHASE 1 : TOUTES LES LECTURES
+            
+            // A. Vérifier que l'échange est toujours 'pending'
+            const tradeRef = db.doc(`trades/${tradeId}`);
+            const tradeSnap = await t.get(tradeRef);
+            if (!tradeSnap.exists) throw new Error("Échange introuvable");
+            if (tradeSnap.data()?.status !== 'pending') throw new Error("Cet échange n'est plus en attente.");
+
+            // B. Lire les stocks Expéditeur
+            const senderStockSnaps = [];
             for (const card of itemsGiven) {
                 const ref = db.doc(`users/${senderUid}/collection/${card.id}`);
-                const docSnap = await t.get(ref);
-                if (!docSnap.exists || (docSnap.data()?.quantity || 0) < card.quantity) {
-                    throw new Error(`Erreur: ${card.name} manquante chez l'expéditeur.`);
-                }
-                // Si quantité exacte, on supprime, sinon on décrémente
-                if (docSnap.data()?.quantity === card.quantity) {
-                    t.delete(ref);
-                } else {
-                    t.update(ref, { quantity: FieldValue.increment(-card.quantity) });
-                }
+                const snap = await t.get(ref);
+                senderStockSnaps.push({ ref, card, snap });
             }
 
-            // --- 2. RECEIVER DONNE (Suppression/Décrémentation) ---
+            // C. Lire les stocks Receveur
+            const receiverStockSnaps = [];
             for (const card of itemsReceived) {
                 const ref = db.doc(`users/${receiverUid}/collection/${card.id}`);
-                const docSnap = await t.get(ref);
-                if (!docSnap.exists || (docSnap.data()?.quantity || 0) < card.quantity) {
-                    throw new Error(`Erreur: ${card.name} manquante chez le partenaire.`);
-                }
-                if (docSnap.data()?.quantity === card.quantity) {
-                    t.delete(ref);
-                } else {
-                    t.update(ref, { quantity: FieldValue.increment(-card.quantity) });
-                }
+                const snap = await t.get(ref);
+                receiverStockSnaps.push({ ref, card, snap });
             }
 
-            // --- 3. SENDER REÇOIT (Ajout) ---
+            // D. Lire les destinations
+            const senderDestSnaps = [];
             for (const card of itemsReceived) {
-                const colRef = db.doc(`users/${senderUid}/collection/${card.id}`);
-                const wishRef = db.doc(`users/${senderUid}/wishlist/${card.id}`);
-                
-                // Astuce Admin: set({ ... }, { merge: true }) permet de créer ou update
-                // Mais pour incrémenter proprement, on fait un get ou un increment
-                // Ici version simple : Set + Increment
-                t.set(colRef, { 
-                    name: card.name,
-                    imageUrl: card.imageUrl,
-                    setName: card.setName || '',
-                    setCode: card.setCode || '',
-                    price: card.price || 0,
-                    isFoil: card.isFoil || false,
-                    addedAt: FieldValue.serverTimestamp()
-                }, { merge: true });
-                t.update(colRef, { quantity: FieldValue.increment(card.quantity) });
-                
-                // Nettoyage wishlist
-                t.delete(wishRef);
+                const ref = db.doc(`users/${senderUid}/collection/${card.id}`);
+                const snap = await t.get(ref);
+                senderDestSnaps.push({ ref, card, snap });
             }
 
-            // --- 4. RECEIVER REÇOIT (Ajout) ---
+            const receiverDestSnaps = [];
             for (const card of itemsGiven) {
-                const colRef = db.doc(`users/${receiverUid}/collection/${card.id}`);
-                const wishRef = db.doc(`users/${receiverUid}/wishlist/${card.id}`);
-                
-                t.set(colRef, { 
-                    name: card.name,
-                    imageUrl: card.imageUrl,
-                    setName: card.setName || '',
-                    setCode: card.setCode || '',
-                    price: card.price || 0,
-                    isFoil: card.isFoil || false,
-                    addedAt: FieldValue.serverTimestamp()
-                }, { merge: true });
-                t.update(colRef, { quantity: FieldValue.increment(card.quantity) });
-                
+                const ref = db.doc(`users/${receiverUid}/collection/${card.id}`);
+                const snap = await t.get(ref);
+                receiverDestSnaps.push({ ref, card, snap });
+            }
+
+            // PHASE 2 : TOUTES LES ÉCRITURES
+
+            // 1. Mise à jour du statut de l'échange (IMPORTANT)
+            t.update(tradeRef, { 
+                status: 'completed',
+                completedAt: FieldValue.serverTimestamp()
+            });
+
+            // 2. RETIRER les cartes de l'Expéditeur
+            for (const item of senderStockSnaps) {
+                if (!item.snap.exists || (item.snap.data()?.quantity || 0) < item.card.quantity) {
+                    throw new Error(`Erreur: ${item.card.name} manquante chez l'expéditeur.`);
+                }
+                if (item.snap.data()?.quantity === item.card.quantity) {
+                    t.delete(item.ref);
+                } else {
+                    t.update(item.ref, { quantity: FieldValue.increment(-item.card.quantity) });
+                }
+            }
+
+            // 3. RETIRER les cartes du Receveur
+            for (const item of receiverStockSnaps) {
+                if (!item.snap.exists || (item.snap.data()?.quantity || 0) < item.card.quantity) {
+                    throw new Error(`Erreur: ${item.card.name} manquante chez le partenaire.`);
+                }
+                if (item.snap.data()?.quantity === item.card.quantity) {
+                    t.delete(item.ref);
+                } else {
+                    t.update(item.ref, { quantity: FieldValue.increment(-item.card.quantity) });
+                }
+            }
+
+            // 4. AJOUTER chez l'Expéditeur + Clean Wishlist
+            for (const item of senderDestSnaps) {
+                const wishRef = db.doc(`users/${senderUid}/wishlist/${item.card.id}`);
+                if (item.snap.exists) {
+                    t.update(item.ref, { quantity: FieldValue.increment(item.card.quantity) });
+                } else {
+                    t.set(item.ref, createCardData(item.card));
+                }
+                t.delete(wishRef); 
+            }
+
+            // 5. AJOUTER chez le Receveur + Clean Wishlist
+            for (const item of receiverDestSnaps) {
+                const wishRef = db.doc(`users/${receiverUid}/wishlist/${item.card.id}`);
+                if (item.snap.exists) {
+                    t.update(item.ref, { quantity: FieldValue.increment(item.card.quantity) });
+                } else {
+                    t.set(item.ref, createCardData(item.card));
+                }
                 t.delete(wishRef);
             }
         });
 
         return { success: true };
 
-    } catch (error: unknown) { // 1. On utilise 'unknown' au lieu de 'any'
+    } catch (error: unknown) {
         console.error("Trade Error:", error);
-        
-        // 2. On vérifie le type de l'erreur pour extraire le message proprement
         let errorMessage = "Une erreur inconnue est survenue";
-        
-        if (error instanceof Error) {
-            errorMessage = error.message;
-        } else if (typeof error === "string") {
-            errorMessage = error;
-        }
+        if (error instanceof Error) errorMessage = error.message;
+        else if (typeof error === "string") errorMessage = error;
+        return { success: false, error: errorMessage };
+    }
+}
 
+// --- ACTION 2 : ÉCHANGE MANUEL (SOLO) ---
+export async function executeManualTrade(
+    userId: string,
+    itemsGiven: CardType[],    
+    itemsReceived: CardType[]  
+) {
+    const db = getAdminFirestore();
+
+    try {
+        await db.runTransaction(async (t) => {
+            // PHASE 1 : LECTURES
+            const stockSnaps = [];
+            for (const card of itemsGiven) {
+                const ref = db.doc(`users/${userId}/collection/${card.id}`);
+                const snap = await t.get(ref);
+                stockSnaps.push({ ref, card, snap });
+            }
+
+            const destSnaps = [];
+            for (const card of itemsReceived) {
+                const ref = db.doc(`users/${userId}/collection/${card.id}`);
+                const snap = await t.get(ref);
+                destSnaps.push({ ref, card, snap });
+            }
+
+            // PHASE 2 : ÉCRITURES
+            for (const item of stockSnaps) {
+                if (!item.snap.exists || (item.snap.data()?.quantity || 0) < item.card.quantity) {
+                    throw new Error(`Erreur: Vous ne possédez pas assez de "${item.card.name}".`);
+                }
+                if (item.snap.data()?.quantity === item.card.quantity) {
+                    t.delete(item.ref);
+                } else {
+                    t.update(item.ref, { quantity: FieldValue.increment(-item.card.quantity) });
+                }
+            }
+
+            for (const item of destSnaps) {
+                const wishRef = db.doc(`users/${userId}/wishlist/${item.card.id}`);
+                if (item.snap.exists) {
+                    t.update(item.ref, { quantity: FieldValue.increment(item.card.quantity) });
+                } else {
+                    t.set(item.ref, createCardData(item.card));
+                }
+                t.delete(wishRef);
+            }
+        });
+
+        return { success: true };
+
+    } catch (error: unknown) {
+        console.error("Manual Trade Error:", error);
+        let errorMessage = "Erreur lors de l'échange manuel";
+        if (error instanceof Error) errorMessage = error.message;
         return { success: false, error: errorMessage };
     }
 }

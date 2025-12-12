@@ -1,0 +1,17 @@
+{
+  "name": "MagicWish",
+  "short_name": "MagicWish",
+  "description": "Votre wishlist et collection de cartes Magic",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#2563eb",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "/file.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}

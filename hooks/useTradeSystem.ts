@@ -1,3 +1,4 @@
+// hooks/useTradeSystem.ts
 import { useState, useEffect } from 'react';
 import { db } from '@/lib/firebase';
 import { 
@@ -24,13 +25,24 @@ export type TradeRequest = {
   createdAt: Timestamp;
 };
 
-const cleanCardsForFirestore = (cards: CardType[]) => {
+// Fonction de nettoyage
+const cleanCardsForServer = (cards: CardType[]) => {
     return cards.map(card => {
         const clean = { ...card };
+        // @ts-expect-error: Timestamp Firestore non sérialisable
+        delete clean.addedAt;
+        // @ts-expect-error: Timestamp Firestore non sérialisable
+        delete clean.importedAt;
+        // @ts-expect-error: Timestamp Firestore non sérialisable
+        delete clean.createdAt;
+        // @ts-expect-error: Timestamp Firestore non sérialisable
+        delete clean.lastUpdated;
+        
         Object.keys(clean).forEach(key => {
             const k = key as keyof CardType;
             if (clean[k] === undefined) delete clean[k];
         });
+        
         return clean;
     });
 };
@@ -77,8 +89,8 @@ export function useTradeSystem() {
     const toastId = toast.loading("Envoi de la proposition...");
 
     try {
-      const cleanGiven = cleanCardsForFirestore(toGive);
-      const cleanReceived = cleanCardsForFirestore(toReceive);
+      const cleanGiven = cleanCardsForServer(toGive);
+      const cleanReceived = cleanCardsForServer(toReceive);
 
       await addDoc(collection(db, 'trades'), {
         senderUid: user.uid,
@@ -106,15 +118,21 @@ export function useTradeSystem() {
     const toastId = toast.loading("Validation securisee en cours...");
 
     try {
+        const safeItemsGiven = cleanCardsForServer(trade.itemsGiven);
+        const safeItemsReceived = cleanCardsForServer(trade.itemsReceived);
+
+        // Appel Server Action (qui gère stocks + status)
         const result = await executeServerTrade(
+            trade.id, // <-- On passe l'ID de l'échange
             trade.senderUid,
             user.uid, 
-            trade.itemsGiven,
-            trade.itemsReceived
+            safeItemsGiven,
+            safeItemsReceived
         );
 
         if (result.success) {
-            await updateDoc(doc(db, 'trades', trade.id), { status: 'completed' });
+            // Note: On ne fait plus updateDoc ici pour 'completed', 
+            // le serveur l'a fait. Le onSnapshot mettra l'UI à jour.
             toast.success("Echange termine avec succes !", { id: toastId });
         } else {
             throw new Error(result.error || "Erreur serveur inconnue");
@@ -122,26 +140,23 @@ export function useTradeSystem() {
 
     } catch (error: unknown) { 
         console.error("Erreur Accept Trade:", error);
-        
         let msg = "Echec de l'echange";
-        if (error instanceof Error) {
-            msg = error.message;
-        } else if (typeof error === "string") {
-            msg = error;
-        }
-        
+        if (error instanceof Error) msg = error.message;
+        else if (typeof error === "string") msg = error;
         toast.error(msg, { id: toastId });
     } finally {
         setIsProcessing(false);
     }
   };
 
+  // 'rejected' reste autorisé côté client dans les nouvelles règles
   const rejectTrade = async (tradeId: string) => {
     if(!confirm("Refuser cet echange ?")) return;
     await updateDoc(doc(db, 'trades', tradeId), { status: 'rejected' });
     toast.success("Echange refuse");
   };
 
+  // 'cancelled' reste autorisé côté client dans les nouvelles règles
   const cancelTrade = async (tradeId: string) => {
     if(!confirm("Annuler cette proposition ?")) return;
     await updateDoc(doc(db, 'trades', tradeId), { status: 'cancelled' });

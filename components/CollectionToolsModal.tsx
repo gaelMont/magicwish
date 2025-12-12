@@ -2,6 +2,7 @@
 'use client';
 
 import { useState } from 'react';
+import AdContainer from './AdContainer';
 
 type CollectionToolsModalProps = {
   isOpen: boolean;
@@ -92,6 +93,16 @@ export default function CollectionToolsModal({
             {/* SECTION 2 : ACTUALISATION */}
             <div>
                 <h3 className="text-sm font-bold text-gray-500 uppercase mb-3 border-b border-gray-200 dark:border-gray-700 pb-1">Données & Prix</h3>
+                
+                {isRefreshing && (
+                    <div className="mb-4">
+                        <AdContainer /> {/* <--- LA PUB APPARAIT PENDANT L'ATTENTE */}
+                        <p className="text-center text-sm text-blue-600 animate-pulse mt-2">
+                            Analyse des prix en cours...
+                        </p>
+                    </div>
+                )}
+                
                 <button 
                     onClick={handleRefresh}
                     disabled={isRefreshing}

@@ -5,13 +5,14 @@ import './globals.css';
 import { AuthProvider } from '@/lib/AuthContext';
 import Header from '@/components/Header'; 
 import { Toaster } from 'react-hot-toast';
-import UsernameSetupModal from '@/components/UsernameSetupModal'; // <--- IMPORT
+import UsernameSetupModal from '@/components/UsernameSetupModal'; 
 
 const inter = Inter({ subsets: ['latin'] });
 
 export const metadata: Metadata = {
   title: 'MagicWish',
   description: 'Votre wishlist de cartes Magic',
+  manifest: '/manifest.json', // N'oublie pas le manifest pour le mobile
 };
 
 export default function RootLayout({
@@ -23,11 +24,11 @@ export default function RootLayout({
     <html lang="fr">
       <body className={inter.className}>
         <AuthProvider>
+          
           <Header />
           {children}
           
-          {/* Composants Globaux */}
-          <UsernameSetupModal /> {/* <--- AJOUTE ÇA ICI */}
+          <UsernameSetupModal />
           <Toaster position="bottom-right" />
         </AuthProvider>
       </body>

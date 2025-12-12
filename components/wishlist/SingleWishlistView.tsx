@@ -31,7 +31,9 @@ export default function SingleWishlistView({ listId, listName }: Props) {
                     transaction.update(collectionRef, { quantity: increment(card.quantity) });
                 } else {
                     transaction.set(collectionRef, { 
-                        ...card, 
+                        ...card,
+                        // CORRECTION CRITIQUE ICI : On force null si undefined
+                        imageBackUrl: card.imageBackUrl || null, 
                         wishlistId: null, 
                         addedAt: new Date(),
                         isFoil: card.isFoil || false
@@ -42,7 +44,7 @@ export default function SingleWishlistView({ listId, listName }: Props) {
             toast.success("Ajoutée à la collection !", { id: toastId });
         } catch (error) {
             console.error(error);
-            toast.error("Erreur", { id: toastId });
+            toast.error("Erreur technique (voir console)", { id: toastId });
         }
     };
 
@@ -74,7 +76,6 @@ export default function SingleWishlistView({ listId, listName }: Props) {
                                 if(card.quantity === 1) { if(confirm("Supprimer ?")) removeCard(card.id); } 
                                 else { updateQuantity(card.id, -1, card.quantity); }
                             }}
-                            // PLUS DE onDelete ICI
                             onMove={() => moveToCollection(card)}
                             onToggleAttribute={(field, val) => toggleAttribute(card.id, field, val)}
                         />

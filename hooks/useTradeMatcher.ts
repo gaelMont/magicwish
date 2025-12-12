@@ -62,12 +62,14 @@ export function useTradeMatcher() {
     return cardsMap;
   };
 
-  // --- 2. MISE À JOUR PRIX CIBLÉE (Uniquement sur les matchs) ---
+  // --- 2. MISE À JOUR PRIX CIBLÉE (CORRIGÉE : SEULEMENT MES CARTES) ---
   const refreshPricesForProposals = async (currentProposals: TradeProposal[], myUid: string) => {
      // On extrait toutes les cartes uniques impliquées
      const cardsToUpdateMap = new Map<string, { card: CardType, ownerUid: string, collection: string }>();
 
      currentProposals.forEach(p => {
+         // IMPORTANT: On ne mettra pas à jour les cartes de l'ami ici car on n'a pas les droits d'écriture
+         // On peut les lire pour le calcul de balance, mais pas les update en base.
          p.toReceive.forEach(c => cardsToUpdateMap.set(`${p.friend.uid}_${c.id}`, { card: c, ownerUid: p.friend.uid, collection: 'collection' }));
          p.toGive.forEach(c => cardsToUpdateMap.set(`${myUid}_${c.id}`, { card: c, ownerUid: myUid, collection: 'collection' }));
      });
@@ -105,17 +107,19 @@ export function useTradeMatcher() {
                  const newPrice = parseFloat(scryCard.prices?.eur || "0");
                  
                  // On retrouve les cartes locales qui correspondent à cet ID Scryfall
-                 // (Il peut y en avoir plusieurs si moi et mon ami avons la même carte)
                  const localMatches = chunk.filter(item => item.card.id === scryCard.id);
 
                  localMatches.forEach(match => {
-                     // Si le prix a changé, on met à jour l'objet en mémoire ET Firestore
+                     // Update mémoire (ref) pour l'affichage immédiat
                      if (match.card.price !== newPrice) {
-                         match.card.price = newPrice; // Update mémoire (ref)
+                         match.card.price = newPrice;
                          
-                         const ref = doc(db, 'users', match.ownerUid, match.collection, match.card.id);
-                         batch.update(ref, { price: newPrice });
-                         hasUpdates = true;
+                         // Update Firestore : UNIQUEMENT SI C'EST MA CARTE
+                         if (match.ownerUid === myUid) {
+                             const ref = doc(db, 'users', match.ownerUid, match.collection, match.card.id);
+                             batch.update(ref, { price: newPrice });
+                             hasUpdates = true;
+                         }
                      }
                  });
              });
@@ -149,14 +153,12 @@ export function useTradeMatcher() {
         });
 
         // C. Indexation de MON Trade Binder
-        // On ne garde que celles que je veux échanger
         const myTradeCards = Array.from(myCollectionMap.values()).filter(c => c.isForTrade);
 
         setStatus(`Analyse simultanée de ${friends.length} amis...`);
 
         // D. SCAN PARALLÈLE DES AMIS
         const matchPromises = friends.map(async (friend) => {
-            // Chargement parallèle des données de l'ami
             const [friendCollectionMap, friendWishlistMap] = await Promise.all([
                 fetchCardsAsMap(friend.uid, 'collection'),
                 fetchCardsAsMap(friend.uid, 'wishlist')
@@ -167,7 +169,7 @@ export function useTradeMatcher() {
 
             // 1. Check ce que JE reçois (Sa Collection vs Ma Wishlist)
             friendCollectionMap.forEach(card => {
-                if (card.isForTrade) { // Il doit vouloir l'échanger
+                if (card.isForTrade) { 
                     if (myWishlistIds.has(card.id) || myWishlistNames.has(card.name)) {
                         toReceive.push(card);
                     }
@@ -175,7 +177,6 @@ export function useTradeMatcher() {
             });
 
             // 2. Check ce que JE donne (Ma Collection vs Sa Wishlist)
-            // Indexation rapide de SA wishlist
             const friendWishlistIds = new Set<string>();
             const friendWishlistNames = new Set<string>();
             friendWishlistMap.forEach(c => {
@@ -194,13 +195,12 @@ export function useTradeMatcher() {
                     friend,
                     toReceive,
                     toGive,
-                    balance: 0 // Sera calculé après refresh
+                    balance: 0 
                 } as TradeProposal;
             }
             return null;
         });
 
-        // Attente de tous les scans
         const results = await Promise.all(matchPromises);
         const validProposals = results.filter((p): p is TradeProposal => p !== null);
 
@@ -209,7 +209,6 @@ export function useTradeMatcher() {
             setStatus("Actualisation des prix...");
             await refreshPricesForProposals(validProposals, user.uid);
             
-            // Recalcul des balances avec les prix frais
             validProposals.forEach(p => {
                 const valReceive = p.toReceive.reduce((sum, c) => sum + (c.customPrice ?? c.price ?? 0), 0);
                 const valGive = p.toGive.reduce((sum, c) => sum + (c.customPrice ?? c.price ?? 0), 0);
