@@ -5,16 +5,13 @@ import Stripe from 'stripe';
 import { getAdminFirestore } from '@/lib/firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
 
-// Init Stripe Server-Side
-// CORRECTION 1 : Mise à jour de la version API demandée par ton erreur
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: '2025-11-17.clover', // Version spécifique demandée par TypeScript
-});
-
 export async function POST(req: Request) {
+  // CORRECTION : Initialisation Lazy (au moment de la requête)
+  const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
+    apiVersion: '2025-11-17.clover',
+  });
+
   const body = await req.text();
-  
-  // CORRECTION 2 : headers() est async dans Next.js 15, il faut await
   const headerList = await headers();
   const signature = headerList.get('Stripe-Signature') as string;
 
@@ -36,8 +33,6 @@ export async function POST(req: Request) {
 
   try {
       switch (event.type) {
-        
-        // CAS 1 : NOUVEL ABONNEMENT PAYÉ
         case 'checkout.session.completed': {
           const session = event.data.object as Stripe.Checkout.Session;
           const userId = session.client_reference_id; 
@@ -54,7 +49,6 @@ export async function POST(req: Request) {
           break;
         }
 
-        // CAS 2 : ABONNEMENT SUPPRIMÉ (Annulation ou Défaut de paiement)
         case 'customer.subscription.deleted': {
           const subscription = event.data.object as Stripe.Subscription;
           const stripeSubId = subscription.id;

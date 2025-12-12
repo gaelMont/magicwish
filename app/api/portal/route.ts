@@ -2,12 +2,14 @@
 import { NextResponse } from 'next/server';
 import Stripe from 'stripe';
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: '2025-11-17.clover', // Ta version installée
-});
-
 export async function POST(req: Request) {
     try {
+        // On initialise Stripe ICI, à l'intérieur de la fonction
+        // Cela évite de faire planter le build si la clé n'est pas encore là
+        const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
+            apiVersion: '2025-11-17.clover', 
+        });
+
         const body = await req.json();
         const { customerId } = body; 
 
@@ -22,18 +24,11 @@ export async function POST(req: Request) {
 
         return NextResponse.json({ url: session.url });
         
-    } catch (err: unknown) { // <--- ON REMPLACE 'any' PAR 'unknown'
+    } catch (err: unknown) {
         console.error("Erreur création portail Stripe:", err);
-        
         let errorMessage = "Erreur serveur";
-        
-        // On vérifie proprement le type de l'erreur (Type Narrowing)
-        if (err instanceof Error) {
-            errorMessage = err.message;
-        } else if (typeof err === 'string') {
-            errorMessage = err;
-        }
-
+        if (err instanceof Error) errorMessage = err.message;
+        else if (typeof err === 'string') errorMessage = err;
         return NextResponse.json({ error: errorMessage }, { status: 500 });
     }
 }
