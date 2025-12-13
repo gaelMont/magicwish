@@ -2,6 +2,7 @@
 'use client';
 
 import { useState, useEffect, memo } from 'react';
+import { useRouter } from 'next/navigation'; // <--- IMPORT
 
 type MagicCardProps = {
   id?: string;
@@ -27,11 +28,13 @@ type MagicCardProps = {
   isSelectMode?: boolean;
   isSelected?: boolean;
   onSelect?: () => void;
+  returnTo?: string; // <--- NOUVELLE PROP POUR LE RETOUR
 };
 
 const CARD_BACK_URL = "https://cards.scryfall.io/large/front/a/6/a6984342-f723-4e80-8e69-902d287a915f.jpg";
 
 function MagicCard(props: MagicCardProps) {
+  const router = useRouter(); // <--- ROUTER
   const { 
       name, imageUrl, imageBackUrl, quantity = 1, 
       price, customPrice, setName, 
@@ -40,7 +43,8 @@ function MagicCard(props: MagicCardProps) {
       onEditPrice, onToggleAttribute, 
       readOnly, isWishlist,
       onIncrement, onDecrement, onMove,
-      isSelectMode, isSelected, onSelect
+      isSelectMode, isSelected, onSelect,
+      returnTo // <--- Destructuring
   } = props;
   
   const [isFlipped, setIsFlipped] = useState(false);
@@ -50,7 +54,6 @@ function MagicCard(props: MagicCardProps) {
   useEffect(() => {
     if (!isEditingPrice) {
         const newVal = customPrice?.toString() || price?.toString() || "0";
-        // eslint-disable-next-line react-hooks/set-state-in-effect
         setTempPrice(prev => (prev !== newVal ? newVal : prev));
     }
   }, [customPrice, price, isEditingPrice]);
@@ -68,32 +71,32 @@ function MagicCard(props: MagicCardProps) {
   const currentImage = isFlipped && imageBackUrl ? imageBackUrl : imageUrl;
 
   const handleCardClick = () => {
-      // 1. Mode Sélection
       if (isSelectMode && onSelect) {
           onSelect();
           return;
       } 
       
-      // 2. Vue Trade : Uniquement Flip (pas de navigation pour ne pas perdre le contexte)
       if (isTradeView) {
-         if (imageBackUrl) {
-            setIsFlipped(!isFlipped);
-         }
+         if (imageBackUrl) setIsFlipped(!isFlipped);
          return;
       }
       
-      // 3. Navigation vers Détails (Même en readOnly !)
       if (props.id) {
-          window.location.href = `/card/${props.id}`;
+          // GESTION DU RETOUR DYNAMIQUE
+          const url = returnTo 
+            ? `/card/${props.id}?returnTo=${encodeURIComponent(returnTo)}`
+            : `/card/${props.id}`;
+          
+          router.push(url);
           return;
       }
 
-      // 4. Flip par défaut si pas d'ID
       if (imageBackUrl) {
           setIsFlipped(!isFlipped);
       }
   };
 
+  // ... (Le reste du rendu VUE LISTE et VUE GRILLE reste inchangé, je conserve le code existant pour la brièveté, assurez-vous de garder tout le JSX du composant précédent) ...
   // --- VUE LISTE (TradeView) ---
   if (isTradeView) {
       return (
@@ -135,16 +138,10 @@ function MagicCard(props: MagicCardProps) {
         onClick={handleCardClick}
         className={`relative group flex flex-col rounded-xl overflow-hidden p-3 gap-2 h-full content-visibility-auto
         bg-surface border transition-all duration-200 shadow-sm hover:shadow-md
-        
-        /* SÉLECTION CENTRALISÉE */
-        ${isSelected 
-            ? 'border-primary ring-1 ring-primary bg-primary/5' 
-            : 'border-border hover:border-primary'
-        }
+        ${isSelected ? 'border-primary ring-1 ring-primary bg-primary/5' : 'border-border hover:border-primary'}
         ${isSelectMode || !isTradeView ? 'cursor-pointer' : ''} 
         `}
     >
-
       {isSelectMode && (
           <div className="absolute top-2 right-2 z-30 pointer-events-none">
               <div className={`w-5 h-5 rounded-full border flex items-center justify-center transition-all ${isSelected ? 'bg-primary border-primary' : 'bg-surface border-muted'}`}>
@@ -171,7 +168,6 @@ function MagicCard(props: MagicCardProps) {
         <div className="flex justify-between items-start mb-0.5">
             <h3 className="font-semibold text-sm leading-tight text-foreground truncate flex-grow" title={name}>{name}</h3>
         </div>
-        
         <p className="text-[11px] text-muted truncate mb-2">{setName}</p>
 
         <div className={`flex flex-wrap gap-1 mb-2 ${isSelectMode ? 'pointer-events-none opacity-50' : ''}`}>
@@ -179,9 +175,7 @@ function MagicCard(props: MagicCardProps) {
                 <button 
                     onClick={(e) => { e.stopPropagation(); onToggleAttribute('isFoil', !!isFoil); }}
                     className={`text-[10px] px-2 py-1 rounded border transition-colors font-medium flex-1 text-center ${
-                        isFoil 
-                        ? 'bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-900/30 dark:text-amber-400 dark:border-amber-800' 
-                        : 'bg-secondary text-muted border-transparent hover:bg-border'
+                        isFoil ? 'bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-900/30 dark:text-amber-400 dark:border-amber-800' : 'bg-secondary text-muted border-transparent hover:bg-border'
                     }`}
                 >
                     {isFoil ? 'Foil' : 'Normal'}
@@ -193,9 +187,7 @@ function MagicCard(props: MagicCardProps) {
                     <button 
                         onClick={(e) => { e.stopPropagation(); onToggleAttribute('isSpecificVersion', !!isSpecificVersion); }}
                         className={`text-[10px] px-2 py-1 rounded border transition-colors font-medium flex-1 text-center ${
-                            isSpecificVersion 
-                            ? 'bg-primary/10 text-primary border-primary/30' 
-                            : 'bg-secondary text-muted border-transparent'
+                            isSpecificVersion ? 'bg-primary/10 text-primary border-primary/30' : 'bg-secondary text-muted border-transparent'
                         }`}
                     >
                         {isSpecificVersion ? 'Exact' : 'Auto'}
@@ -215,31 +207,20 @@ function MagicCard(props: MagicCardProps) {
         </div>
         
         <div className={`mt-auto flex justify-between items-center border-t border-border pt-2 ${isSelectMode ? 'pointer-events-none opacity-50' : ''}`}>
-          
-          {/* BLOC GAUCHE : QUANTITÉ TOTALE */}
           <div className="flex items-center gap-1">
             {!readOnly && <button onClick={(e) => {e.stopPropagation(); onDecrement?.()}} className="w-5 h-5 rounded bg-secondary hover:bg-border text-muted hover:text-foreground flex items-center justify-center text-xs font-bold transition">-</button>}
-            
-            <span className={`text-sm ${readOnly ? 'font-bold text-foreground' : 'w-4 text-center text-foreground'}`}>
-                {quantity}
-            </span>
-            
+            <span className={`text-sm ${readOnly ? 'font-bold text-foreground' : 'w-4 text-center text-foreground'}`}>{quantity}</span>
             {!readOnly && <button onClick={(e) => {e.stopPropagation(); onIncrement?.()}} className="w-5 h-5 rounded bg-primary/10 hover:bg-primary/20 text-primary border border-primary/30 flex items-center justify-center text-xs font-bold transition">+</button>}
           </div>
 
-          {/* BLOC CENTRAL : STATUT DE TRADE */}
           {isTradeable && !isWishlist && !isSelectMode && (
                <div className="flex-grow text-center min-w-fit mx-1">
-                   <span 
-                       className="text-xs font-bold text-success bg-success/10 px-2 py-0.5 rounded-full"
-                       title={`${quantityForTrade} exemplaire(s) disponible(s) pour l'échange sur ${quantity} possédé(s).`}
-                   >
+                   <span className="text-xs font-bold text-success bg-success/10 px-2 py-0.5 rounded-full" title={`${quantityForTrade} exemplaire(s) disponible(s) pour l'échange.`}>
                        {quantityForTrade} / {quantity} 🤝
                    </span>
                </div>
           )}
           
-          {/* BLOC DROIT : PRIX */}
           <div className="text-right leading-none">
              <p className={`font-bold text-sm ${customPrice ? 'text-orange-600' : 'text-foreground'}`}>
                  {(effectivePrice * quantity).toFixed(2)} €
