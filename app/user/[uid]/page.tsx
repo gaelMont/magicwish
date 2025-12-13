@@ -109,7 +109,8 @@ export default function UserProfilePage({ params }: { params: Promise<{ uid: str
                     <MagicCard 
                         key={card.id} 
                         {...card} 
-                        readOnly={true} 
+                        readOnly={true}
+                        returnTo={`/user/${targetUid}`}
                     />
                 ))}
             </div>
