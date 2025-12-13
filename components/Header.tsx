@@ -8,7 +8,7 @@ import { usePathname } from 'next/navigation';
 import ThemeToggle from './ThemeToggle';
 
 export default function Header() {
-  const { user, logOut, friendRequestCount } = useAuth();
+  const { user, logOut, friendRequestCount, isAdmin } = useAuth();
   const pathname = usePathname();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
 
@@ -20,12 +20,10 @@ export default function Header() {
   `;
 
   return (
-    // UTILISATION DES VARIABLES : bg-surface, border-border
     <header className="bg-surface/80 backdrop-blur-md border-b border-border p-4 sticky top-0 z-40 transition-colors duration-300">
       <div className="container mx-auto">
         <div className="flex justify-between items-center">
           
-          {/* Logo utilise text-primary */}
           <Link 
             href="/" 
             className="text-2xl font-black tracking-tight text-primary hover:opacity-80 transition"
@@ -39,6 +37,7 @@ export default function Header() {
 
             {user ? (
               <>
+                {/* --- NAVIGATION DESKTOP --- */}
                 <nav className="hidden md:flex gap-6 mr-4 items-center">
                   <Link href="/search" className={linkClass('/search')}>Recherche</Link> 
                   <Link href="/wishlist" className={linkClass('/wishlist')}>Wishlist</Link>
@@ -52,12 +51,19 @@ export default function Header() {
                       </span>
                     )}
                   </Link>
+                  
+                  {/* LIEN ADMIN CONDITIONNEL (DESKTOP) */}
+                  {isAdmin && (
+                    <Link href="/admin" className={linkClass('/admin')}>
+                        Admin
+                    </Link>
+                  )}
                 </nav>
 
                 <div className="h-5 w-px bg-border hidden md:block"></div>
 
                 <div className="flex items-center gap-3">
-                  {/* AJOUT DU LIEN PARAMÈTRES (Icône engrenage sur desktop) */}
+                  {/* LIEN PARAMÈTRES */}
                   <Link 
                     href="/settings"
                     className={`p-2 rounded-full hover:bg-secondary transition-colors ${pathname === '/settings' ? 'text-primary' : 'text-muted hover:text-foreground'}`}
@@ -108,7 +114,11 @@ export default function Header() {
                <Link href="/collection" className={linkClass('/collection')} onClick={() => setIsMenuOpen(false)}>Collection</Link>
                <Link href="/trades" className={linkClass('/trades')} onClick={() => setIsMenuOpen(false)}>Echanges</Link>
                <Link href="/contacts" className={linkClass('/contacts')} onClick={() => setIsMenuOpen(false)}>Contacts</Link>
-               <Link href="/settings" className={linkClass('/settings')} onClick={() => setIsMenuOpen(false)}>Paramètres</Link> {/* LIEN PARAMÈTRES MOBILE */}
+               
+               {/* LIEN ADMIN CONDITIONNEL (MOBILE) */}
+               {isAdmin && <Link href="/admin" className={linkClass('/admin')} onClick={() => setIsMenuOpen(false)}>👑 Admin</Link>} 
+               
+               <Link href="/settings" className={linkClass('/settings')} onClick={() => setIsMenuOpen(false)}>Paramètres</Link>
                <button onClick={() => { logOut(); setIsMenuOpen(false); }} className="text-left py-2 text-danger text-sm font-medium">Déconnexion</button>
              </nav>
           </div>

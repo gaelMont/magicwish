@@ -130,10 +130,10 @@ export default function CardVersionsGrid({ oracleId, currentCardId, onVersionSel
                                             : 'bg-surface border-border hover:bg-primary/5' 
                                 }`}
                             >
-                                <div className="w-12 h-16 rounded overflow-hidden flex-shrink-0">
+                                <div className="w-12 h-16 rounded overflow-hidden shrink-0">
                                     <img src={normalized.imageUrl} alt={normalized.setName} className="w-full h-full object-cover" loading="lazy" />
                                 </div>
-                                <div className="flex-grow min-w-0">
+                                <div className="grow min-w-0">
                                     <p className="font-bold text-foreground truncate flex items-center gap-2">
                                         {v.set_name} 
                                         {isOwned && <span className="text-xs bg-success text-white px-1.5 py-0.5 rounded font-bold">{ownedQty}x</span>} 
@@ -141,7 +141,7 @@ export default function CardVersionsGrid({ oracleId, currentCardId, onVersionSel
                                     </p>
                                     <p className="text-xs text-muted">Set: {v.set.toUpperCase()} | Num: {v.collector_number}</p>
                                 </div>
-                                <div className="text-right flex-shrink-0">
+                                <div className="text-right shrink-0">
                                     <span className={`font-bold text-sm ${isCurrentInCollection ? 'text-primary' : 'text-success'}`}>{displayPrice.toFixed(2)} €</span>
                                     {v.finishes?.includes('foil') && <p className="text-xs text-amber-600">Foil</p>}
                                     <button onClick={(e) => { e.stopPropagation(); onVersionSelect(v); }} className="text-xs text-primary hover:underline block mt-1 w-full text-right">

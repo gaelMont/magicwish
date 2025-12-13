@@ -69,13 +69,18 @@ export default function CardMainDetails({ cardData }: { cardData: CardType }) {
                 </table>
             </div>
 
-            {/* Liens externes */}
+            {/* Liens externes - NETTOYÉ */}
             <div className="bg-surface p-6 rounded-xl border border-border shadow-sm">
                 <h2 className="text-xl font-bold text-foreground mb-4">Outils</h2>
-                <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-                    <a href={`https://www.tcgplayer.com/search/all/product?q=${cardData.name}`} target="_blank" rel="noopener noreferrer" className="btn-primary text-xs py-2 text-center">TCGPlayer</a>
-                    <a href={`https://www.cardmarket.com/en/Magic/Products/Search?searchString=${cardData.name}`} target="_blank" rel="noopener noreferrer" className="btn-primary text-xs py-2 text-center">Cardmarket</a>
-                    <a href={`https://scryfall.com/search?q=${cardData.id}`} target="_blank" rel="noopener noreferrer" className="bg-secondary text-primary border border-primary/30 hover:bg-secondary/80 text-xs py-2 rounded-lg font-bold text-center transition">Scryfall</a>
+                <div className="flex flex-col gap-3">
+                    <a 
+                        href={`https://www.cardmarket.com/en/Magic/Products/Search?searchString=${cardData.name}`} 
+                        target="_blank" 
+                        rel="noopener noreferrer" 
+                        className="btn-primary text-xs py-3 text-center w-full"
+                    >
+                        Voir sur Cardmarket
+                    </a>
                 </div>
             </div>
         </div>

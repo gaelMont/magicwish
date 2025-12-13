@@ -61,7 +61,7 @@ const QuantityManager = ({ card }: { card: CardType }) => {
                 <label className="font-medium text-sm mb-2">Quantité à l&apos;échange (max {maxStock}) :</label>
                 <div className="flex items-center gap-3">
                     <input type="number" min="0" max={maxStock} value={tradeQtyInput} onChange={(e) => setTradeQtyInput(Math.min(maxStock, Math.max(0, parseInt(e.target.value) || 0)))} className="w-20 p-2 border border-border rounded-lg text-center bg-surface font-bold text-foreground" />
-                    <button onClick={handleSaveTradeQty} disabled={isUpdatingTrade || tradeQtyInput === (card.quantityForTrade ?? 0) || tradeQtyInput > maxStock} className="bg-success hover:opacity-90 disabled:opacity-50 text-white px-4 py-2 rounded-lg text-sm font-bold transition flex-grow">
+                    <button onClick={handleSaveTradeQty} disabled={isUpdatingTrade || tradeQtyInput === (card.quantityForTrade ?? 0) || tradeQtyInput > maxStock} className="bg-success hover:opacity-90 disabled:opacity-50 text-white px-4 py-2 rounded-lg text-sm font-bold transition grow">
                         {isUpdatingTrade ? 'Sauvegarde...' : 'Définir l\'échange'}
                     </button>
                 </div>

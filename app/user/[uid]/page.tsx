@@ -47,7 +47,7 @@ export default function UserProfilePage({ params }: { params: Promise<{ uid: str
                 {profile?.photoURL ? <img src={profile.photoURL} alt="" className="w-full h-full object-cover"/> : profile?.username?.[0]?.toUpperCase()}
             </div>
             
-            <div className="text-center md:text-left flex-grow">
+            <div className="text-center md:text-left grow">
                 <h1 className="text-3xl font-bold text-foreground mb-1">
                     {profile?.displayName || 'Utilisateur'}
                 </h1>

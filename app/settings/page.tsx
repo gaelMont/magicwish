@@ -1,3 +1,4 @@
+// app/settings/page.tsx
 'use client';
 
 import { useAuth } from '@/lib/AuthContext';
@@ -21,7 +22,7 @@ const getFirebaseAuthInstance = (): Auth => {
 };
 
 
-// --- Composant spécifique pour la gestion Premium ---
+// --- Composant spécifique pour la gestion Premium (inchangé) ---
 const PremiumSettingsCard = () => {
     // HOOKS APPELES EN PREMIER
     const { user } = useAuth();
@@ -113,7 +114,7 @@ const PremiumSettingsCard = () => {
 };
 
 
-// --- COMPOSANT : Gestion du Profil (Pseudo) ---
+// --- COMPOSANT : Gestion du Profil (Pseudo) (inchangé) ---
 const ProfileSettingsCard = () => {
     // HOOKS APPELES EN PREMIER
     const { user, logOut } = useAuth();
@@ -142,7 +143,6 @@ const ProfileSettingsCard = () => {
             });
 
             // 2. Mettre à jour le document utilisateur dans Firestore
-            // CORRECTION: Cible le document 'info' dans 'public_profile' (résout l'erreur de permission)
             const profileInfoRef = doc(db, 'users', user.uid, 'public_profile', 'info');
             
             await updateDoc(profileInfoRef, {
@@ -204,7 +204,7 @@ const ProfileSettingsCard = () => {
                 )}
             </div>
 
-            {/* Email (Lecture Seule) - L'UID est supprimé */}
+            {/* Email (Lecture Seule) */}
             <p className="text-sm mb-4"><span className="font-medium text-muted">Email:</span> {user.email}</p>
             
             <button onClick={logOut} className="text-sm text-danger hover:underline">
@@ -214,7 +214,7 @@ const ProfileSettingsCard = () => {
     );
 };
 
-// --- COMPOSANT : Sécurité (Changement de MDP) ---
+// --- COMPOSANT : Sécurité (Changement de MDP) (inchangé) ---
 const SecuritySettingsCard = () => {
     // HOOKS APPELES EN PREMIER
     const { user } = useAuth(); 
@@ -223,7 +223,7 @@ const SecuritySettingsCard = () => {
     // RETOUR ANTICIPE APRES LES HOOKS
     if (!user) return null; 
     
-    // Gère le cas où l'utilisateur n'a pas d'email (résout le problème de typage/logique)
+    // Gère le cas où l'utilisateur n'a pas d'email 
     if (!user.email) return (
         <div className="bg-surface p-5 rounded-xl shadow-sm border border-border">
              <h3 className="text-lg font-bold text-foreground mb-3">Sécurité</h3>
@@ -238,7 +238,6 @@ const SecuritySettingsCard = () => {
         try {
             const authInstance = getFirebaseAuthInstance();
             
-            // Correction TypeScript: L'opérateur '!' affirme la non-nullité après la vérification
             await sendPasswordResetEmail(authInstance, user.email!); 
             
             toast.success("Un lien de réinitialisation du mot de passe a été envoyé à votre adresse email. Vérifiez vos spams !");
@@ -267,6 +266,83 @@ const SecuritySettingsCard = () => {
     );
 }
 
+// --- NOUVEAU COMPOSANT : Suggestions d'Amélioration ---
+const SuggestionsCard = () => {
+    const { user, username } = useAuth();
+    const [suggestionText, setSuggestionText] = useState('');
+    const [isLoading, setIsLoading] = useState(false);
+    
+    if (!user) return null;
+
+    const handleSubmit = async (e: React.FormEvent) => {
+        e.preventDefault();
+        const trimmedSuggestion = suggestionText.trim();
+
+        if (trimmedSuggestion.length < 10) {
+            toast.error("La suggestion doit contenir au moins 10 caractères.");
+            return;
+        }
+
+        setIsLoading(true);
+        try {
+            const payload = {
+                userId: user.uid,
+                username: username || user.displayName || 'Joueur Inconnu',
+                suggestion: trimmedSuggestion,
+                context: 'settings-page'
+            };
+
+            const res = await fetch('/api/feedback', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            if (res.ok) {
+                toast.success("Suggestion envoyée ! Merci pour votre idée.");
+                setSuggestionText('');
+            } else {
+                const data = await res.json() as { error?: string };
+                toast.error(data.error || "Échec de l'envoi.");
+            }
+        } catch (error) {
+            console.error("Erreur d'envoi de feedback:", error);
+            toast.error("Erreur réseau ou serveur.");
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
+    return (
+        <div className="bg-surface p-5 rounded-xl shadow-sm border border-border">
+            <h3 className="text-lg font-bold text-primary mb-3">
+                Idées & Suggestions
+            </h3>
+            <p className="text-muted text-sm mb-4">
+                Aidez-nous à améliorer MagicWish. Votre feedback sera enregistré directement.
+            </p>
+
+            <form onSubmit={handleSubmit} className="space-y-4">
+                <textarea
+                    value={suggestionText}
+                    onChange={(e) => setSuggestionText(e.target.value)}
+                    rows={4}
+                    placeholder="Entrez votre idée d'amélioration ici (10 caractères minimum)..."
+                    className="w-full p-3 border border-border rounded-lg bg-background text-foreground resize-none focus:ring-2 focus:ring-primary outline-none"
+                    disabled={isLoading}
+                />
+                <button
+                    type="submit"
+                    disabled={isLoading || suggestionText.trim().length < 10}
+                    className="w-full bg-primary hover:opacity-90 disabled:opacity-50 text-primary-foreground font-bold py-3 rounded-xl transition shadow-sm"
+                >
+                    {isLoading ? 'Envoi en cours...' : 'Soumettre mon idée'}
+                </button>
+            </form>
+        </div>
+    );
+};
+
 
 // --- Page principale des paramètres (Mise à jour Finale) ---
 export default function SettingsPage() {
@@ -274,14 +350,12 @@ export default function SettingsPage() {
     const { user, loading: authLoading } = useAuth();
     const router = useRouter();
 
-    // CORRECTION REACT : Déplacer la redirection dans useEffect (résout l'erreur "Cannot update a component while rendering")
     useEffect(() => {
         if (!authLoading && !user) {
             router.push('/login');
         }
     }, [user, authLoading, router]);
 
-    // Retourne null pendant que l'authentification charge ou si l'utilisateur est déconnecté
     if (authLoading || !user) {
         return null;
     }
@@ -303,9 +377,12 @@ export default function SettingsPage() {
                 </div>
 
                 <div className="space-y-6">
-                    <h2 className="text-xl font-bold text-primary mb-3">Abonnement</h2>
+                    <h2 className="text-xl font-bold text-primary mb-3">Abonnement & Feedback</h2>
                     
                     <PremiumSettingsCard />
+                    
+                    {/* NOUVEAU: Suggestions d'Amélioration */}
+                    <SuggestionsCard /> 
                 </div>
 
             </div>

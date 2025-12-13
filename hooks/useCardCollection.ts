@@ -52,9 +52,9 @@ export function useCardCollection(
     if (!effectiveUid || authLoading) {
         if (!authLoading) {
             setLoading(false);
-            setCards([]); // Nettoie l'état si l'utilisateur se déconnecte
+            setCards([]);
         }
-        return; // Stoppe l'exécution si pas d'UID ou si l'authentification charge
+        return;
     }
     setLoading(true);
 
@@ -76,7 +76,6 @@ export function useCardCollection(
       setCards(items);
       setLoading(false);
     }, (error) => {
-        // Gère les erreurs de permission lors de la déconnexion
         if (error.code === 'permission-denied') {
             console.warn(`useCardCollection: Permission refusée pour ${collectionPath}. Arrêt de l'écoute.`);
             setCards([]);
@@ -109,19 +108,24 @@ export function useCardCollection(
       }
   };
 
-  // NOUVELLE FONCTION pour la quantité d'échange
+  // Fonction pour la quantité d'échange
   const setTradeQuantity = async (cardId: string, quantity: number) => {
-      if (!isOwner) return;
+      if (!isOwner || target !== 'collection') return;
+      
+      const card = cards.find(c => c.id === cardId);
+      const maxQty = card?.quantity ?? 0;
+      const safeQty = Math.min(maxQty, Math.max(0, quantity));
+      
       const ref = getDocRef(cardId);
       if (ref) {
-          await updateDoc(ref, { quantityForTrade: quantity });
+          await updateDoc(ref, { quantityForTrade: safeQty });
       }
   };
 
 
   const toggleAttribute = async (
       cardId: string, 
-      field: 'isFoil' | 'isSpecificVersion', // 'isForTrade' est retiré
+      field: 'isFoil' | 'isSpecificVersion', 
       currentValue: boolean
   ) => {
       if (!isOwner) return;
@@ -153,7 +157,6 @@ export function useCardCollection(
       if (!isOwner || cards.length === 0) return;
       const toastId = toast.loading(`Mise à jour des prix...`);
 
-      // 1. DÉFINITION DE LA LOGIQUE TTL (48h pour toutes les cartes lors d'une action manuelle)
       const NOW = Date.now();
       const FORTY_EIGHT_HOURS_MS = 48 * 60 * 60 * 1000;
 
@@ -169,7 +172,6 @@ export function useCardCollection(
           return;
       }
       
-      // 2. LOGIQUE D'APPEL ET DE BATCH (Utilise cardsToUpdate)
       try {
           const chunks = [];
           for (let i = 0; i < cardsToUpdate.length; i += 75) {
@@ -211,7 +213,7 @@ export function useCardCollection(
               });
 
               if (batchHasOps) await batch.commit();
-              await new Promise(r => setTimeout(r, 100)); // Respect de la limite Scryfall
+              await new Promise(r => setTimeout(r, 100));
           }
 
           toast.success(`Succès : ${cardsToUpdate.length} cartes mises à jour !`, { id: toastId });
@@ -223,7 +225,6 @@ export function useCardCollection(
   };
 
   // --- GESTION DE MASSE DU CLASSEUR D'ÉCHANGE ---
-  // Mise à jour pour utiliser setTradeQuantity (met à jour le nombre)
   const bulkSetTradeStatus = async (
       action: 'excess' | 'all' | 'reset', 
       threshold: number = 4
@@ -248,7 +249,7 @@ export function useCardCollection(
           else if (action === 'all') {
               if ((card.quantityForTrade ?? 0) !== card.quantity) {
                   shouldUpdate = true;
-                  newValue = card.quantity; // Met tout le stock à l'échange
+                  newValue = card.quantity;
               }
               label = "Tout ajouter";
           } 
@@ -256,7 +257,7 @@ export function useCardCollection(
               const tradeableQty = Math.max(0, card.quantity - threshold);
               if ((card.quantityForTrade ?? 0) !== tradeableQty) {
                   shouldUpdate = true;
-                  newValue = tradeableQty; // Met le surplus à l'échange
+                  newValue = tradeableQty;
               }
           }
 
@@ -277,8 +278,7 @@ export function useCardCollection(
       }
   };
 
-  // --- NOUVEAU : ACTIONS DE SÉLECTION MULTIPLE (Mise à jour) ---
-
+  // --- ACTIONS DE SÉLECTION MULTIPLE ---
   const bulkRemoveCards = async (cardIds: string[]) => {
       if (!isOwner || cardIds.length === 0) return;
       
@@ -292,7 +292,6 @@ export function useCardCollection(
       toast.success(`${cardIds.length} cartes supprimées`);
   };
 
-  // Mise à jour pour gérer le statut de trade différemment
   const bulkUpdateAttribute = async (cardIds: string[], field: 'isFoil' | 'quantityForTrade' | 'isSpecificVersion', value: boolean | number) => {
       if (!isOwner || cardIds.length === 0) return;
 
@@ -301,8 +300,7 @@ export function useCardCollection(
           const ref = getDocRef(id);
           if (ref) {
              if (field === 'quantityForTrade') {
-                 // Si on passe une valeur booléenne pour l'échange (ex: true/false), on la convertit en quantité 
-                 const tradeQty = typeof value === 'boolean' ? (value ? 99 : 0) : value; // 99 si true
+                 const tradeQty = typeof value === 'boolean' ? (value ? 99 : 0) : value;
                  batch.update(ref, { [field]: tradeQty });
              } else {
                  batch.update(ref, { [field]: value });
@@ -324,7 +322,7 @@ export function useCardCollection(
   return { 
       cards, loading, isOwner, totalPrice,
       updateQuantity, removeCard, setCustomPrice, toggleAttribute,
-      setTradeQuantity, // NOUVEAU
+      setTradeQuantity, // <--- EXPOSÉ
       refreshCollectionPrices, bulkSetTradeStatus,
       bulkRemoveCards, bulkUpdateAttribute 
   };

@@ -1,3 +1,4 @@
+// lib/AuthContext.tsx
 'use client';
 
 import { createContext, useContext, useEffect, useState, useMemo } from 'react';
@@ -8,9 +9,10 @@ import {
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
   signOut, 
-  User 
+  User,
+  Unsubscribe
 } from 'firebase/auth';
-import { doc, onSnapshot, collection, Unsubscribe } from 'firebase/firestore'; 
+import { doc, onSnapshot, collection, getDoc } from 'firebase/firestore'; 
 import { auth, db } from './firebase'; 
 import toast from 'react-hot-toast';
 
@@ -20,6 +22,7 @@ type AuthContextType = {
   username: string | null;
   loading: boolean;
   friendRequestCount: number;
+  isAdmin: boolean;
   signInWithGoogle: () => Promise<void>;
   signInWithEmail: (email: string, pass: string) => Promise<boolean>;
   signUpWithEmail: (email: string, pass: string) => Promise<boolean>;
@@ -31,13 +34,12 @@ const AuthContext = createContext<AuthContextType>({
   username: null,
   loading: true,
   friendRequestCount: 0,
+  isAdmin: false,
   signInWithGoogle: async () => {},
   signInWithEmail: async () => false,
   signUpWithEmail: async () => false,
   logOut: async () => {},
 });
-
-export const useAuth = () => useContext(AuthContext);
 
 // Helper pour traduire les erreurs Firebase
 const getErrorMessage = (code: string) => {
@@ -53,33 +55,45 @@ const getErrorMessage = (code: string) => {
     }
 };
 
+export const useAuth = () => useContext(AuthContext);
+
 export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const [user, setUser] = useState<User | null>(null);
   const [username, setUsername] = useState<string | null>(null);
   const [friendRequestCount, setFriendRequestCount] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [isAdmin, setIsAdmin] = useState(false);
 
   useEffect(() => {
-    // Variables pour stocker les fonctions de nettoyage
     let unsubProfile: Unsubscribe | null = null;
     let unsubRequests: Unsubscribe | null = null;
+    let unsubAdmin: Unsubscribe | null = null;
 
     const unsubscribeAuth = onAuthStateChanged(auth, (currentUser) => {
-      // 1. NETTOYAGE IMMÉDIAT des anciens écouteurs avant toute chose
-      // Cela empêche l'erreur "Permission Denied" lors de la déconnexion
+      
+      // Nettoyage des anciens listeners si l'user change
       if (unsubProfile) { unsubProfile(); unsubProfile = null; }
       if (unsubRequests) { unsubRequests(); unsubRequests = null; }
+      if (unsubAdmin) { unsubAdmin(); unsubAdmin = null; }
 
       setUser(currentUser);
 
       if (currentUser) {
-        // 2. Initialisation des nouveaux écouteurs (si connecté)
-        
-        // A. Profil Public
+        // --- 1. Vérification Admin (Via Firestore) ---
+        // On écoute le document dans la collection 'admins' correspondant à l'UID
+        const adminRef = doc(db, 'admins', currentUser.uid);
+        unsubAdmin = onSnapshot(adminRef, (docSnap) => {
+            setIsAdmin(docSnap.exists());
+        }, (error) => {
+            console.error("Erreur vérification admin:", error);
+            setIsAdmin(false);
+        });
+
+        // --- 2. Profil Public ---
         const profileRef = doc(db, 'users', currentUser.uid, 'public_profile', 'info');
         unsubProfile = onSnapshot(profileRef, (docSnap) => {
           if (docSnap.exists()) {
-            setUsername(docSnap.data().username);
+            setUsername(docSnap.data().username as string);
           } else {
             setUsername(null);
           }
@@ -89,7 +103,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
             setLoading(false);
         });
 
-        // B. Notifications
+        // --- 3. Notifications ---
         const requestsRef = collection(db, 'users', currentUser.uid, 'friend_requests_received');
         unsubRequests = onSnapshot(requestsRef, (snap) => {
           setFriendRequestCount(snap.docs.length);
@@ -98,18 +112,19 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         });
 
       } else {
-        // 3. Reset de l'état (si déconnecté)
+        // Reset complet
         setUsername(null);
         setFriendRequestCount(0);
+        setIsAdmin(false);
         setLoading(false);
       }
     });
 
-    // Nettoyage global lors du démontage du composant
     return () => {
       unsubscribeAuth();
       if (unsubProfile) unsubProfile();
       if (unsubRequests) unsubRequests();
+      if (unsubAdmin) unsubAdmin();
     };
   }, []);
 
@@ -178,11 +193,12 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     username,
     friendRequestCount,
     loading,
+    isAdmin,
     signInWithGoogle,
     signInWithEmail,
     signUpWithEmail,
     logOut
-  }), [user, username, loading, friendRequestCount]);
+  }), [user, username, loading, friendRequestCount, isAdmin]);
 
   return (
     <AuthContext.Provider value={value}>

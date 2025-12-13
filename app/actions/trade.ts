@@ -3,11 +3,27 @@
 
 import { getAdminFirestore } from '@/lib/firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
-// AJOUT ICI : Import de z (Zod) et de CardSchema
 import { z } from 'zod'; 
 import { TradeExecutionSchema, ValidatedCard, CardSchema } from '@/lib/validators';
 
-// Helper pour préparer la donnée propre pour Firestore
+// Interface stricte des données de carte sérialisables pour le serveur (pour le typage TypeScript des arguments)
+interface ServerCardPayload {
+    id: string;
+    name: string;
+    imageUrl: string;
+    imageBackUrl: string | null;
+    quantity: number;
+    price: number;
+    customPrice?: number;
+    setName: string;
+    setCode: string;
+    isFoil: boolean;
+    isSpecificVersion: boolean;
+    scryfallData: Record<string, unknown> | null;
+    wishlistId: string | null;
+}
+
+// Helper pour préparer la donnée propre pour Firestore (utilise ValidatedCard)
 const createCardData = (card: ValidatedCard) => {
     return {
         name: card.name,
@@ -31,8 +47,8 @@ export async function executeServerTrade(
     tradeId: string,
     senderUid: string,
     receiverUid: string,
-    itemsGivenRaw: unknown,    
-    itemsReceivedRaw: unknown  
+    itemsGivenRaw: ServerCardPayload[], // Type strict ici
+    itemsReceivedRaw: ServerCardPayload[] // Type strict ici
 ) {
     const db = getAdminFirestore();
 
@@ -47,15 +63,18 @@ export async function executeServerTrade(
         });
 
         if (!validation.success) {
+            // Log Zod pour aider au debug
+            console.error("Zod Validation Error:", validation.error);
             throw new Error("Données d'échange invalides : " + validation.error.message);
         }
 
-        const { itemsGiven, itemsReceived } = validation.data;
+        // Utilisation du type ValidatedCard après la validation Zod
+        const itemsGiven = validation.data.itemsGiven as ValidatedCard[]; 
+        const itemsReceived = validation.data.itemsReceived as ValidatedCard[];
 
         await db.runTransaction(async (t) => {
             // PHASE 1 : TOUTES LES LECTURES
             
-            // A. Vérifier que l'échange est toujours 'pending'
             const tradeRef = db.doc(`trades/${tradeId}`);
             const tradeSnap = await t.get(tradeRef);
             if (!tradeSnap.exists) throw new Error("Échange introuvable");
@@ -165,24 +184,25 @@ export async function executeServerTrade(
 // --- ACTION 2 : ÉCHANGE MANUEL (SOLO) ---
 export async function executeManualTrade(
     userId: string,
-    itemsGivenRaw: unknown,    
-    itemsReceivedRaw: unknown  
+    itemsGivenRaw: ServerCardPayload[], // Type strict ici
+    itemsReceivedRaw: ServerCardPayload[] // Type strict ici
 ) {
     const db = getAdminFirestore();
 
     try {
-        // Validation partielle : On utilise Zod pour valider les tableaux
-        const ItemsGivenSchema = z.array(CardSchema);
+        // Validation stricte : On utilise Zod pour valider les tableaux
+        const ItemsSchema = z.array(CardSchema);
         
-        const parsedGiven = ItemsGivenSchema.safeParse(itemsGivenRaw);
-        const parsedReceived = ItemsGivenSchema.safeParse(itemsReceivedRaw);
+        const parsedGiven = ItemsSchema.safeParse(itemsGivenRaw);
+        const parsedReceived = ItemsSchema.safeParse(itemsReceivedRaw);
 
         if (!parsedGiven.success || !parsedReceived.success) {
              throw new Error("Données invalides pour l'échange manuel.");
         }
 
-        const itemsGiven = parsedGiven.data;
-        const itemsReceived = parsedReceived.data;
+        // Utilisation du type ValidatedCard après la validation Zod
+        const itemsGiven = parsedGiven.data as ValidatedCard[];
+        const itemsReceived = parsedReceived.data as ValidatedCard[];
 
         await db.runTransaction(async (t) => {
             // PHASE 1 : LECTURES

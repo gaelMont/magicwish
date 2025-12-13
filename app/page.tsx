@@ -192,7 +192,7 @@ export default function DashboardPage() {
               </div>
 
               {/* ASTUCE */}
-              <div className="bg-surface rounded-xl border-l-4 border-primary shadow-sm p-6 border-y border-r border-border">
+              <div className="bg-surface rounded-xl border-l-4 shadow-sm p-6 border-y border-r border-border">
                   <h3 className="font-bold text-foreground mb-2">Astuce</h3>
                   <p className="text-sm text-muted mb-4">
                       Remplissez votre Wishlist pour aider le scanner à trouver des échanges.

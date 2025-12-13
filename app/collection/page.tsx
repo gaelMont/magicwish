@@ -5,11 +5,13 @@ import { useState, useMemo, useEffect } from 'react';
 import { useAuth } from '@/lib/AuthContext';
 import { useCardCollection } from '@/hooks/useCardCollection'; 
 import MagicCard from '@/components/MagicCard';
-import ImportModal from '@/components/ImportModal';
 import ConfirmModal from '@/components/ConfirmModal';
 import DeleteAllButton from '@/components/DeleteAllButton';
 import CollectionToolsModal from '@/components/CollectionToolsModal';
-import ColumnSlider from '@/components/ColumnSlider'; // <--- IMPORT
+import ColumnSlider from '@/components/ColumnSlider';
+import DataTransferHubModal from '@/components/DataTransferHubModal'; 
+import ImportModal from '@/components/ImportModal';
+import ExportModal from '@/components/ExportModal';
 
 type SortOption = 'name' | 'price_desc' | 'price_asc' | 'quantity' | 'date';
 
@@ -20,33 +22,58 @@ export default function CollectionPage() {
   
   const { 
     cards, loading, updateQuantity, removeCard, 
-    setCustomPrice, toggleAttribute, refreshCollectionPrices, bulkSetTradeStatus,
+    setCustomPrice, toggleAttribute, setTradeQuantity, 
+    refreshCollectionPrices, bulkSetTradeStatus,
     bulkRemoveCards, bulkUpdateAttribute, 
     totalPrice 
   } = useCardCollection('collection');
 
+  // Nouveaux états pour le contrôle des modales
+  const [isHubOpen, setIsHubOpen] = useState(false);
   const [isImportOpen, setIsImportOpen] = useState(false);
+  const [isExportOpen, setIsExportOpen] = useState(false);
+  
   const [isToolsOpen, setIsToolsOpen] = useState(false);
   const [cardToDelete, setCardToDelete] = useState<string | null>(null);
 
   const [isSelectMode, setIsSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  
   const [visibleCount, setVisibleCount] = useState(ITEMS_PER_PAGE);
   const [showFilters, setShowFilters] = useState(false);
-
-  // État pour les colonnes
-  const [columns, setColumns] = useState(5); // <--- NOUVEAU
-
+  const [columns, setColumns] = useState(5);
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<SortOption>('date');
   const [filterSet, setFilterSet] = useState<string>('all');
   const [filterTrade, setFilterTrade] = useState(false);
   const [filterFoil, setFilterFoil] = useState(false);
-  
   const [minPriceFilter, setMinPriceFilter] = useState<string>('');
   const [maxPriceFilter, setMaxPriceFilter] = useState<string>('');
+  
+  // --- Fonctions de navigation modale ---
+  const closeAllModals = () => {
+    setIsHubOpen(false);
+    setIsImportOpen(false);
+    setIsExportOpen(false);
+  }
+  
+  const openHub = () => {
+    setIsImportOpen(false);
+    setIsExportOpen(false);
+    setIsHubOpen(true);
+  }
+  
+  const handleSelectImport = () => {
+    setIsHubOpen(false);
+    setIsImportOpen(true);
+  }
+  
+  const handleSelectExport = () => {
+    setIsHubOpen(false);
+    setIsExportOpen(true);
+  }
 
+  // --- Logique de Filtrage et Tri (inchangée) ---
+  
   useEffect(() => {
     if (visibleCount !== ITEMS_PER_PAGE) {
       setVisibleCount(ITEMS_PER_PAGE);
@@ -112,6 +139,18 @@ export default function CollectionPage() {
     if (result === 'shouldDelete') {
       setCardToDelete(cardId);
     }
+  };
+
+  const handleIncrementTrade = (cardId: string, currentTradeQty: number, totalQty: number) => {
+      if (currentTradeQty < totalQty) {
+          setTradeQuantity(cardId, currentTradeQty + 1);
+      }
+  };
+  
+  const handleDecrementTrade = (cardId: string, currentTradeQty: number) => {
+      if (currentTradeQty > 0) {
+          setTradeQuantity(cardId, currentTradeQty - 1);
+      }
   };
 
   const toggleSelection = (id: string) => {
@@ -184,10 +223,10 @@ export default function CollectionPage() {
                 </div>
                 
                 <button 
-                    onClick={() => setIsImportOpen(true)} 
+                    onClick={() => setIsHubOpen(true)}
                     className="btn-primary text-sm whitespace-nowrap"
                 >
-                    Importer CSV
+                    Importer/Exporter
                 </button>
                </>
            )}
@@ -259,7 +298,6 @@ export default function CollectionPage() {
                 </select>
             </div>
 
-            {/* SLIDER AJOUTÉ ICI */}
             <div className="pt-2 md:pt-0">
                 <ColumnSlider columns={columns} setColumns={setColumns} />
             </div>
@@ -296,7 +334,6 @@ export default function CollectionPage() {
         </div>
       ) : (
         <>
-            {/* GRILLE DYNAMIQUE */}
             <div 
                 className="grid gap-4"
                 style={{ 
@@ -311,6 +348,10 @@ export default function CollectionPage() {
                         onDecrement={() => handleDecrement(card.id, card.quantity)}
                         onEditPrice={(newPrice) => setCustomPrice(card.id, newPrice)}
                         onToggleAttribute={(field, val) => toggleAttribute(card.id, field, val)}
+                        
+                        onIncrementTrade={() => handleIncrementTrade(card.id, card.quantityForTrade ?? 0, card.quantity)}
+                        onDecrementTrade={() => handleDecrementTrade(card.id, card.quantityForTrade ?? 0)}
+                        
                         isSelectMode={isSelectMode}
                         isSelected={selectedIds.includes(card.id)}
                         onSelect={() => toggleSelection(card.id)}
@@ -347,7 +388,35 @@ export default function CollectionPage() {
           </div>
       )}
 
-      <ImportModal isOpen={isImportOpen} onClose={() => setIsImportOpen(false)} targetCollection="collection" />
+      {/* --- MODALES --- */}
+
+      <DataTransferHubModal 
+        isOpen={isHubOpen}
+        onClose={closeAllModals}
+        onSelectImport={handleSelectImport}
+        onSelectExport={handleSelectExport}
+        targetLabel="Collection"
+      />
+
+      <ImportModal 
+          isOpen={isImportOpen} 
+          onClose={closeAllModals} 
+          onGoBack={openHub}       
+          onCloseAll={closeAllModals}
+          targetCollection="collection" 
+          currentCollection={cards.map(c => ({ id: c.id, quantity: c.quantity, foil: c.isFoil }))} 
+      />
+      
+      <ExportModal
+        isOpen={isExportOpen}
+        onClose={closeAllModals}
+        onGoBack={openHub}
+        onCloseAll={closeAllModals}
+        cards={cards}
+        listName="Ma Collection"
+        targetType="collection"
+      />
+
       <CollectionToolsModal isOpen={isToolsOpen} onClose={() => setIsToolsOpen(false)} totalCards={cards.length} onRefreshPrices={refreshCollectionPrices} onBulkTrade={bulkSetTradeStatus} />
       <ConfirmModal isOpen={!!cardToDelete} onClose={() => setCardToDelete(null)} onConfirm={() => { if(cardToDelete) removeCard(cardToDelete); }} title="Retirer ?" message="Cette carte sera retirée de votre collection." />
     </main>
