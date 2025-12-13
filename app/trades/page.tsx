@@ -1,7 +1,7 @@
 // app/trades/page.tsx
 'use client';
 
-import { useState, useTransition } from 'react'; // <-- Ajout de useTransition
+import { useState, useTransition } from 'react';
 import { useAuth } from '@/lib/AuthContext';
 import { useTradeMatcher, TradeProposal } from '@/hooks/useTradeMatcher';
 import { useTradeSystem, TradeRequest } from '@/hooks/useTradeSystem';
@@ -19,7 +19,7 @@ const IncomingRequestCard = ({ trade }: { trade: TradeRequest }) => {
     const valGive = trade.itemsReceived.reduce((acc: number, c: CardType) => acc + (c.price || 0), 0);
 
     return (
-        <div className="bg-surface rounded-xl border-l-4 border-primary shadow-sm p-4 mb-4 border-y border-r">
+        <div className="bg-surface rounded-xl border-l-4 border-primary shadow-sm p-4 mb-4 border-y border-r border-border">
             <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-3">
                 <div>
                     <h3 className="font-bold text-foreground">Proposition de {trade.senderName}</h3>
@@ -36,8 +36,8 @@ const IncomingRequestCard = ({ trade }: { trade: TradeRequest }) => {
             </div>
             {isOpen && (
                 <div className="mt-4 pt-4 border-t border-border grid md:grid-cols-2 gap-4">
-                    <div className="bg-success/10 p-3 rounded"><p className="text-xs font-bold text-success mb-2">Tu vas recevoir :</p><div className="flex flex-wrap gap-2">{trade.itemsGiven.map((c: CardType) => (<div key={c.id} className="relative group w-12 h-16 bg-secondary rounded overflow-hidden"><img src={c.imageUrl} className="w-full h-full object-cover"/><div className="absolute bottom-0 right-0 bg-black/50 text-white text-[8px] px-1">{c.quantity}x</div></div>))}</div></div>
-                    <div className="bg-danger/10 p-3 rounded"><p className="text-xs font-bold text-danger mb-2">Tu vas donner :</p><div className="flex flex-wrap gap-2">{trade.itemsReceived.map((c: CardType) => (<div key={c.id} className="relative group w-12 h-16 bg-secondary rounded overflow-hidden"><img src={c.imageUrl} className="w-full h-full object-cover"/><div className="absolute bottom-0 right-0 bg-black/50 text-white text-[8px] px-1">{c.quantity}x</div></div>))}</div></div>
+                    <div className="bg-success/10 p-3 rounded"><p className="text-xs font-bold text-success mb-2">Tu vas recevoir :</p><div className="flex flex-wrap gap-2">{trade.itemsGiven.map((c: CardType) => (<div key={c.id} className="relative group w-12 h-16 bg-secondary rounded overflow-hidden"><img src={c.imageUrl} className="w-full h-full object-cover" alt="" /><div className="absolute bottom-0 right-0 bg-black/50 text-white text-[8px] px-1">{c.quantity}x</div></div>))}</div></div>
+                    <div className="bg-danger/10 p-3 rounded"><p className="text-xs font-bold text-danger mb-2">Tu vas donner :</p><div className="flex flex-wrap gap-2">{trade.itemsReceived.map((c: CardType) => (<div key={c.id} className="relative group w-12 h-16 bg-secondary rounded overflow-hidden"><img src={c.imageUrl} className="w-full h-full object-cover" alt="" /><div className="absolute bottom-0 right-0 bg-black/50 text-white text-[8px] px-1">{c.quantity}x</div></div>))}</div></div>
                 </div>
             )}
         </div>
@@ -47,9 +47,8 @@ const IncomingRequestCard = ({ trade }: { trade: TradeRequest }) => {
 // --- COMPOSANT : PROPOSITION D'ÉCHANGE ---
 const TradeRowProposal = ({ proposal, onProposalSent }: { proposal: TradeProposal, onProposalSent: () => void }) => {
     const { setCustomPrice } = useCardCollection('collection');
-    // CORRECTION : on ne destructure PLUS isProposing ici
     const { proposeTrade } = useTradeSystem(); 
-    const [isPending, startTransition] = useTransition(); // <-- Utilisation de useTransition pour le blocage immédiat
+    const [isPending, startTransition] = useTransition(); 
 
     const totalGive = proposal.toGive.reduce((acc, c) => acc + (c.customPrice ?? c.price ?? 0), 0);
     const totalReceive = proposal.toReceive.reduce((acc, c) => acc + (c.customPrice ?? c.price ?? 0), 0);
@@ -81,7 +80,7 @@ const TradeRowProposal = ({ proposal, onProposalSent }: { proposal: TradeProposa
                 </div>
                 <button 
                     onClick={handlePropose} 
-                    disabled={isPending} // <--- UTILISATION DE isPending
+                    disabled={isPending} 
                     className="bg-primary hover:opacity-90 text-primary-foreground px-4 py-2 rounded-lg font-bold shadow-sm transition text-sm w-full sm:w-auto disabled:opacity-50"
                 >
                     {isPending ? 'Envoi...' : 'Proposer'}
@@ -105,7 +104,6 @@ const TradeRowProposal = ({ proposal, onProposalSent }: { proposal: TradeProposa
 export default function TradesPage() {
   const { user } = useAuth();
   const { proposals, loading, status, runScan } = useTradeMatcher();
-  // CORRECTION : on ne destructure PLUS isProposing
   const { incomingTrades, outgoingTrades, cancelTrade } = useTradeSystem(); 
   const [activeTab, setActiveTab] = useState<'scan' | 'requests'>('scan');
 
@@ -151,7 +149,7 @@ export default function TradesPage() {
                             <div className="inline-block w-8 h-8 border-4 border-primary border-t-transparent rounded-full animate-spin mb-4"></div>
                             <p className="text-muted mb-6">{status}</p>
                             
-                            {/* Pub PENDANT l'attente */}
+                            {/* Pub PENDANT l'attente (GARDÉE) */}
                             <AdContainer message="Analyse en cours..." adSlotId="9999999999" />
                         </div>
                     ) : (
@@ -161,8 +159,7 @@ export default function TradesPage() {
                                     <div className="text-center py-20 text-muted border-2 border-dashed border-border rounded-xl">
                                         Lancez le scanner pour trouver des &quot;matchs&quot; avec vos amis.
                                     </div>
-                                    {/* Pub quand c'est vide */}
-                                    <AdContainer adSlotId="2468135790" />
+                                    {/* PUB RETIRÉE ICI */}
                                 </div>
                             ) : (
                                 <div className="space-y-8">
