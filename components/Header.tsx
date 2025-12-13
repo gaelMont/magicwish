@@ -15,7 +15,7 @@ export default function Header() {
     text-sm font-medium transition-colors block py-2 md:py-0
     ${pathname === path 
       ? 'text-primary font-bold' 
-      : 'text-zinc-500 hover:text-primary'}
+      : 'text-muted hover:text-foreground'}
   `;
 
   return (
@@ -56,6 +56,18 @@ export default function Header() {
                 <div className="h-5 w-px bg-border hidden md:block"></div>
 
                 <div className="flex items-center gap-3">
+                  {/* AJOUT DU LIEN PARAMÈTRES (Icône engrenage sur desktop) */}
+                  <Link 
+                    href="/settings"
+                    className={`p-2 rounded-full hover:bg-secondary transition-colors ${pathname === '/settings' ? 'text-primary' : 'text-muted hover:text-foreground'}`}
+                    title="Paramètres"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.318.674.674.843l1.173.567c.47.228.6.814.242 1.258l-.77.842a1.275 1.275 0 0 0-.291.872v2.146c0 .371.196.702.503.882l.77.452c.364.214.5.659.242 1.082l-1.173 1.296c-.356.394-.85.584-1.332.584h-1.396a1.275 1.275 0 0 0-.872.291l-.842.77c-.444.356-1.03.223-1.258-.242l-.567-1.173a1.275 1.275 0 0 0-.843-.674l-1.28-.213c-.543-.09-.94-.56-.94-1.11V11.23c0-.55.398-1.02.94-1.11l1.28-.213a1.275 1.275 0 0 0 .843-.674l.567-1.173c.228-.47.814-.6.258-.242l.77.842c.307.336.702.503 1.125.503h1.396Z" />
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
+                    </svg>
+                  </Link>
+
                   {user.photoURL && (
                     <img 
                       src={user.photoURL} 
@@ -65,7 +77,7 @@ export default function Header() {
                   )}
                   <button
                     onClick={logOut}
-                    className="hidden md:block text-xs font-medium text-muted hover:text-primary transition"
+                    className="hidden md:block text-xs font-medium text-danger hover:text-danger/80 transition"
                   >
                     Déconnexion
                   </button>
@@ -98,6 +110,7 @@ export default function Header() {
                <Link href="/collection" className={linkClass('/collection')} onClick={() => setIsMenuOpen(false)}>Collection</Link>
                <Link href="/trades" className={linkClass('/trades')} onClick={() => setIsMenuOpen(false)}>Echanges</Link>
                <Link href="/contacts" className={linkClass('/contacts')} onClick={() => setIsMenuOpen(false)}>Contacts</Link>
+               <Link href="/settings" className={linkClass('/settings')} onClick={() => setIsMenuOpen(false)}>Paramètres</Link> {/* AJOUT MOBILE */}
                <button onClick={() => { logOut(); setIsMenuOpen(false); }} className="text-left py-2 text-danger text-sm font-medium">Déconnexion</button>
              </nav>
           </div>

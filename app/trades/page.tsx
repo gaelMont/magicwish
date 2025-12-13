@@ -7,6 +7,7 @@ import { useTradeSystem, TradeRequest } from '@/hooks/useTradeSystem';
 import Link from 'next/link';
 import { useCardCollection, CardType } from '@/hooks/useCardCollection'; 
 import MagicCard from '@/components/MagicCard'; 
+import AdContainer from '@/components/AdContainer'; // <--- IMPORT AJOUTÉ
 
 // --- COMPOSANT : CARTE DE DEMANDE RECUE ---
 const IncomingRequestCard = ({ trade }: { trade: TradeRequest }) => {
@@ -107,7 +108,7 @@ export default function TradesPage() {
                     className={`pb-2 px-2 font-bold transition relative ${activeTab === 'requests' ? 'text-primary border-b-2 border-primary' : 'text-muted hover:text-foreground'}`}
                 >
                     Demandes 
-                    {incomingTrades.length > 0 && <span className="ml-2 bg-orange-500 text-white text-[10px] px-1.5 rounded-full align-top">{incomingTrades.length}</span>}
+                    {incomingTrades.length > 0 && <span className="ml-2 bg-orange-500 text-primary-foreground text-[10px] px-1.5 rounded-full align-top">{incomingTrades.length}</span>}
                 </button>
             </div>
         </div>
@@ -121,11 +122,24 @@ export default function TradesPage() {
                             {loading ? status : "Lancer le Scanner"}
                         </button>
                     </div>
-                    {proposals.length === 0 && !loading && (
-                        <div className="text-center py-20 text-muted border-2 border-dashed border-border rounded-xl">
-                            Lancez le scanner pour trouver des &quot;matchs&quot; avec vos amis.
+
+                    {/* AJOUT DE LA PUB PENDANT LE CHARGEMENT */}
+                    {loading && (
+                        <div className="mb-8">
+                            <AdContainer message="Analyse en cours..." adSlotId="0987654321" /> {/* <--- AJOUTÉ */}
                         </div>
                     )}
+
+                    {proposals.length === 0 && !loading && (
+                        <div className="space-y-6">
+                            <div className="text-center py-20 text-muted border-2 border-dashed border-border rounded-xl">
+                                Lancez le scanner pour trouver des &quot;matchs&quot; avec vos amis.
+                            </div>
+                            {/* Pub aussi quand c'est vide pour remplir l'espace */}
+                            <AdContainer adSlotId="2468135790" />
+                        </div>
+                    )}
+
                     <div className="space-y-8">
                         {proposals.map(proposal => (<TradeRowProposal key={proposal.friend.uid} proposal={proposal} onProposalSent={runScan} />))}
                     </div>

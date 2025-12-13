@@ -7,6 +7,7 @@ import { useAuth } from '@/lib/AuthContext';
 import { db } from '@/lib/firebase';
 import { doc, writeBatch, increment } from 'firebase/firestore';
 import toast from 'react-hot-toast';
+import AdContainer from './AdContainer'; // <--- IMPORT AJOUTÉ
 
 type ManaboxRow = {
   "Binder Name": string;
@@ -344,15 +345,15 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
       onClick={handleBackdropClick}
     >
       <div 
-        className="bg-white dark:bg-gray-800 rounded-xl p-6 max-w-5xl w-full shadow-2xl border border-gray-100 dark:border-gray-700 flex flex-col max-h-[90vh]"
+        className="bg-surface rounded-xl p-6 max-w-5xl w-full shadow-2xl border border-border flex flex-col max-h-[90vh]"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex-none flex justify-between items-center mb-4 border-b border-gray-100 dark:border-gray-700 pb-3">
-          <h2 className="text-xl font-bold text-gray-900 dark:text-white">
+        <div className="flex-none flex justify-between items-center mb-4 border-b border-border pb-3">
+          <h2 className="text-xl font-bold text-foreground">
             Ajouter des cartes
           </h2>
           {step !== 'importing' && (
-             <button onClick={handleClose} className="text-gray-500 hover:text-gray-700 text-lg p-2">✕</button>
+             <button onClick={handleClose} className="text-muted hover:text-foreground text-lg p-2">✕</button>
           )}
         </div>
 
@@ -360,20 +361,20 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
             
             {step === 'upload' && (
                 <div className="flex flex-col h-full overflow-hidden">
-                    <div className="flex-none flex border-b border-gray-200 dark:border-gray-700 mb-4">
-                        <button onClick={() => setInputType('file')} className={`px-4 py-2 font-medium text-sm border-b-2 transition-colors ${inputType === 'file' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500'}`}>📂 Fichier CSV</button>
-                        <button onClick={() => setInputType('text')} className={`px-4 py-2 font-medium text-sm border-b-2 transition-colors ${inputType === 'text' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500'}`}>📝 Copier / Coller</button>
+                    <div className="flex-none flex border-b border-border mb-4">
+                        <button onClick={() => setInputType('file')} className={`px-4 py-2 font-medium text-sm border-b-2 transition-colors ${inputType === 'file' ? 'border-primary text-primary' : 'border-transparent text-muted'}`}>📂 Fichier CSV</button>
+                        <button onClick={() => setInputType('text')} className={`px-4 py-2 font-medium text-sm border-b-2 transition-colors ${inputType === 'text' ? 'border-primary text-primary' : 'border-transparent text-muted'}`}>📝 Copier / Coller</button>
                     </div>
                     {inputType === 'file' ? (
-                        <div className="flex-grow p-12 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-xl text-center hover:bg-gray-50 dark:hover:bg-gray-700/50 transition relative cursor-pointer group flex flex-col items-center justify-center">
+                        <div className="flex-grow p-12 border-2 border-dashed border-border rounded-xl text-center hover:bg-secondary transition relative cursor-pointer group flex flex-col items-center justify-center">
                             <input type="file" accept=".csv" onChange={handleFileUpload} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-50" />
                             <div className="text-6xl mb-4 group-hover:scale-110 transition-transform">📂</div>
-                            <p className="font-bold text-lg">Déposer CSV Manabox</p>
+                            <p className="font-bold text-lg text-foreground">Déposer CSV Manabox</p>
                         </div>
                     ) : (
                         <div className="flex-grow flex flex-col min-h-0">
-                            <textarea value={textInput} onChange={(e) => setTextInput(e.target.value)} rows={15} placeholder="Collez votre liste ici..." className="flex-grow w-full p-4 rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-900 font-mono text-xs focus:ring-2 focus:ring-blue-500 outline-none resize-none" />
-                            <button onClick={handleTextParse} disabled={!textInput.trim()} className="flex-none mt-4 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-bold py-3 rounded-xl shadow-md transition">Analyser le texte</button>
+                            <textarea value={textInput} onChange={(e) => setTextInput(e.target.value)} rows={15} placeholder="Collez votre liste ici..." className="flex-grow w-full p-4 rounded-lg border border-border bg-background text-foreground font-mono text-xs focus:ring-2 focus:ring-primary outline-none resize-none" />
+                            <button onClick={handleTextParse} disabled={!textInput.trim()} className="flex-none mt-4 bg-primary hover:opacity-90 disabled:opacity-50 text-primary-foreground font-bold py-3 rounded-xl shadow-md transition">Analyser le texte</button>
                         </div>
                     )}
                 </div>
@@ -382,51 +383,56 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
             {step === 'preview' && (
                 <div className="flex flex-col h-full overflow-hidden">
                     <div className="flex-none grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-                        <div onClick={() => setImportMode('add')} className={`p-3 rounded-xl border-2 cursor-pointer transition flex flex-col gap-1 ${importMode === 'add' ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20' : 'border-gray-200 dark:border-gray-700 hover:border-blue-300'}`}>
-                            <div className="flex items-center gap-2 font-bold text-blue-700 dark:text-blue-300 text-sm">
-                                <span className={`w-4 h-4 rounded-full border flex items-center justify-center ${importMode === 'add' ? 'border-blue-600 bg-blue-600' : 'border-gray-400'}`}>{importMode === 'add' && <span className="w-2 h-2 rounded-full bg-white"></span>}</span> Ajouter
+                        <div onClick={() => setImportMode('add')} className={`p-3 rounded-xl border-2 cursor-pointer transition flex flex-col gap-1 ${importMode === 'add' ? 'border-primary bg-primary/10' : 'border-border hover:border-primary'}`}>
+                            <div className="flex items-center gap-2 font-bold text-primary text-sm">
+                                <span className={`w-4 h-4 rounded-full border flex items-center justify-center ${importMode === 'add' ? 'border-primary bg-primary' : 'border-muted'}`}>{importMode === 'add' && <span className="w-2 h-2 rounded-full bg-white"></span>}</span> Ajouter
                             </div>
-                            <p className="text-[10px] text-gray-500 ml-6">Ajoute (+1) aux quantités existantes.</p>
+                            <p className="text-[10px] text-muted ml-6">Ajoute (+1) aux quantités existantes.</p>
                         </div>
-                        <div onClick={() => setImportMode('sync')} className={`p-3 rounded-xl border-2 cursor-pointer transition flex flex-col gap-1 ${importMode === 'sync' ? 'border-purple-500 bg-purple-50 dark:bg-purple-900/20' : 'border-gray-200 dark:border-gray-700 hover:border-purple-300'}`}>
+                        <div onClick={() => setImportMode('sync')} className={`p-3 rounded-xl border-2 cursor-pointer transition flex flex-col gap-1 ${importMode === 'sync' ? 'border-purple-500 bg-purple-500/10' : 'border-border hover:border-purple-500'}`}>
                             <div className="flex items-center gap-2 font-bold text-purple-700 dark:text-purple-300 text-sm">
-                                <span className={`w-4 h-4 rounded-full border flex items-center justify-center ${importMode === 'sync' ? 'border-purple-600 bg-purple-600' : 'border-gray-400'}`}>{importMode === 'sync' && <span className="w-2 h-2 rounded-full bg-white"></span>}</span> Synchroniser
+                                <span className={`w-4 h-4 rounded-full border flex items-center justify-center ${importMode === 'sync' ? 'border-purple-600 bg-purple-600' : 'border-muted'}`}>{importMode === 'sync' && <span className="w-2 h-2 rounded-full bg-white"></span>}</span> Synchroniser
                             </div>
-                            <p className="text-[10px] text-gray-500 ml-6">Remplace (=1) la quantité en base.</p>
+                            <p className="text-[10px] text-muted ml-6">Remplace (=1) la quantité en base.</p>
                         </div>
                     </div>
                     <div className="flex-none flex justify-between items-center mb-2 px-1">
-                        <span className="text-sm font-semibold">{data.length} cartes détectées</span>
-                        <button onClick={() => { setData([]); setStep('upload'); }} className="text-red-500 text-xs hover:underline">Retour</button>
+                        <span className="text-sm font-semibold text-foreground">{data.length} cartes détectées</span>
+                        <button onClick={() => { setData([]); setStep('upload'); }} className="text-danger text-xs hover:underline">Retour</button>
                     </div>
-                    <div className="flex-grow overflow-auto min-h-0 border border-gray-200 dark:border-gray-700 rounded-lg bg-gray-50 dark:bg-gray-900">
-                        <table className="w-full text-xs text-left text-gray-500 dark:text-gray-400">
-                            <thead className="text-gray-700 bg-gray-200 dark:bg-gray-800 sticky top-0 z-10">
+                    <div className="flex-grow overflow-auto min-h-0 border border-border rounded-lg bg-background">
+                        <table className="w-full text-xs text-left text-muted">
+                            <thead className="text-foreground bg-secondary sticky top-0 z-10">
                                 <tr>{columns.slice(0,6).map((col, i) => <th key={i} className="px-4 py-2">{col}</th>)}</tr>
                             </thead>
                             <tbody>
                                 {data.map((row, i) => (
-                                    <tr key={i} className="bg-white border-b dark:bg-gray-800 dark:border-gray-700">
-                                        {columns.slice(0,6).map((col, j) => <td key={j} className="px-4 py-1 truncate max-w-[150px]">{row[col as keyof ManaboxRow]}</td>)}
+                                    <tr key={i} className="bg-surface border-b border-border">
+                                        {columns.slice(0,6).map((col, j) => <td key={j} className="px-4 py-1 truncate max-w-[150px] text-foreground">{row[col as keyof ManaboxRow]}</td>)}
                                     </tr>
                                 ))}
                             </tbody>
                         </table>
                     </div>
                     <div className="flex-none pt-4">
-                        <button onClick={startImport} className={`w-full text-white font-bold py-3 rounded-xl shadow-lg transition transform hover:-translate-y-0.5 ${importMode === 'add' ? 'bg-blue-600 hover:bg-blue-700' : 'bg-purple-600 hover:bg-purple-700'}`}>
+                        <button onClick={startImport} className={`w-full text-white font-bold py-3 rounded-xl shadow-lg transition transform hover:scale-[1.005] ${importMode === 'add' ? 'bg-primary hover:opacity-90' : 'bg-purple-600 hover:opacity-90'}`}>
                             {importMode === 'add' ? '➕ Valider l\'Ajout' : '🔄 Valider la Synchronisation'}
                         </button>
                     </div>
                 </div>
             )}
 
-            {step === 'importing' && (
+           {step === 'importing' && (
                 <div className="flex flex-col items-center justify-center h-full py-10">
-                    <div className="text-5xl font-bold text-blue-600 mb-2">{progress}%</div>
-                    <p className="text-gray-500 animate-pulse mb-6">{statusMsg}</p>
-                    <div className="w-full bg-gray-200 rounded-full h-4 dark:bg-gray-700 overflow-hidden max-w-md">
-                        <div className="bg-blue-600 h-full rounded-full transition-all duration-300 ease-out" style={{ width: `${progress}%` }}></div>
+                    <div className="text-5xl font-bold text-primary mb-2">{progress}%</div>
+                    <p className="text-muted animate-pulse mb-6">{statusMsg}</p>
+                    
+                    <div className="w-full bg-secondary rounded-full h-4 overflow-hidden max-w-md mb-8">
+                        <div className="bg-primary h-full rounded-full transition-all duration-300 ease-out" style={{ width: `${progress}%` }}></div>
+                    </div>
+
+                    <div className="w-full max-w-md">
+                        <AdContainer message="Sponsorisé" adSlotId="1234567890" />
                     </div>
                 </div>
             )}

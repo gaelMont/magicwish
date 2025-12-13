@@ -45,8 +45,11 @@ export function useCardCollection(
 
   useEffect(() => {
     if (!effectiveUid || authLoading) {
-        if (!authLoading && !effectiveUid) setLoading(false);
-        return;
+        if (!authLoading) {
+            setLoading(false);
+            setCards([]); // Nettoie l'état si l'utilisateur se déconnecte
+        }
+        return; // Stoppe l'exécution si pas d'UID ou si l'authentification charge
     }
     setLoading(true);
 
@@ -67,7 +70,17 @@ export function useCardCollection(
       })) as CardType[];
       setCards(items);
       setLoading(false);
+    }, (error) => {
+        // Gère les erreurs de permission lors de la déconnexion
+        if (error.code === 'permission-denied') {
+            console.warn(`useCardCollection: Permission refusée pour ${collectionPath}. Arrêt de l'écoute.`);
+            setCards([]);
+            setLoading(false);
+        } else {
+            console.error(`useCardCollection: Erreur inattendue sur ${collectionPath}:`, error);
+        }
     });
+    
     return () => unsubscribe();
   }, [effectiveUid, target, listId, authLoading]);
 

@@ -14,8 +14,9 @@ export function usePremium() {
         // eslint-disable-next-line react-hooks/set-state-in-effect
         setIsPremium(false);
         setLoading(false);
-        return;
+        return; // Stoppe l'exécution si pas d'utilisateur
     }
+    setLoading(true);
 
     // Écoute en temps réel les changements sur le document utilisateur
     const unsub = onSnapshot(doc(db, 'users', user.uid), (docSnap) => {
@@ -23,8 +24,15 @@ export function usePremium() {
         setIsPremium(docSnap.data()?.isPremium === true);
         setLoading(false);
     }, (error) => {
-        console.error("Erreur check premium", error);
-        setLoading(false);
+        // Ajout d'un gestionnaire d'erreur pour intercepter les erreurs de permission
+        if (error.code === 'permission-denied') {
+            console.warn("usePremium: Permission refusée. Arrêt de l'écoute.");
+            setIsPremium(false);
+            setLoading(false);
+        } else {
+             console.error("Erreur check premium", error);
+             setLoading(false);
+        }
     });
 
     return () => unsub();
