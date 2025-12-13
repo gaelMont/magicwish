@@ -1,8 +1,8 @@
-// components/AdContainer.tsx
+// Fichier : components/AdContainer.tsx
 'use client';
 import { usePremium } from '@/hooks/usePremium';
 import Link from 'next/link';
-import { useEffect } from 'react';
+import { useEffect } from 'react'; // <-- Doit être importé
 
 // Type pour les paramètres passés aux endroits où la pub s'affiche
 type Props = {
@@ -15,10 +15,9 @@ export default function AdContainer({ message = "Publicité", adSlotId = "YOUR_A
 
   // Déclencher le rafraîchissement AdSense après le rendu
   useEffect(() => {
-    // Vérifie si l'API AdSense est disponible et si nous ne sommes pas Premium
+    // Vérifie si l'API AdSense est disponible (doit passer si lib/globals.d.ts est bien inclus)
     if (window.adsbygoogle && !isPremium) {
       try {
-        // Appelle la méthode push sur la variable globale adsbygoogle, maintenant typée
         window.adsbygoogle.push({}); 
       } catch (e) {
         console.warn("Erreur chargement AdSense", e);
@@ -27,6 +26,7 @@ export default function AdContainer({ message = "Publicité", adSlotId = "YOUR_A
   }, [isPremium, adSlotId]);
 
 
+  // Conditionnel : ne pas charger si Premium, si en chargement, ou si l'ID n'est pas fourni
   if (loading || isPremium || !process.env.NEXT_PUBLIC_ADSENSE_PUB_ID) return null;
 
   return (

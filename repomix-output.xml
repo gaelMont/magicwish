@@ -91,6 +91,7 @@ lib/AuthContext.tsx
 lib/cardUtils.ts
 lib/firebase-admin.ts
 lib/firebase.ts
+lib/globals.d.ts
 lib/services/collectionService.ts
 lib/validators.ts
 next.config.ts
@@ -109,302 +110,6 @@ tsconfig.json
 
 <files>
 This section contains the contents of the repository's files.
-
-<file path="app/settings/page.tsx">
-'use client';
-
-import { useAuth } from '@/lib/AuthContext';
-import { useRouter } from 'next/navigation';
-import { usePremium } from '@/hooks/usePremium';
-import { useState, useTransition } from 'react';
-import toast from 'react-hot-toast';
-import { doc, getDoc, updateDoc, DocumentData } from 'firebase/firestore'; // DocumentData pour typer les documents
-import { db } from '@/lib/firebase';
-import { updateProfile, sendPasswordResetEmail } from 'firebase/auth'; // Ajout des fonctions Firebase
-
-// --- Typage pour la réponse de l'API Portal ---
-interface PortalResponse {
-    url?: string;
-    error?: string;
-}
-
-// --- Composant spécifique pour la gestion Premium ---
-const PremiumSettingsCard = () => {
-    const { user, auth } = useAuth(); // Supposons que auth est disponible via useAuth si nécessaire
-    const { isPremium, loading } = usePremium();
-    const [isRedirecting, setIsRedirecting] = useState(false);
-    const [isPending, startTransition] = useTransition();
-
-    if (!user) return null; // Ne rien afficher si l'utilisateur n'est pas prêt
-    
-    const paymentLink = `${process.env.NEXT_PUBLIC_STRIPE_PAYMENT_LINK}?client_reference_id=${user.uid}`;
-
-    const handleManageSubscription = async () => {
-        if (isPending) return;
-        setIsRedirecting(true);
-        startTransition(async () => {
-            try {
-                // Lecture de l'ID client Stripe stocké dans le profil de l'utilisateur
-                const docRef = await getDoc(doc(db, 'users', user.uid));
-                const customerData = docRef.data() as DocumentData | undefined;
-                const customerId = customerData?.stripeCustomerId as string | undefined;
-    
-                if (!customerId) {
-                    toast.error("Abonnement non trouvé. Réessayez plus tard.");
-                    setIsRedirecting(false);
-                    return;
-                }
-    
-                // Appel de l'API pour générer le lien de gestion du portail Stripe
-                const res = await fetch('/api/portal', { 
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ customerId })
-                });
-                
-                // Typage strict de la réponse de l'API
-                const data: PortalResponse = await res.json();
-
-                if (data.url) {
-                    window.location.href = data.url; // Redirection vers Stripe
-                } else {
-                    // Utilisation de la propriété error pour éviter le as any
-                    throw new Error(data.error || "Erreur redirection Stripe inconnue."); 
-                }
-            } catch (e) {
-                console.error(e);
-                toast.error("Erreur gestion d'abonnement. Vérifiez la console.");
-            } finally {
-                setIsRedirecting(false);
-            }
-        });
-    };
-
-    if (loading) return <div className="p-4 text-center text-muted">Chargement...</div>;
-
-    return (
-        <div className={`p-5 rounded-xl border transition-all ${isPremium ? 'bg-success/10 border-success/30' : 'bg-surface border-border'}`}>
-            <h3 className="text-lg font-bold text-foreground mb-3 flex justify-between items-center">
-                Statut Premium
-                <span className={`text-xs font-bold px-2 py-1 rounded-full ${isPremium ? 'bg-success text-primary-foreground' : 'bg-muted/20 text-muted'}`}>
-                    {isPremium ? 'ACTIF 💎' : 'INACTIF'}
-                </span>
-            </h3>
-
-            {isPremium ? (
-                <>
-                    <p className="text-muted text-sm mb-4">
-                        Merci pour votre soutien. Vous profitez d&apos;une application sans publicité.
-                    </p>
-                    <button 
-                        onClick={handleManageSubscription}
-                        disabled={isRedirecting || isPending}
-                        className="text-sm text-primary hover:underline font-medium"
-                    >
-                        {isRedirecting || isPending ? 'Redirection...' : 'Gérer mon abonnement Stripe'}
-                    </button>
-                </>
-            ) : (
-                <>
-                    <p className="text-muted text-sm mb-4">
-                        Passez Premium pour 1€/mois et retirez toutes les publicités.
-                    </p>
-                    <a 
-                        href={paymentLink} 
-                        className="bg-primary hover:opacity-90 text-primary-foreground px-4 py-2 rounded-lg text-sm font-bold shadow-sm transition inline-block"
-                    >
-                        Activer le Premium
-                    </a>
-                </>
-            )}
-        </div>
-    );
-};
-
-
-// --- NOUVEAU COMPOSANT : Gestion du Profil (Pseudo) ---
-const ProfileSettingsCard = () => {
-    const { user, logOut } = useAuth();
-    
-    if (!user) return null;
-
-    // Utiliser le displayName de Firebase ou fallback sur une partie de l'email
-    const initialPseudo = user.displayName || user.email?.split('@')[0] || ''; 
-    const [isEditing, setIsEditing] = useState(false);
-    const [pseudo, setPseudo] = useState(initialPseudo);
-    const [isLoading, setIsLoading] = useState(false);
-    
-    // Fonction pour sauvegarder le pseudo
-    const handleSavePseudo = async () => {
-        const trimmedPseudo = pseudo.trim();
-        
-        if (trimmedPseudo === '' || trimmedPseudo === initialPseudo) {
-            setIsEditing(false); // Rien à faire si inchangé ou vide
-            return;
-        }
-
-        setIsLoading(true);
-        try {
-            // 1. Mettre à jour le displayName de l'utilisateur Firebase Auth
-            await updateProfile(user, {
-                displayName: trimmedPseudo
-            });
-
-            // 2. Mettre à jour le document utilisateur dans Firestore
-            const userRef = doc(db, 'users', user.uid);
-            await updateDoc(userRef, {
-                pseudo: trimmedPseudo,
-                updatedAt: new Date(),
-            });
-
-            toast.success("Pseudo mis à jour !");
-            // Mise à jour de l'état initial après succès
-            // C'est géré naturellement par Next.js/React re-render suite à l'updateProfile
-            setIsEditing(false);
-        } catch (error) {
-            console.error("Erreur lors de la mise à jour du pseudo:", error);
-            // On peut checker si l'erreur est due à un pseudo déjà pris si vous avez une fonction de vérification en amont
-            toast.error("Échec de la mise à jour du pseudo. Réessayez.");
-        } finally {
-            setIsLoading(false);
-        }
-    };
-    
-    return (
-        <div className="bg-surface p-5 rounded-xl shadow-sm border border-border">
-            <h3 className="text-lg font-bold text-foreground mb-3">Informations de base</h3>
-            
-            {/* Pseudo Modifiable */}
-            <div className="mb-4">
-                <p className="text-sm font-medium text-muted mb-1">Pseudo:</p>
-                {isEditing ? (
-                    <div className="flex items-center gap-2">
-                        <input 
-                            type="text"
-                            value={pseudo}
-                            onChange={(e) => setPseudo(e.target.value)}
-                            className="flex-grow p-2 border border-border rounded-lg bg-background text-foreground"
-                            disabled={isLoading}
-                        />
-                        <button 
-                            onClick={handleSavePseudo} 
-                            disabled={isLoading || pseudo.trim() === ''}
-                            className="bg-primary hover:bg-primary/90 text-primary-foreground px-3 py-2 rounded-lg text-sm font-bold transition"
-                        >
-                            {isLoading ? 'Sauvegarde...' : 'Enregistrer'}
-                        </button>
-                        <button 
-                            onClick={() => { setPseudo(initialPseudo); setIsEditing(false); }}
-                            disabled={isLoading}
-                            className="text-sm text-muted hover:text-foreground p-2"
-                        >
-                            Annuler
-                        </button>
-                    </div>
-                ) : (
-                    <div className="flex items-center justify-between">
-                        <span className="text-primary font-bold text-base">@{user.displayName || initialPseudo}</span>
-                        <button 
-                            onClick={() => setIsEditing(true)} 
-                            className="text-sm text-primary hover:underline font-medium"
-                        >
-                            Modifier
-                        </button>
-                    </div>
-                )}
-            </div>
-
-            {/* Email (Lecture Seule) - L'UID est supprimé */}
-            <p className="text-sm mb-4"><span className="font-medium text-muted">Email:</span> {user.email}</p>
-            
-            <button onClick={logOut} className="text-sm text-danger hover:underline">
-                Déconnexion
-            </button>
-        </div>
-    );
-}
-
-// --- NOUVEAU COMPOSANT : Sécurité (Changement de MDP) ---
-const SecuritySettingsCard = () => {
-    const { user, auth } = useAuth(); // Nécessite l'objet 'auth' si non global
-    
-    if (!user || !user.email) return null;
-
-    const handlePasswordChange = async () => {
-        if (!auth) {
-            toast.error("Service d'authentification non disponible.");
-            return;
-        }
-
-        try {
-            await sendPasswordResetEmail(auth, user.email); 
-            
-            toast.success("Un lien de réinitialisation du mot de passe a été envoyé à votre adresse email. Vérifiez vos spams !");
-        } catch (error) {
-            console.error("Erreur lors de l'envoi de l'email:", error);
-            // Firebase peut retourner des erreurs spécifiques ici (e.g., auth/user-not-found)
-            toast.error("Échec de l'envoi du lien. Veuillez contacter le support si le problème persiste.");
-        }
-    };
-    
-    return (
-        <div className="bg-surface p-5 rounded-xl shadow-sm border border-border">
-            <h3 className="text-lg font-bold text-foreground mb-3">Sécurité</h3>
-            <p className="text-muted text-sm mb-4">
-                Utilisez votre adresse email pour mettre à jour votre mot de passe en toute sécurité.
-            </p>
-            <button 
-                onClick={handlePasswordChange}
-                className="bg-secondary hover:bg-secondary/80 text-secondary-foreground px-4 py-2 rounded-lg text-sm font-bold shadow-sm transition inline-block"
-            >
-                Changer le mot de passe
-            </button>
-        </div>
-    );
-}
-
-
-// --- Page principale des paramètres (Mise à jour Finale) ---
-export default function SettingsPage() {
-    const { user } = useAuth();
-    const router = useRouter();
-
-    if (!user) {
-        router.push('/login');
-        return null;
-    }
-    
-    return (
-        <main className="container mx-auto p-4 max-w-4xl min-h-[80vh]">
-            <h1 className="text-3xl font-bold text-foreground mb-8 border-b border-border pb-4">
-                ⚙️ Paramètres du compte
-            </h1>
-
-            <div className="grid md:grid-cols-2 gap-8">
-                
-                {/* COLONNE 1 : Profil & Sécurité */}
-                <div className="space-y-6">
-                    <h2 className="text-xl font-bold text-primary mb-3">Mon Profil</h2>
-                    
-                    <ProfileSettingsCard />
-
-                    <SecuritySettingsCard />
-                </div>
-
-                {/* COLONNE 2 : Abonnement */}
-                <div className="space-y-6">
-                    <h2 className="text-xl font-bold text-primary mb-3">Abonnement</h2>
-                    
-                    <PremiumSettingsCard />
-
-                    {/* Le bloc Thème a été SUPPRIMÉ comme convenu */}
-                </div>
-
-            </div>
-        </main>
-    );
-}
-</file>
 
 <file path="eslint.config.mjs">
 import { defineConfig, globalIgnores } from "eslint/config";
@@ -523,6 +228,7 @@ Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/bui
   },
   "include": [
     "next-env.d.ts",
+    "lib/globals.d.ts",
     "**/*.ts",
     "**/*.tsx",
     ".next/types/**/*.ts",
@@ -980,72 +686,6 @@ export default function LoginPage() {
         </div>
       </div>
     </main>
-  );
-}
-</file>
-
-<file path="components/AdContainer.tsx">
-// components/AdContainer.tsx
-'use client';
-import { usePremium } from '@/hooks/usePremium';
-import Link from 'next/link';
-import { useEffect } from 'react';
-
-// Type pour les paramètres passés aux endroits où la pub s'affiche
-type Props = {
-    message?: string;
-    adSlotId?: string; 
-};
-
-export default function AdContainer({ message = "Publicité", adSlotId = "YOUR_ADSENSE_SLOT_ID" }: Props) {
-  const { isPremium, loading } = usePremium();
-
-  // Déclencher le rafraîchissement AdSense après le rendu
-  useEffect(() => {
-    // Vérifie si l'API AdSense est disponible et si nous ne sommes pas Premium
-    if (window.adsbygoogle && !isPremium) {
-      try {
-        // @ts-expect-error: AdSense est une variable globale
-        window.adsbygoogle.push({});
-      } catch (e) {
-        console.warn("Erreur chargement AdSense", e);
-      }
-    }
-  }, [isPremium, adSlotId]);
-
-
-  if (loading || isPremium || !process.env.NEXT_PUBLIC_ADSENSE_PUB_ID) return null;
-
-  return (
-    <div className="w-full my-6 animate-in fade-in slide-in-from-bottom-4 duration-700">
-        <div className="bg-surface border-2 border-dashed border-primary/30 rounded-xl p-4 flex flex-col items-center justify-center text-center relative overflow-hidden group">
-            
-            <div className="relative z-10 w-full">
-                <p className="text-xs font-bold text-muted uppercase tracking-widest mb-2">{message}</p>
-                
-                {/* BLOC DE CODE ADSENSE */}
-                {/* NOTE: Ce bloc sera remplacé par la publicité réelle par Google */}
-                <div className="w-full flex justify-center min-h-[100px] mb-2">
-                  <ins 
-                    className="adsbygoogle"
-                    style={{ display: 'block', width: '100%', minHeight: '100px' }}
-                    data-ad-client={process.env.NEXT_PUBLIC_ADSENSE_PUB_ID}
-                    data-ad-slot={adSlotId}
-                    data-ad-format="auto"
-                    data-full-width-responsive="true"
-                  ></ins>
-                </div>
-                {/* FIN DU BLOC ADSENSE */}
-
-                <Link 
-                    href="/premium" 
-                    className="inline-block bg-primary hover:opacity-90 text-primary-foreground px-6 py-2 rounded-full text-xs font-bold shadow-md transition transform active:scale-95"
-                >
-                    Retirer les pubs (1€/mois)
-                </Link>
-            </div>
-        </div>
-    </div>
   );
 }
 </file>
@@ -1572,6 +1212,19 @@ const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
 
 export const auth = getAuth(app);
 export const db = getFirestore(app);
+</file>
+
+<file path="lib/globals.d.ts">
+// Fichier : lib/globals.d.ts (À CRÉER)
+
+declare global {
+  interface Window {
+    // Déclaration pour Google AdSense
+    adsbygoogle: unknown[]; 
+  }
+}
+
+// Assurez-vous que ce fichier est inclus dans la propriété "include" de votre tsconfig.json
 </file>
 
 <file path="lib/services/collectionService.ts">
@@ -7757,6 +7410,323 @@ export default function PremiumPage() {
 }
 </file>
 
+<file path="app/settings/page.tsx">
+'use client';
+
+import { useAuth } from '@/lib/AuthContext';
+import { useRouter } from 'next/navigation';
+import { usePremium } from '@/hooks/usePremium';
+import { useState, useTransition, useEffect } from 'react';
+import toast from 'react-hot-toast';
+import { doc, getDoc, updateDoc, DocumentData } from 'firebase/firestore'; 
+import { db } from '@/lib/firebase';
+import { updateProfile, sendPasswordResetEmail, getAuth, Auth } from 'firebase/auth'; 
+
+// --- Typage pour la réponse de l'API Portal ---
+interface PortalResponse {
+    url?: string;
+    error?: string;
+}
+
+// Fonction utilitaire pour obtenir l'instance d'authentification
+const getFirebaseAuthInstance = (): Auth => {
+    return getAuth(); 
+};
+
+
+// --- Composant spécifique pour la gestion Premium ---
+const PremiumSettingsCard = () => {
+    // HOOKS APPELES EN PREMIER
+    const { user } = useAuth();
+    const { isPremium, loading } = usePremium();
+    const [isRedirecting, setIsRedirecting] = useState(false);
+    const [isPending, startTransition] = useTransition();
+
+    // RETOUR ANTICIPE APRES LES HOOKS
+    if (!user) return null; 
+    if (loading) return <div className="p-4 text-center text-muted">Chargement...</div>;
+
+    
+    const paymentLink = `${process.env.NEXT_PUBLIC_STRIPE_PAYMENT_LINK}?client_reference_id=${user.uid}`;
+
+    const handleManageSubscription = async () => {
+        if (isPending) return;
+        setIsRedirecting(true);
+        startTransition(async () => {
+            try {
+                const docRef = await getDoc(doc(db, 'users', user.uid));
+                const customerData = docRef.data() as DocumentData | undefined; 
+                const customerId = customerData?.stripeCustomerId as string | undefined;
+    
+                if (!customerId) {
+                    toast.error("Abonnement non trouvé. Réessayez plus tard.");
+                    setIsRedirecting(false);
+                    return;
+                }
+    
+                const res = await fetch('/api/portal', { 
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ customerId })
+                });
+                
+                const data: PortalResponse = await res.json();
+
+                if (data.url) {
+                    window.location.href = data.url; 
+                } else {
+                    throw new Error(data.error || "Erreur redirection Stripe inconnue."); 
+                }
+            } catch (e) {
+                console.error(e);
+                toast.error("Erreur gestion d'abonnement. Vérifiez la console.");
+            } finally {
+                setIsRedirecting(false);
+            }
+        });
+    };
+
+    return (
+        <div className={`p-5 rounded-xl border transition-all ${isPremium ? 'bg-success/10 border-success/30' : 'bg-surface border-border'}`}>
+            <h3 className="text-lg font-bold text-foreground mb-3 flex justify-between items-center">
+                Statut Premium
+                <span className={`text-xs font-bold px-2 py-1 rounded-full ${isPremium ? 'bg-success text-primary-foreground' : 'bg-muted/20 text-muted'}`}>
+                    {isPremium ? 'ACTIF 💎' : 'INACTIF'}
+                </span>
+            </h3>
+
+            {isPremium ? (
+                <>
+                    <p className="text-muted text-sm mb-4">
+                        Merci pour votre soutien. Vous profitez d&apos;une application sans publicité.
+                    </p>
+                    <button 
+                        onClick={handleManageSubscription}
+                        disabled={isRedirecting || isPending}
+                        className="text-sm text-primary hover:underline font-medium"
+                    >
+                        {isRedirecting || isPending ? 'Redirection...' : 'Gérer mon abonnement Stripe'}
+                    </button>
+                </>
+            ) : (
+                <>
+                    <p className="text-muted text-sm mb-4">
+                        Passez Premium pour 1€/mois et retirez toutes les publicités.
+                    </p>
+                    <a 
+                        href={paymentLink} 
+                        className="bg-primary hover:opacity-90 text-primary-foreground px-4 py-2 rounded-lg text-sm font-bold shadow-sm transition inline-block"
+                    >
+                        Activer le Premium
+                    </a>
+                </>
+            )}
+        </div>
+    );
+};
+
+
+// --- COMPOSANT : Gestion du Profil (Pseudo) ---
+const ProfileSettingsCard = () => {
+    // HOOKS APPELES EN PREMIER
+    const { user, logOut } = useAuth();
+    const initialPseudo = user?.displayName || user?.email?.split('@')[0] || ''; 
+    const [isEditing, setIsEditing] = useState(false);
+    const [pseudo, setPseudo] = useState(initialPseudo);
+    const [isLoading, setIsLoading] = useState(false);
+    
+    // RETOUR ANTICIPE APRES LES HOOKS
+    if (!user) return null;
+
+    // Fonction pour sauvegarder le pseudo
+    const handleSavePseudo = async () => {
+        const trimmedPseudo = pseudo.trim();
+        
+        if (trimmedPseudo === '' || trimmedPseudo === initialPseudo) {
+            setIsEditing(false);
+            return;
+        }
+
+        setIsLoading(true);
+        try {
+            // 1. Mettre à jour le displayName de l'utilisateur Firebase Auth
+            await updateProfile(user, {
+                displayName: trimmedPseudo
+            });
+
+            // 2. Mettre à jour le document utilisateur dans Firestore
+            // CORRECTION: Cible le document 'info' dans 'public_profile' (résout l'erreur de permission)
+            const profileInfoRef = doc(db, 'users', user.uid, 'public_profile', 'info');
+            
+            await updateDoc(profileInfoRef, {
+                username: trimmedPseudo,
+                updatedAt: new Date(),
+            });
+
+            toast.success("Pseudo mis à jour !");
+            setIsEditing(false);
+        } catch (error) {
+            console.error("Erreur lors de la mise à jour du pseudo:", error);
+            toast.error("Échec de la mise à jour du pseudo. Réessayez.");
+        } finally {
+            setIsLoading(false);
+        }
+    };
+    
+    return (
+        <div className="bg-surface p-5 rounded-xl shadow-sm border border-border">
+            <h3 className="text-lg font-bold text-foreground mb-3">Informations de base</h3>
+            
+            {/* Pseudo Modifiable */}
+            <div className="mb-4">
+                <p className="text-sm font-medium text-muted mb-1">Pseudo:</p>
+                {isEditing ? (
+                    <div className="flex items-center gap-2">
+                        <input 
+                            type="text"
+                            value={pseudo}
+                            onChange={(e) => setPseudo(e.target.value)}
+                            className="flex-grow p-2 border border-border rounded-lg bg-background text-foreground"
+                            disabled={isLoading}
+                        />
+                        <button 
+                            onClick={handleSavePseudo} 
+                            disabled={isLoading || pseudo.trim() === ''}
+                            className="bg-primary hover:opacity-90 text-primary-foreground px-3 py-2 rounded-lg text-sm font-bold transition"
+                        >
+                            {isLoading ? 'Sauvegarde...' : 'Enregistrer'}
+                        </button>
+                        <button 
+                            onClick={() => { setPseudo(initialPseudo); setIsEditing(false); }}
+                            disabled={isLoading}
+                            className="text-sm text-muted hover:text-foreground p-2"
+                        >
+                            Annuler
+                        </button>
+                    </div>
+                ) : (
+                    <div className="flex items-center justify-between">
+                        <span className="text-primary font-bold text-base">@{user.displayName || initialPseudo}</span>
+                        <button 
+                            onClick={() => setIsEditing(true)} 
+                            className="text-sm text-primary hover:underline font-medium"
+                        >
+                            Modifier
+                        </button>
+                    </div>
+                )}
+            </div>
+
+            {/* Email (Lecture Seule) - L'UID est supprimé */}
+            <p className="text-sm mb-4"><span className="font-medium text-muted">Email:</span> {user.email}</p>
+            
+            <button onClick={logOut} className="text-sm text-danger hover:underline">
+                Déconnexion
+            </button>
+        </div>
+    );
+};
+
+// --- COMPOSANT : Sécurité (Changement de MDP) ---
+const SecuritySettingsCard = () => {
+    // HOOKS APPELES EN PREMIER
+    const { user } = useAuth(); 
+    const [isLoading, setIsLoading] = useState(false); 
+    
+    // RETOUR ANTICIPE APRES LES HOOKS
+    if (!user) return null; 
+    
+    // Gère le cas où l'utilisateur n'a pas d'email (résout le problème de typage/logique)
+    if (!user.email) return (
+        <div className="bg-surface p-5 rounded-xl shadow-sm border border-border">
+             <h3 className="text-lg font-bold text-foreground mb-3">Sécurité</h3>
+             <p className="text-danger text-sm">
+                 Votre compte n&apos;a pas d&apos;adresse email enregistrée. Le changement de mot de passe n&apos;est pas disponible pour cette méthode de connexion.
+             </p>
+        </div>
+    );
+    
+    const handlePasswordChange = async () => {
+        setIsLoading(true);
+        try {
+            const authInstance = getFirebaseAuthInstance();
+            
+            // Correction TypeScript: L'opérateur '!' affirme la non-nullité après la vérification
+            await sendPasswordResetEmail(authInstance, user.email!); 
+            
+            toast.success("Un lien de réinitialisation du mot de passe a été envoyé à votre adresse email. Vérifiez vos spams !");
+        } catch (error) {
+            console.error("Erreur lors de l'envoi de l'email:", error);
+            toast.error("Échec de l'envoi du lien. Veuillez contacter le support.");
+        } finally {
+            setIsLoading(false);
+        }
+    };
+    
+    return (
+        <div className="bg-surface p-5 rounded-xl shadow-sm border border-border">
+            <h3 className="text-lg font-bold text-foreground mb-3">Sécurité</h3>
+            <p className="text-muted text-sm mb-4">
+                Utilisez votre adresse email pour mettre à jour votre mot de passe en toute sécurité.
+            </p>
+            <button 
+                onClick={handlePasswordChange}
+                disabled={isLoading}
+                className="bg-secondary hover:bg-secondary/80 text-foreground px-4 py-2 rounded-lg text-sm font-bold shadow-sm transition inline-block"
+            >
+                {isLoading ? 'Envoi...' : 'Changer le mot de passe'}
+            </button>
+        </div>
+    );
+}
+
+
+// --- Page principale des paramètres (Mise à jour Finale) ---
+export default function SettingsPage() {
+    // HOOKS APPELES EN PREMIER
+    const { user, loading: authLoading } = useAuth();
+    const router = useRouter();
+
+    // CORRECTION REACT : Déplacer la redirection dans useEffect (résout l'erreur "Cannot update a component while rendering")
+    useEffect(() => {
+        if (!authLoading && !user) {
+            router.push('/login');
+        }
+    }, [user, authLoading, router]);
+
+    // Retourne null pendant que l'authentification charge ou si l'utilisateur est déconnecté
+    if (authLoading || !user) {
+        return null;
+    }
+    
+    return (
+        <main className="container mx-auto p-4 max-w-4xl min-h-[80vh]">
+            <h1 className="text-3xl font-bold text-foreground mb-8 border-b border-border pb-4">
+                ⚙️ Paramètres du compte
+            </h1>
+
+            <div className="grid md:grid-cols-2 gap-8">
+                
+                <div className="space-y-6">
+                    <h2 className="text-xl font-bold text-primary mb-3">Mon Profil</h2>
+                    
+                    <ProfileSettingsCard />
+
+                    <SecuritySettingsCard />
+                </div>
+
+                <div className="space-y-6">
+                    <h2 className="text-xl font-bold text-primary mb-3">Abonnement</h2>
+                    
+                    <PremiumSettingsCard />
+                </div>
+
+            </div>
+        </main>
+    );
+}
+</file>
+
 <file path="app/user/[uid]/page.tsx">
 'use client';
 
@@ -7868,48 +7838,68 @@ export default function UserProfilePage({ params }: { params: Promise<{ uid: str
 }
 </file>
 
-<file path="hooks/usePremium.ts">
-// hooks/usePremium.ts
-import { useAuth } from '@/lib/AuthContext';
-import { db } from '@/lib/firebase';
-import { doc, onSnapshot } from 'firebase/firestore';
-import { useState, useEffect } from 'react';
+<file path="components/AdContainer.tsx">
+// Fichier : components/AdContainer.tsx
+'use client';
+import { usePremium } from '@/hooks/usePremium';
+import Link from 'next/link';
+import { useEffect } from 'react';
 
-export function usePremium() {
-  const { user } = useAuth();
-  const [isPremium, setIsPremium] = useState(false);
-  const [loading, setLoading] = useState(true);
+// Type pour les paramètres passés aux endroits où la pub s'affiche
+type Props = {
+    message?: string;
+    adSlotId?: string; 
+};
 
+export default function AdContainer({ message = "Publicité", adSlotId = "YOUR_ADSENSE_SLOT_ID" }: Props) {
+  const { isPremium, loading } = usePremium();
+
+  // Déclencher le rafraîchissement AdSense après le rendu
   useEffect(() => {
-    if (!user) {
-        // eslint-disable-next-line react-hooks/set-state-in-effect
-        setIsPremium(false);
-        setLoading(false);
-        return; // Stoppe l'exécution si pas d'utilisateur
+    // Vérifie si l'API AdSense est disponible (maintenant typée via lib/globals.d.ts)
+    if (window.adsbygoogle && !isPremium) {
+      try {
+        window.adsbygoogle.push({}); 
+      } catch (e) {
+        console.warn("Erreur chargement AdSense", e);
+      }
     }
-    setLoading(true);
+  }, [isPremium, adSlotId]);
 
-    // Écoute en temps réel les changements sur le document utilisateur
-    const unsub = onSnapshot(doc(db, 'users', user.uid), (docSnap) => {
-        // Le Webhook Stripe met à jour ce champ
-        setIsPremium(docSnap.data()?.isPremium === true);
-        setLoading(false);
-    }, (error) => {
-        // Ajout d'un gestionnaire d'erreur pour intercepter les erreurs de permission
-        if (error.code === 'permission-denied') {
-            console.warn("usePremium: Permission refusée. Arrêt de l'écoute.");
-            setIsPremium(false);
-            setLoading(false);
-        } else {
-             console.error("Erreur check premium", error);
-             setLoading(false);
-        }
-    });
 
-    return () => unsub();
-  }, [user]);
+  // Conditionnel : ne pas charger si Premium, si en chargement, ou si l'ID n'est pas fourni
+  if (loading || isPremium || !process.env.NEXT_PUBLIC_ADSENSE_PUB_ID) return null;
 
-  return { isPremium, loading };
+  return (
+    <div className="w-full my-6 animate-in fade-in slide-in-from-bottom-4 duration-700">
+        <div className="bg-surface border-2 border-dashed border-primary/30 rounded-xl p-4 flex flex-col items-center justify-center text-center relative overflow-hidden group">
+            
+            <div className="relative z-10 w-full">
+                <p className="text-xs font-bold text-muted uppercase tracking-widest mb-2">{message}</p>
+                
+                {/* BLOC DE CODE ADSENSE */}
+                <div className="w-full flex justify-center min-h-[100px] mb-2">
+                  <ins 
+                    className="adsbygoogle"
+                    style={{ display: 'block', width: '100%', minHeight: '100px' }}
+                    data-ad-client={process.env.NEXT_PUBLIC_ADSENSE_PUB_ID}
+                    data-ad-slot={adSlotId}
+                    data-ad-format="auto"
+                    data-full-width-responsive="true"
+                  ></ins>
+                </div>
+                {/* FIN DU BLOC ADSENSE */}
+
+                <Link 
+                    href="/premium" 
+                    className="inline-block bg-primary hover:opacity-90 text-primary-foreground px-6 py-2 rounded-full text-xs font-bold shadow-md transition transform active:scale-95"
+                >
+                    Retirer les pubs (1€/mois)
+                </Link>
+            </div>
+        </div>
+    </div>
+  );
 }
 </file>
 
@@ -8813,63 +8803,48 @@ export default function GlobalWishlistView({ lists }: Props) {
 }
 </file>
 
-<file path="app/layout.tsx">
-// app/layout.tsx
-import type { Metadata } from 'next';
-import { Inter } from 'next/font/google';
-import './globals.css';
-import { AuthProvider } from '@/lib/AuthContext';
-import { ThemeProvider } from '@/components/ThemeProvider';
-import Header from '@/components/Header'; 
-import { Toaster } from 'react-hot-toast';
-import UsernameSetupModal from '@/components/UsernameSetupModal'; 
-import Script from 'next/script'; // <--- NOUVEL IMPORT
+<file path="hooks/usePremium.ts">
+// hooks/usePremium.ts
+import { useAuth } from '@/lib/AuthContext';
+import { db } from '@/lib/firebase';
+import { doc, onSnapshot } from 'firebase/firestore';
+import { useState, useEffect } from 'react';
 
-const inter = Inter({ subsets: ['latin'] });
+export function usePremium() {
+  const { user } = useAuth();
+  const [isPremium, setIsPremium] = useState(false);
+  const [loading, setLoading] = useState(true);
 
-export const metadata: Metadata = {
-  title: 'MagicWish',
-  description: 'Votre wishlist de cartes Magic',
-  manifest: '/manifest.json',
-};
+  useEffect(() => {
+    if (!user) {
+        // eslint-disable-next-line react-hooks/set-state-in-effect
+        setIsPremium(false);
+        setLoading(false);
+        return; // Stoppe l'exécution si pas d'utilisateur
+    }
+    setLoading(true);
 
-export default function RootLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
-  // Optionnel : s'assurer que la pub ne s'affiche qu'en production
-  const isProd = process.env.NODE_ENV === 'production';
-  const adsensePubId = process.env.NEXT_PUBLIC_ADSENSE_PUB_ID;
+    // Écoute en temps réel les changements sur le document utilisateur
+    const unsub = onSnapshot(doc(db, 'users', user.uid), (docSnap) => {
+        // Le Webhook Stripe met à jour ce champ
+        setIsPremium(docSnap.data()?.isPremium === true);
+        setLoading(false);
+    }, (error) => {
+        // Ajout d'un gestionnaire d'erreur pour intercepter les erreurs de permission
+        if (error.code === 'permission-denied') {
+            console.warn("usePremium: Permission refusée. Arrêt de l'écoute.");
+            setIsPremium(false);
+            setLoading(false);
+        } else {
+             console.error("Erreur check premium", error);
+             setLoading(false);
+        }
+    });
 
-  return (
-    <html lang="fr" suppressHydrationWarning>
-      {/* Script Google AdSense (Ajout conditionnel) */}
-      {isProd && adsensePubId && (
-        <Script
-          async
-          src={`https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=${adsensePubId}`}
-          strategy="afterInteractive" // Charge après le JS principal
-          crossOrigin="anonymous"
-        />
-      )}
-      <body className={inter.className}>
-        <ThemeProvider 
-            attribute="class" 
-            defaultTheme="light" 
-            enableSystem={false} 
-            disableTransitionOnChange 
-        >
-          <AuthProvider>
-            <Header />
-            {children}
-            <UsernameSetupModal />
-            <Toaster position="bottom-right" />
-          </AuthProvider>
-        </ThemeProvider>
-      </body>
-    </html>
-  );
+    return () => unsub();
+  }, [user]);
+
+  return { isPremium, loading };
 }
 </file>
 
@@ -9143,6 +9118,71 @@ export const normalizeCardData = (data: ScryfallRawData) => {
     scryfallData: data // On garde la donnée brute
   };
 };
+</file>
+
+<file path="app/layout.tsx">
+import type { Metadata } from 'next';
+import { Inter } from 'next/font/google';
+import './globals.css';
+import { AuthProvider } from '@/lib/AuthContext';
+import { ThemeProvider } from '@/components/ThemeProvider';
+import Header from '@/components/Header'; 
+import { Toaster } from 'react-hot-toast';
+import UsernameSetupModal from '@/components/UsernameSetupModal'; 
+import Script from 'next/script'; // Import de Script pour AdSense
+
+const inter = Inter({ subsets: ['latin'] });
+
+export const metadata: Metadata = {
+  title: 'MagicWish',
+  description: 'Gérez vos cartes Pokémon, Yu-Gi-Oh! et Magic the Gathering',
+};
+// ---------------------------------------------------
+
+export default function RootLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  // On s'assure que les publicités ne s'affichent qu'en production 
+  // et seulement si l'ID AdSense est configuré.
+  const isProd = process.env.NODE_ENV === 'production';
+  const adsensePubId = process.env.NEXT_PUBLIC_ADSENSE_PUB_ID;
+
+  return (
+    <html lang="fr" suppressHydrationWarning>
+      
+      {/* SCRIPT GOOGLE ADSENSE (Intégré dans le HEAD de la page) */}
+      {isProd && adsensePubId && (
+        <Script
+          async
+          // Utilise l'ID de publication de la variable d'environnement
+          src={`https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=${adsensePubId}`}
+          // 'afterInteractive' est une bonne stratégie pour les scripts publicitaires
+          strategy="afterInteractive" 
+          crossOrigin="anonymous"
+        />
+      )}
+      {/* FIN SCRIPT ADSENSE */}
+
+      <body className={inter.className}>
+        <ThemeProvider 
+            attribute="class" 
+            defaultTheme="light" 
+            enableSystem={false} 
+            disableTransitionOnChange 
+        >
+          <AuthProvider>
+            <Header />
+            {children}
+            <UsernameSetupModal />
+            <Toaster position="bottom-right" />
+          </AuthProvider>
+        </ThemeProvider>
+      </body>
+    </html>
+  );
+}
 </file>
 
 <file path="components/wishlist/SingleWishlistView.tsx">
@@ -11275,130 +11315,6 @@ export function useCardCollection(
 }
 </file>
 
-<file path="components/Header.tsx">
-'use client';
-
-import { useState } from 'react';
-import Link from 'next/link';
-import { useAuth } from '@/lib/AuthContext';
-import { usePathname } from 'next/navigation';
-import ThemeToggle from './ThemeToggle';
-
-export default function Header() {
-  const { user, logOut, friendRequestCount } = useAuth();
-  const pathname = usePathname();
-  const [isMenuOpen, setIsMenuOpen] = useState(false);
-
-  const linkClass = (path: string) => `
-    text-sm font-medium transition-colors block py-2 md:py-0
-    ${pathname === path 
-      ? 'text-primary font-bold' 
-      : 'text-muted hover:text-foreground'}
-  `;
-
-  return (
-    // UTILISATION DES VARIABLES : bg-surface, border-border
-    <header className="bg-surface/80 backdrop-blur-md border-b border-border p-4 sticky top-0 z-40 transition-colors duration-300">
-      <div className="container mx-auto">
-        <div className="flex justify-between items-center">
-          
-          {/* Logo utilise text-primary */}
-          <Link 
-            href="/" 
-            className="text-2xl font-black tracking-tight text-primary hover:opacity-80 transition"
-            onClick={() => setIsMenuOpen(false)}
-          >
-            MagicWish
-          </Link>
-
-          <div className="flex items-center gap-4">
-            <ThemeToggle />
-
-            {user ? (
-              <>
-                <nav className="hidden md:flex gap-6 mr-4 items-center">
-                  <Link href="/search" className={linkClass('/search')}>Recherche</Link> 
-                  <Link href="/wishlist" className={linkClass('/wishlist')}>Wishlist</Link>
-                  <Link href="/collection" className={linkClass('/collection')}>Collection</Link>
-                  <Link href="/trades" className={linkClass('/trades')}>Echanges</Link>
-                  <Link href="/contacts" className={`${linkClass('/contacts')} relative flex items-center gap-1`}>
-                    Contacts
-                    {friendRequestCount > 0 && (
-                      <span className="absolute -top-1.5 -right-2 bg-primary text-primary-foreground text-[10px] font-bold px-1.5 py-0.5 rounded-full animate-pulse">
-                        {friendRequestCount}
-                      </span>
-                    )}
-                  </Link>
-                </nav>
-
-                <div className="h-5 w-px bg-border hidden md:block"></div>
-
-                <div className="flex items-center gap-3">
-                  {/* AJOUT DU LIEN PARAMÈTRES (Icône engrenage sur desktop) */}
-                  <Link 
-                    href="/settings"
-                    className={`p-2 rounded-full hover:bg-secondary transition-colors ${pathname === '/settings' ? 'text-primary' : 'text-muted hover:text-foreground'}`}
-                    title="Paramètres"
-                  >
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5">
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.318.674.674.843l1.173.567c.47.228.6.814.242 1.258l-.77.842a1.275 1.275 0 0 0-.291.872v2.146c0 .371.196.702.503.882l.77.452c.364.214.5.659.242 1.082l-1.173 1.296c-.356.394-.85.584-1.332.584h-1.396a1.275 1.275 0 0 0-.872.291l-.842.77c-.444.356-1.03.223-1.258-.242l-.567-1.173a1.275 1.275 0 0 0-.843-.674l-1.28-.213c-.543-.09-.94-.56-.94-1.11V11.23c0-.55.398-1.02.94-1.11l1.28-.213a1.275 1.275 0 0 0 .843-.674l.567-1.173c.228-.47.814-.6.258-.242l.77.842c.307.336.702.503 1.125.503h1.396Z" />
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
-                    </svg>
-                  </Link>
-
-                  {user.photoURL && (
-                    <img 
-                      src={user.photoURL} 
-                      alt="Avatar" 
-                      className="w-8 h-8 rounded-full bg-surface border border-border object-cover"
-                    />
-                  )}
-                  <button
-                    onClick={logOut}
-                    className="hidden md:block text-xs font-medium text-danger hover:text-danger/80 transition"
-                  >
-                    Déconnexion
-                  </button>
-
-                  <button 
-                    onClick={() => setIsMenuOpen(!isMenuOpen)}
-                    className="md:hidden p-2 text-primary hover:bg-secondary rounded-lg transition-colors"
-                  >
-                    Menu
-                  </button>
-                </div>
-              </>
-            ) : (
-              <Link
-                href="/login"
-                className="bg-primary text-primary-foreground px-5 py-2 rounded-lg text-sm font-bold hover:opacity-90 transition shadow-md"
-              >
-                Se connecter
-              </Link>
-            )}
-          </div>
-        </div>
-        
-        {/* MOBILE MENU */}
-        {user && isMenuOpen && (
-          <div className="md:hidden mt-4 pt-4 border-t border-border animate-in slide-in-from-top-2">
-             <nav className="flex flex-col space-y-3">
-               <Link href="/search" className={linkClass('/search')} onClick={() => setIsMenuOpen(false)}>Recherche</Link>
-               <Link href="/wishlist" className={linkClass('/wishlist')} onClick={() => setIsMenuOpen(false)}>Wishlist</Link>
-               <Link href="/collection" className={linkClass('/collection')} onClick={() => setIsMenuOpen(false)}>Collection</Link>
-               <Link href="/trades" className={linkClass('/trades')} onClick={() => setIsMenuOpen(false)}>Echanges</Link>
-               <Link href="/contacts" className={linkClass('/contacts')} onClick={() => setIsMenuOpen(false)}>Contacts</Link>
-               <Link href="/settings" className={linkClass('/settings')} onClick={() => setIsMenuOpen(false)}>Paramètres</Link> {/* AJOUT MOBILE */}
-               <button onClick={() => { logOut(); setIsMenuOpen(false); }} className="text-left py-2 text-danger text-sm font-medium">Déconnexion</button>
-             </nav>
-          </div>
-        )}
-      </div>
-    </header>
-  );
-}
-</file>
-
 <file path="app/wishlist/page.tsx">
 'use client';
 
@@ -11523,6 +11439,130 @@ export default function WishlistPage() {
       </section>
 
     </main>
+  );
+}
+</file>
+
+<file path="components/Header.tsx">
+'use client';
+
+import { useState } from 'react';
+import Link from 'next/link';
+import { useAuth } from '@/lib/AuthContext';
+import { usePathname } from 'next/navigation';
+import ThemeToggle from './ThemeToggle';
+
+export default function Header() {
+  const { user, logOut, friendRequestCount } = useAuth();
+  const pathname = usePathname();
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+
+  const linkClass = (path: string) => `
+    text-sm font-medium transition-colors block py-2 md:py-0
+    ${pathname === path 
+      ? 'text-primary font-bold' 
+      : 'text-muted hover:text-foreground'}
+  `;
+
+  return (
+    // UTILISATION DES VARIABLES : bg-surface, border-border
+    <header className="bg-surface/80 backdrop-blur-md border-b border-border p-4 sticky top-0 z-40 transition-colors duration-300">
+      <div className="container mx-auto">
+        <div className="flex justify-between items-center">
+          
+          {/* Logo utilise text-primary */}
+          <Link 
+            href="/" 
+            className="text-2xl font-black tracking-tight text-primary hover:opacity-80 transition"
+            onClick={() => setIsMenuOpen(false)}
+          >
+            MagicWish
+          </Link>
+
+          <div className="flex items-center gap-4">
+            <ThemeToggle />
+
+            {user ? (
+              <>
+                <nav className="hidden md:flex gap-6 mr-4 items-center">
+                  <Link href="/search" className={linkClass('/search')}>Recherche</Link> 
+                  <Link href="/wishlist" className={linkClass('/wishlist')}>Wishlist</Link>
+                  <Link href="/collection" className={linkClass('/collection')}>Collection</Link>
+                  <Link href="/trades" className={linkClass('/trades')}>Echanges</Link>
+                  <Link href="/contacts" className={`${linkClass('/contacts')} relative flex items-center gap-1`}>
+                    Contacts
+                    {friendRequestCount > 0 && (
+                      <span className="absolute -top-1.5 -right-2 bg-primary text-primary-foreground text-[10px] font-bold px-1.5 py-0.5 rounded-full animate-pulse">
+                        {friendRequestCount}
+                      </span>
+                    )}
+                  </Link>
+                </nav>
+
+                <div className="h-5 w-px bg-border hidden md:block"></div>
+
+                <div className="flex items-center gap-3">
+                  {/* AJOUT DU LIEN PARAMÈTRES (Icône engrenage sur desktop) */}
+                  <Link 
+                    href="/settings"
+                    className={`p-2 rounded-full hover:bg-secondary transition-colors ${pathname === '/settings' ? 'text-primary' : 'text-muted hover:text-foreground'}`}
+                    title="Paramètres"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.318.674.674.843l1.173.567c.47.228.6.814.242 1.258l-.77.842a1.275 1.275 0 0 0-.291.872v2.146c0 .371.196.702.503.882l.77.452c.364.214.5.659.242 1.082l-1.173 1.296c-.356.394-.85.584-1.332.584h-1.396a1.275 1.275 0 0 0-.872.291l-.842.77c-.444.356-1.03.223-1.258-.242l-.567-1.173a1.275 1.275 0 0 0-.843-.674l-1.28-.213c-.543-.09-.94-.56-.94-1.11V11.23c0-.55.398-1.02.94-1.11l1.28-.213a1.275 1.275 0 0 0 .843-.674l.567-1.173c.228-.47.814-.6.258-.242l.77.842c.307.336.702.503 1.125.503h1.396Z" />
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
+                    </svg>
+                  </Link>
+
+                  {user.photoURL && (
+                    <img 
+                      src={user.photoURL} 
+                      alt="Avatar" 
+                      className="w-8 h-8 rounded-full bg-surface border border-border object-cover"
+                    />
+                  )}
+                  <button
+                    onClick={logOut}
+                    className="hidden md:block text-xs font-medium text-danger hover:text-danger/80 transition"
+                  >
+                    Déconnexion
+                  </button>
+
+                  <button 
+                    onClick={() => setIsMenuOpen(!isMenuOpen)}
+                    className="md:hidden p-2 text-primary hover:bg-secondary rounded-lg transition-colors"
+                  >
+                    Menu
+                  </button>
+                </div>
+              </>
+            ) : (
+              <Link
+                href="/login"
+                className="bg-primary text-primary-foreground px-5 py-2 rounded-lg text-sm font-bold hover:opacity-90 transition shadow-md"
+              >
+                Se connecter
+              </Link>
+            )}
+          </div>
+        </div>
+        
+        {/* MOBILE MENU */}
+        {user && isMenuOpen && (
+          <div className="md:hidden mt-4 pt-4 border-t border-border animate-in slide-in-from-top-2">
+             <nav className="flex flex-col space-y-3">
+               <Link href="/search" className={linkClass('/search')} onClick={() => setIsMenuOpen(false)}>Recherche</Link>
+               <Link href="/wishlist" className={linkClass('/wishlist')} onClick={() => setIsMenuOpen(false)}>Wishlist</Link>
+               <Link href="/collection" className={linkClass('/collection')} onClick={() => setIsMenuOpen(false)}>Collection</Link>
+               <Link href="/trades" className={linkClass('/trades')} onClick={() => setIsMenuOpen(false)}>Echanges</Link>
+               <Link href="/contacts" className={linkClass('/contacts')} onClick={() => setIsMenuOpen(false)}>Contacts</Link>
+               <Link href="/settings" className={linkClass('/settings')} onClick={() => setIsMenuOpen(false)}>Paramètres</Link> {/* AJOUT MOBILE */}
+               <button onClick={() => { logOut(); setIsMenuOpen(false); }} className="text-left py-2 text-danger text-sm font-medium">Déconnexion</button>
+             </nav>
+          </div>
+        )}
+      </div>
+    </header>
   );
 }
 </file>
