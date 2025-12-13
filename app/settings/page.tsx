@@ -3,7 +3,7 @@
 import { useAuth } from '@/lib/AuthContext';
 import { useRouter } from 'next/navigation';
 import { usePremium } from '@/hooks/usePremium';
-import { useState, useTransition, useEffect } from 'react'; // AJOUT de useEffect
+import { useState, useTransition, useEffect } from 'react';
 import toast from 'react-hot-toast';
 import { doc, getDoc, updateDoc, DocumentData } from 'firebase/firestore'; 
 import { db } from '@/lib/firebase';
@@ -23,11 +23,13 @@ const getFirebaseAuthInstance = (): Auth => {
 
 // --- Composant spécifique pour la gestion Premium ---
 const PremiumSettingsCard = () => {
+    // HOOKS APPELES EN PREMIER
     const { user } = useAuth();
     const { isPremium, loading } = usePremium();
     const [isRedirecting, setIsRedirecting] = useState(false);
     const [isPending, startTransition] = useTransition();
 
+    // RETOUR ANTICIPE APRES LES HOOKS
     if (!user) return null; 
     if (loading) return <div className="p-4 text-center text-muted">Chargement...</div>;
 
@@ -113,14 +115,17 @@ const PremiumSettingsCard = () => {
 
 // --- COMPOSANT : Gestion du Profil (Pseudo) ---
 const ProfileSettingsCard = () => {
+    // HOOKS APPELES EN PREMIER
     const { user, logOut } = useAuth();
     const initialPseudo = user?.displayName || user?.email?.split('@')[0] || ''; 
     const [isEditing, setIsEditing] = useState(false);
     const [pseudo, setPseudo] = useState(initialPseudo);
     const [isLoading, setIsLoading] = useState(false);
     
+    // RETOUR ANTICIPE APRES LES HOOKS
     if (!user) return null;
 
+    // Fonction pour sauvegarder le pseudo
     const handleSavePseudo = async () => {
         const trimmedPseudo = pseudo.trim();
         
@@ -137,8 +142,7 @@ const ProfileSettingsCard = () => {
             });
 
             // 2. Mettre à jour le document utilisateur dans Firestore
-            // CORRECTION CRITIQUE (Erreur Firebase : Permission)
-            // On cible spécifiquement le document 'info' dans la sous-collection 'public_profile'
+            // CORRECTION: Cible le document 'info' dans 'public_profile' (résout l'erreur de permission)
             const profileInfoRef = doc(db, 'users', user.uid, 'public_profile', 'info');
             
             await updateDoc(profileInfoRef, {
@@ -212,11 +216,14 @@ const ProfileSettingsCard = () => {
 
 // --- COMPOSANT : Sécurité (Changement de MDP) ---
 const SecuritySettingsCard = () => {
+    // HOOKS APPELES EN PREMIER
     const { user } = useAuth(); 
     const [isLoading, setIsLoading] = useState(false); 
     
+    // RETOUR ANTICIPE APRES LES HOOKS
     if (!user) return null; 
     
+    // Gère le cas où l'utilisateur n'a pas d'email (résout le problème de typage/logique)
     if (!user.email) return (
         <div className="bg-surface p-5 rounded-xl shadow-sm border border-border">
              <h3 className="text-lg font-bold text-foreground mb-3">Sécurité</h3>
@@ -231,7 +238,8 @@ const SecuritySettingsCard = () => {
         try {
             const authInstance = getFirebaseAuthInstance();
             
-            await sendPasswordResetEmail(authInstance, user.email); 
+            // Correction TypeScript: L'opérateur '!' affirme la non-nullité après la vérification
+            await sendPasswordResetEmail(authInstance, user.email!); 
             
             toast.success("Un lien de réinitialisation du mot de passe a été envoyé à votre adresse email. Vérifiez vos spams !");
         } catch (error) {
@@ -262,18 +270,18 @@ const SecuritySettingsCard = () => {
 
 // --- Page principale des paramètres (Mise à jour Finale) ---
 export default function SettingsPage() {
-    // On déstructure user et loading: authLoading
+    // HOOKS APPELES EN PREMIER
     const { user, loading: authLoading } = useAuth();
     const router = useRouter();
 
-    // CORRECTION REACT : Déplacer la redirection dans useEffect
+    // CORRECTION REACT : Déplacer la redirection dans useEffect (résout l'erreur "Cannot update a component while rendering")
     useEffect(() => {
         if (!authLoading && !user) {
             router.push('/login');
         }
     }, [user, authLoading, router]);
 
-    // Retourne null pendant que l'authentification charge ou si l'utilisateur n'est pas là (pour éviter le flash)
+    // Retourne null pendant que l'authentification charge ou si l'utilisateur est déconnecté
     if (authLoading || !user) {
         return null;
     }
