@@ -15,7 +15,8 @@ export type FriendProfile = {
   uid: string;
   username: string;
   displayName: string;
-  photoURL?: string; 
+  // Correction 1 : On autorise explicitement null ici
+  photoURL?: string | null; 
 };
 
 type FirestoreProfileData = {
@@ -47,10 +48,10 @@ export function useFriends() {
     const unsubFriends = onSnapshot(friendsRef, (snap) => {
       const list = snap.docs.map(d => d.data() as FriendProfile);
       setFriends(list);
-      setLoading(false); // On considère que le chargement est OK après la première réponse
+      setLoading(false); 
     }, (error) => {
         console.error("useFriends: Erreur écoute Amis:", error);
-        setLoading(false); // Arrête le chargement même en cas d'erreur
+        setLoading(false); 
     });
 
     // 2. Écoute Demandes Reçues
@@ -60,7 +61,6 @@ export function useFriends() {
       setRequestsReceived(list);
     }, (error) => {
         console.error("useFriends: Erreur écoute Demandes:", error);
-        // Ne modifie pas le loading général ici, car il est géré par l'écouteur des amis.
     });
 
     return () => {
@@ -94,7 +94,7 @@ export function useFriends() {
             uid: foundUid,
             username: data.username,
             displayName: data.displayName,
-            photoURL: data.photoURL
+            photoURL: data.photoURL || null
         });
       }
     });
@@ -132,13 +132,15 @@ export function useFriends() {
     const toastId = toast.loading("Acceptation...");
 
     try {
-        // Le type 'FriendProfile' est utilisé ici, pas besoin de 'cleanSender' car les types sont déjà stricts.
-        const cleanSender: FriendProfile = {
-            ...sender,
-            photoURL: sender.photoURL || null // S'assure que photoURL est 'string | null'
+        // Correction 2 : On retire ": FriendProfile" pour laisser TypeScript inférer le bon type
+        // Cela évite le conflit entre "string | undefined" et "string | null"
+        const cleanSender = {
+            uid: sender.uid,
+            username: sender.username,
+            displayName: sender.displayName,
+            photoURL: sender.photoURL || null 
         };
 
-        // L'action serveur gère la transaction
         const result = await acceptFriendRequestAction(user.uid, cleanSender);
 
         if (result.success) {

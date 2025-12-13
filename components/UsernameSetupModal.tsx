@@ -91,7 +91,7 @@ export default function UsernameSetupModal() {
           <div className="text-4xl mb-2">👋</div>
           <h2 className="text-2xl font-bold text-gray-900 dark:text-white">Bienvenue sur MagicWish !</h2>
           <p className="text-gray-500 dark:text-gray-400 mt-2">
-            Pour permettre à vos amis de vous trouver, veuillez choisir un <span className="font-bold text-blue-600">nom d'utilisateur unique</span>.
+            Pour permettre à vos amis de vous trouver, veuillez choisir un <span className="font-bold text-blue-600">nom d&apos;utilisateur unique</span>.
           </p>
         </div>
 
