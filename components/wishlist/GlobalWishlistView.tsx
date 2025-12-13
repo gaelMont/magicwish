@@ -1,3 +1,4 @@
+// components/wishlist/GlobalWishlistView.tsx
 'use client';
 
 import { useState, useEffect, useMemo } from 'react';
@@ -8,6 +9,7 @@ import MagicCard from '@/components/MagicCard';
 import { db } from '@/lib/firebase';
 import { collection, getDocs } from 'firebase/firestore';
 import toast from 'react-hot-toast';
+import ColumnSlider from '@/components/ColumnSlider'; // <--- IMPORT
 
 type Props = {
     lists: WishlistMeta[];
@@ -17,6 +19,8 @@ export default function GlobalWishlistView({ lists }: Props) {
     const { user } = useAuth();
     const [allCards, setAllCards] = useState<(CardType & { sourceListName: string })[]>([]);
     const [loading, setLoading] = useState(true);
+    
+    const [columns, setColumns] = useState(5); // <--- ÉTAT LOCAL
 
     useEffect(() => {
         if (!user || lists.length === 0) return;
@@ -69,7 +73,7 @@ export default function GlobalWishlistView({ lists }: Props) {
 
     return (
         <div className="animate-in fade-in duration-300">
-             <div className="flex justify-between items-end mb-6 border-b pb-4 border-border bg-linear-to-r from-primary/10 to-transparent p-4 rounded-t-xl">
+             <div className="flex flex-col md:flex-row justify-between items-end mb-6 border-b pb-4 border-border bg-linear-to-r from-primary/10 to-transparent p-4 rounded-t-xl gap-4">
                 <div>
                     <h2 className="text-2xl font-bold text-foreground flex items-center gap-2">
                         🌍 Vue Globale
@@ -78,9 +82,15 @@ export default function GlobalWishlistView({ lists }: Props) {
                         Toutes vos cartes fusionnées ({allCards.length} cartes distinctes)
                     </p>
                 </div>
-                <div className="text-right">
-                    <span className="text-xs text-muted uppercase font-semibold">Valeur Totale</span>
-                    <p className="text-3xl font-bold text-primary">{globalTotal.toFixed(2)} €</p>
+                
+                <div className="flex items-center gap-4">
+                    {/* SLIDER AJOUTÉ ICI */}
+                    <ColumnSlider columns={columns} setColumns={setColumns} />
+
+                    <div className="text-right">
+                        <span className="text-xs text-muted uppercase font-semibold">Valeur Totale</span>
+                        <p className="text-3xl font-bold text-primary">{globalTotal.toFixed(2)} €</p>
+                    </div>
                 </div>
             </div>
 
@@ -89,7 +99,10 @@ export default function GlobalWishlistView({ lists }: Props) {
                     <p className="text-muted italic">Aucune carte trouvée.</p>
                 </div>
             ) : (
-                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                <div 
+                    className="grid gap-4"
+                    style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}
+                >
                     {allCards.map((card, idx) => (
                         <div key={`${card.id}-${idx}`} className="relative group">
                             <div className="absolute top-0 right-0 z-30 bg-black/70 text-white text-[10px] px-2 py-1 rounded-bl-lg backdrop-blur-sm pointer-events-none">

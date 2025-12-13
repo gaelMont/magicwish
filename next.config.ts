@@ -1,8 +1,10 @@
+// next.config.ts
 import type { NextConfig } from 'next';
 
 const nextConfig: NextConfig = {
-  // Mode strict pour détecter les bugs en dev
-  reactStrictMode: true,
+  // CORRECTION MAJEURE: Désactiver reactStrictMode pour éviter les erreurs 
+  // "Firestore INTERNAL ASSERTION FAILED" dues au Hot Reload/Fast Refresh.
+  reactStrictMode: false, 
 
   // Optimisation des images
   images: {
@@ -10,13 +12,13 @@ const nextConfig: NextConfig = {
     remotePatterns: [
       {
         protocol: 'https',
-        hostname: 'cards.scryfall.io', // Indispensable pour tes cartes
+        hostname: 'cards.scryfall.io',
         port: '',
         pathname: '/**',
       },
       {
         protocol: 'https',
-        hostname: '*.googleusercontent.com', // Indispensable pour les avatars Google Auth
+        hostname: '*.googleusercontent.com',
         port: '',
         pathname: '/**',
       },

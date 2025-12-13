@@ -14,9 +14,12 @@ export const CardSchema = z.object({
   setCode: z.string().default(''),
   isFoil: z.boolean().default(false),
   isSpecificVersion: z.boolean().default(false),
-  isForTrade: z.boolean().default(false).optional(),
+  
+  // Remplacement de isForTrade par quantityForTrade
+  quantityForTrade: z.number().int().min(0).default(0).optional(), 
+  
   wishlistId: z.string().nullable().optional(),
-  // On accepte un objet inconnu pour scryfallData, mais on le type proprement
+  lastPriceUpdate: z.union([z.number(), z.date()]).optional(), 
   scryfallData: z.record(z.string(), z.unknown()).nullable().optional()
 });
 

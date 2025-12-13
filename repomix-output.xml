@@ -46,15 +46,18 @@ app/actions/friends.ts
 app/actions/trade-proposal.ts
 app/actions/trade.ts
 app/actions/wishlist.ts
+app/ads-validation/page.tsx
 app/api/portal/route.ts
 app/api/search/route.ts
 app/api/webhook/stripe/route.ts
+app/card/[id]/page.tsx
 app/collection/page.tsx
 app/contacts/page.tsx
 app/favicon.ico
 app/globals.css
 app/layout.tsx
 app/login/page.tsx
+app/mentions-legales/page.tsx
 app/page.tsx
 app/premium/page.tsx
 app/search/page.tsx
@@ -97,6 +100,7 @@ lib/validators.ts
 next.config.ts
 package.json
 postcss.config.mjs
+public/ads.txt
 public/file.svg
 public/globe.svg
 public/manifest.json
@@ -110,6 +114,699 @@ tsconfig.json
 
 <files>
 This section contains the contents of the repository's files.
+
+<file path="app/card/[id]/page.tsx">
+// app/card/[id]/page.tsx
+'use client';
+
+import { use, useEffect, useState, useMemo } from 'react';
+import { db } from '@/lib/firebase';
+import { doc, getDoc, DocumentData } from 'firebase/firestore';
+import { useAuth } from '@/lib/AuthContext';
+import { useCardCollection, CardType } from '@/hooks/useCardCollection'; 
+import { normalizeCardData, ScryfallRawData } from '@/lib/cardUtils'; 
+import Link from 'next/link';
+import toast from 'react-hot-toast';
+
+type CardDetailPageProps = {
+    params: Promise<{ id: string }>;
+};
+
+// --- Composant de gestion de quantité (Inchangé) ---
+const QuantityManager = ({ card }: { card: CardType }) => {
+    const { 
+        updateQuantity, 
+        removeCard, 
+        setTradeQuantity 
+    } = useCardCollection('collection'); 
+    const maxStock = card.quantity;
+
+    const [tradeQtyInput, setTradeQtyInput] = useState(card.quantityForTrade ?? 0);
+    const [isUpdatingTrade, setIsUpdatingTrade] = useState(false);
+
+    useEffect(() => {
+        // eslint-disable-next-line react-hooks/set-state-in-effect
+        setTradeQtyInput(card.quantityForTrade ?? 0);
+    }, [card.quantityForTrade]);
+    
+    useEffect(() => {
+        if (tradeQtyInput > maxStock) {
+            // eslint-disable-next-line react-hooks/set-state-in-effect
+            setTradeQtyInput(maxStock);
+        }
+    }, [maxStock, tradeQtyInput]);
+
+    const handleSaveTradeQty = async () => {
+        if (!card.id || tradeQtyInput > maxStock || tradeQtyInput < 0) return;
+        setIsUpdatingTrade(true);
+        await setTradeQuantity(card.id, tradeQtyInput);
+        setIsUpdatingTrade(false);
+        toast.success(`Statut d'échange mis à jour.`);
+    };
+
+    const handleUpdateStock = async (amount: 1 | -1) => {
+        const result = await updateQuantity(card.id, amount, card.quantity);
+        
+        if (result === 'shouldDelete') {
+            if (confirm("La quantité est à zéro. Supprimer la carte de la collection ?")) {
+                removeCard(card.id);
+            }
+        }
+    };
+
+    return (
+        <div className="bg-surface p-6 rounded-xl border border-border shadow-md space-y-4">
+            <h2 className="text-xl font-bold text-foreground mb-3">Gestion du Stock</h2>
+
+            {/* 1. QUANTITÉ TOTALE */}
+            <div className="flex justify-between items-center bg-background p-3 rounded-lg border border-border">
+                <p className="font-medium text-sm">Quantité Totale:</p>
+                <div className="flex items-center gap-2">
+                    <button 
+                        onClick={() => handleUpdateStock(-1)} 
+                        className="p-1 w-8 h-8 rounded-full bg-secondary hover:bg-border text-muted font-bold transition"
+                    > - </button>
+                    <span className="text-lg font-bold text-primary w-8 text-center">{card.quantity}</span>
+                    <button 
+                        onClick={() => handleUpdateStock(1)} 
+                        className="p-1 w-8 h-8 rounded-full bg-primary/10 hover:bg-primary/20 text-primary font-bold transition"
+                    > + </button>
+                </div>
+            </div>
+
+            {/* 2. QUANTITÉ À L'ÉCHANGE */}
+            <div className="flex flex-col bg-background p-3 rounded-lg border border-border">
+                <label className="font-medium text-sm mb-2">Quantité à l'échange (max {maxStock}) :</label>
+                <div className="flex items-center gap-3">
+                    <input
+                        type="number"
+                        min="0"
+                        max={maxStock}
+                        value={tradeQtyInput}
+                        onChange={(e) => setTradeQtyInput(Math.min(maxStock, Math.max(0, parseInt(e.target.value) || 0)))}
+                        className="w-20 p-2 border border-border rounded-lg text-center bg-surface font-bold text-foreground"
+                    />
+                    <button
+                        onClick={handleSaveTradeQty}
+                        disabled={isUpdatingTrade || tradeQtyInput === (card.quantityForTrade ?? 0) || tradeQtyInput > maxStock}
+                        className="bg-success hover:opacity-90 disabled:opacity-50 text-white px-4 py-2 rounded-lg text-sm font-bold transition flex-grow"
+                    >
+                        {isUpdatingTrade ? 'Sauvegarde...' : 'Définir l\'échange'}
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+
+// --- Composant pour afficher les versions/prix des sets (DÉTAILS) ---
+const CardDetailsClient = ({ cardData }: { cardData: CardType }) => {
+    // Les prix de la carte actuelle
+    const currentPrice = cardData.customPrice ?? cardData.price ?? 0;
+    const currentPriceType = cardData.customPrice !== undefined ? "Personnalisé" : "Scryfall";
+    
+    const scryfallRaw = cardData.scryfallData as ScryfallRawData | undefined;
+    const prices = scryfallRaw?.prices;
+
+    if (!scryfallRaw) {
+        return <p className="text-muted">Détails supplémentaires (prix, versions) non disponibles.</p>;
+    }
+
+    return (
+        <div className="space-y-8">
+            {/* Prix Actuels */}
+            <div className="bg-surface p-6 rounded-xl border border-border shadow-md">
+                <h2 className="text-xl font-bold text-primary mb-4">Prix et Statut</h2>
+                <div className="grid grid-cols-2 gap-4">
+                    <div>
+                        <p className="text-sm text-muted">Prix Stocké (EUR)</p>
+                        <p className={`text-2xl font-black ${cardData.customPrice ? 'text-orange-600' : 'text-success'}`}>{currentPrice.toFixed(2)} €</p>
+                        <p className="text-xs text-muted mt-1">Source: {currentPriceType}</p>
+                    </div>
+                    <div>
+                        <p className="text-sm text-muted">Version</p>
+                        <p className="text-lg font-bold text-foreground">
+                            {cardData.isFoil ? 'Foil' : 'Non-Foil'} {cardData.isSpecificVersion ? ' (Spécifique)' : ' (Générique)'}
+                        </p>
+                        <p className="text-xs text-muted mt-1">Statut: {cardData.quantityForTrade ? `À l'échange (${cardData.quantityForTrade}) 🤝` : 'Privée'}</p>
+                    </div>
+                </div>
+            </div>
+
+            {/* Prix Scryfall (brut) */}
+            <div className="bg-surface p-6 rounded-xl border border-border shadow-sm">
+                <h2 className="text-xl font-bold text-foreground mb-4">Prix de Référence Scryfall</h2>
+                <table className="w-full text-left text-sm">
+                    <thead>
+                        <tr className="border-b border-border text-muted">
+                            <th className="py-2">Type</th>
+                            <th className="py-2">EUR</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {prices?.eur && (
+                            <tr className="border-b border-border">
+                                <td className="py-2 font-medium">Normal</td>
+                                <td className="py-2 text-success font-bold">{parseFloat(prices.eur).toFixed(2)} €</td>
+                            </tr>
+                        )}
+                        {prices?.eur_foil && (
+                             <tr>
+                                <td className="py-2 font-medium">Foil</td>
+                                <td className="py-2 text-purple-600 font-bold">{parseFloat(prices.eur_foil).toFixed(2)} €</td>
+                            </tr>
+                        )}
+                        {!prices?.eur && !prices?.eur_foil && (
+                            <tr>
+                                <td className="py-2 font-medium">Normal</td>
+                                <td className="py-2 text-muted">0.00 €</td>
+                            </tr>
+                        )}
+                    </tbody>
+                </table>
+            </div>
+
+            {/* Liens externes */}
+            <div className="bg-surface p-6 rounded-xl border border-border shadow-sm">
+                <h2 className="text-xl font-bold text-foreground mb-4">Outils</h2>
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                    <a href={`https://www.tcgplayer.com/search/all/product?q=${cardData.name}`} target="_blank" rel="noopener noreferrer" className="btn-primary text-xs py-2 text-center">TCGPlayer</a>
+                    <a href={`https://www.cardmarket.com/en/Magic/Products/Search?searchString=${cardData.name}`} target="_blank" rel="noopener noreferrer" className="btn-primary text-xs py-2 text-center">Cardmarket</a>
+                    <a href={`https://scryfall.com/search?q=${cardData.id}`} target="_blank" rel="noopener noreferrer" className="bg-secondary text-primary border border-primary/30 hover:bg-secondary/80 text-xs py-2 rounded-lg font-bold text-center transition">Scryfall</a>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+
+// --- Composant d'affichage de toutes les versions ---
+const AllVersionsList = ({ oracleId, currentCardId, onVersionSelect, collectionMap }: 
+    { 
+        oracleId: string, 
+        currentCardId: string, 
+        onVersionSelect: (rawCard: ScryfallRawData) => void, 
+        collectionMap: Map<string, CardType>
+    }) => {
+    
+    // --- HOOKS EN PREMIER ---
+    const [allVersions, setAllVersions] = useState<ScryfallRawData[]>([]);
+    const [loading, setLoading] = useState(true);
+    const [selectedRawCard, setSelectedRawCard] = useState<ScryfallRawData | null>(null);
+    const [isFlipped, setIsFlipped] = useState(false); 
+    const [showOwnedOnly, setShowOwnedOnly] = useState(false); 
+
+    
+    useEffect(() => {
+        const fetchAllVersions = async () => {
+            setLoading(true);
+            try {
+                const res = await fetch(`https://api.scryfall.com/cards/search?q=oracle_id:${oracleId}&unique=prints&order=released`);
+                const data = await res.json();
+                
+                if (data.data && data.data.length > 0) {
+                    setAllVersions(data.data);
+                    const current = data.data.find((v: ScryfallRawData) => v.id === currentCardId);
+                    if (current) setSelectedRawCard(current);
+                } else {
+                    toast.error("Aucune version trouvée sur Scryfall.");
+                }
+            } catch (e) {
+                console.error("Erreur chargement versions Scryfall", e);
+            } finally {
+                setLoading(false);
+            }
+        };
+
+        if (oracleId) {
+            fetchAllVersions();
+        }
+    }, [oracleId, currentCardId]);
+
+    const cardToDisplay = useMemo(() => {
+        if (selectedRawCard) return normalizeCardData(selectedRawCard);
+        if (allVersions.length > 0) return normalizeCardData(allVersions[0]);
+        return null;
+    }, [selectedRawCard, allVersions]);
+    
+    // Calculer la liste filtrée
+    const filteredVersions = useMemo(() => {
+        if (!showOwnedOnly) return allVersions;
+        
+        return allVersions.filter(v => collectionMap.has(v.id));
+    }, [allVersions, showOwnedOnly, collectionMap]);
+
+    // --- CONDITIONS DE RETOUR (APRES TOUS LES HOOKS) ---
+    if (loading) {
+        return (
+            <div className="p-10 text-center">
+                 <div className="h-6 w-6 border-4 border-primary border-t-transparent rounded-full animate-spin mx-auto mb-4" />
+                 <p className="text-muted">Chargement de toutes les éditions...</p>
+            </div>
+        );
+    }
+    if (allVersions.length === 0 || !cardToDisplay) {
+        return <p className="p-10 text-center text-danger">Liste des éditions non disponible.</p>;
+    }
+    
+    // --- LOGIQUE DE RENDU ---
+    const isDoubleSided = !!cardToDisplay.imageBackUrl;
+    const displayImage = isFlipped && cardToDisplay.imageBackUrl ? cardToDisplay.imageBackUrl : cardToDisplay.imageUrl;
+
+
+    return (
+        <div className="grid md:grid-cols-3 gap-8">
+            
+            {/* COLONNE GAUCHE : IMAGE DE LA VERSION SÉLECTIONNÉE (col-span-1) */}
+            <div className="md:col-span-1 flex flex-col items-center sticky top-24 self-start">
+                 <div 
+                    className="w-full max-w-sm aspect-[2.5/3.5] rounded-xl overflow-hidden shadow-2xl ring-4 ring-primary/20 cursor-pointer"
+                    onClick={() => isDoubleSided && setIsFlipped(!isFlipped)}
+                >
+                    <img src={displayImage} alt={cardToDisplay.name} className="w-full h-full object-cover" />
+                </div>
+                
+                {isDoubleSided && (
+                    <button 
+                        onClick={() => setIsFlipped(!isFlipped)} 
+                        className="mt-4 text-sm text-primary hover:underline font-medium"
+                    >
+                        {isFlipped ? 'Afficher le Recto' : 'Afficher le Verso'}
+                    </button>
+                )}
+            </div>
+
+            {/* COLONNE DROITE : LISTE DES VERSIONS (col-span-2) */}
+            <div className="md:col-span-2 space-y-6">
+                 {/* FILTRE CHECKBOX ET TITRE ALIGNÉS À DROITE */}
+                <div className="flex justify-between items-center bg-secondary p-3 rounded-xl border border-border">
+                    <h2 className="text-xl font-bold text-foreground">
+                        Impressions ({filteredVersions.length} / {allVersions.length})
+                    </h2>
+                    <label className="flex items-center gap-2 cursor-pointer select-none">
+                        <input 
+                            type="checkbox" 
+                            checked={showOwnedOnly} 
+                            onChange={(e) => setShowOwnedOnly(e.target.checked)} 
+                            className="w-4 h-4 text-primary rounded border-border" 
+                        />
+                        <span className="text-sm font-medium text-foreground">Mes versions</span>
+                    </label>
+                </div>
+                
+                {/* Liste des versions */}
+                <div className="space-y-3 max-h-[70vh] overflow-y-auto pr-3 custom-scrollbar">
+                    {filteredVersions.map(v => {
+                        const normalized = normalizeCardData(v);
+                        const isCurrentInCollection = v.id === currentCardId; 
+                        const isSelectedInList = v.id === selectedRawCard?.id; 
+
+                        const ownedCard = collectionMap.get(v.id);
+                        const isOwned = !!ownedCard;
+                        const ownedQty = ownedCard?.quantity || 0;
+
+                        const priceNormal = parseFloat(v.prices?.eur || "0");
+                        const priceFoil = parseFloat(v.prices?.eur_foil || "0");
+                        const displayPrice = Math.max(priceNormal, priceFoil);
+                        
+                        return (
+                            <div 
+                                key={v.id} 
+                                onClick={() => { setSelectedRawCard(v); setIsFlipped(false); }} 
+                                onDoubleClick={() => onVersionSelect(v)} 
+                                className={`flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-all ${
+                                    isSelectedInList
+                                        ? 'bg-primary/10 border-primary shadow-lg ring-2 ring-primary/50' 
+                                        : isOwned 
+                                            ? 'bg-success/5 border-success/30 hover:bg-success/10' 
+                                            : 'bg-surface border-border hover:bg-primary/5' 
+                                }`}
+                            >
+                                <div className="w-12 h-16 rounded overflow-hidden flex-shrink-0">
+                                    <img src={normalized.imageUrl} alt={normalized.setName} className="w-full h-full object-cover" loading="lazy" />
+                                </div>
+                                <div className="flex-grow min-w-0">
+                                    <p className="font-bold text-foreground truncate">
+                                        {v.set_name} 
+                                        {isOwned && <span className="ml-2 text-xs font-normal text-success font-bold">({ownedQty}x)</span>} 
+                                        {isCurrentInCollection && <span className="ml-2 text-xs font-normal text-primary">(Affichée)</span>}
+                                    </p>
+                                    <p className="text-xs text-muted">Set: {v.set.toUpperCase()} | Num: {v.collector_number}</p>
+                                </div>
+                                <div className="text-right flex-shrink-0">
+                                    <span className={`font-bold text-sm ${isCurrentInCollection ? 'text-primary' : 'text-success'}`}>{displayPrice.toFixed(2)} €</span>
+                                    {v.finishes?.includes('foil') && <p className="text-xs text-amber-600">Foil</p>}
+                                    <button onClick={(e) => { e.stopPropagation(); onVersionSelect(v); }} className="text-xs text-primary hover:underline block mt-1">Sélectionner</button>
+                                </div>
+                            </div>
+                        );
+                    })}
+                </div>
+
+                <div className="pt-4 border-t border-border">
+                    <button 
+                        onClick={() => selectedRawCard && onVersionSelect(selectedRawCard)}
+                        disabled={!selectedRawCard}
+                        className="btn-primary w-full py-3 text-lg disabled:opacity-50"
+                    >
+                        Afficher les Détails de cette Impression
+                    </button>
+                </div>
+                
+            </div>
+        </div>
+    );
+};
+
+
+// --- PAGE PRINCIPALE ---
+export default function CardDetailPage({ params }: CardDetailPageProps) {
+    // --- HOOKS DE CHARGEMENT ET D'ÉTAT (TOUJOURS EN PREMIER) ---
+    const { user } = useAuth();
+    const unwrappedParams = use(params);
+    const cardId = unwrappedParams.id;
+    
+    // NOUVEAU : Chargement de TOUTE la collection pour le filtre
+    const { cards: collectionCards } = useCardCollection('collection'); 
+    
+    // Map pour un lookup rapide par ID (Scryfall ID)
+    const collectionMap = useMemo(() => {
+        const map = new Map<string, CardType>();
+        collectionCards.forEach(c => map.set(c.id, c));
+        return map;
+    }, [collectionCards]);
+
+
+    const [card, setCard] = useState<CardType | null>(null);
+    const [loading, setLoading] = useState(true);
+    const [isFlipped, setIsFlipped] = useState(false); 
+
+    const [showAllVersions, setShowAllVersions] = useState(false);
+
+    // --- useEffect : Récupération des données ---
+    useEffect(() => {
+        const fetchCard = async () => {
+            if (!user) { setLoading(false); return; }
+            
+            setLoading(true);
+            try {
+                let cardRef = doc(db, 'users', user.uid, 'collection', cardId);
+                let snap = await getDoc(cardRef);
+
+                if (!snap.exists()) {
+                    cardRef = doc(db, 'users', user.uid, 'wishlist', cardId);
+                    snap = await getDoc(cardRef);
+                }
+
+                if (snap.exists()) {
+                    setCard({ id: snap.id, ...snap.data(), uid: user.uid } as CardType); 
+                }
+            } catch (e) {
+                console.error("Erreur chargement carte", e);
+            } finally {
+                setLoading(false);
+            }
+        };
+
+        fetchCard();
+    }, [user, cardId]);
+
+
+    // --- ACTIONS DE LA PAGE ---
+    const handleVersionSelect = (rawCard: ScryfallRawData) => {
+        const normalized = normalizeCardData(rawCard);
+
+        setCard(prev => {
+            if (!prev) return null;
+            return {
+                ...prev,
+                name: normalized.name,
+                imageUrl: normalized.imageUrl,
+                imageBackUrl: normalized.imageBackUrl,
+                setName: normalized.setName,
+                setCode: normalized.setCode,
+                price: normalized.price,
+                scryfallData: normalized.scryfallData as Record<string, unknown>, 
+            };
+        });
+        
+        setShowAllVersions(false); 
+        setIsFlipped(false); 
+    };
+
+
+    // --- CONDITIONS DE RETOUR (APRES TOUS LES HOOKS) ---
+    if (!user) return <div className="p-10 text-center text-muted">Connectez-vous pour voir les détails.</div>;
+    if (loading) return <div className="p-10 text-center text-muted animate-pulse">Chargement des détails de la carte...</div>;
+    if (!card) return <div className="p-10 text-center text-danger">Carte non trouvée dans votre collection ou wishlist.</div>;
+
+    // --- LOGIQUE DE RENDU ---
+    const { name, imageUrl, imageBackUrl, setName } = normalizeCardData(card.scryfallData as ScryfallRawData);
+    const isDoubleSided = !!imageBackUrl;
+    const oracleId = (card.scryfallData as ScryfallRawData)?.oracle_id; 
+    
+    const displayImage = isFlipped && imageBackUrl ? imageBackUrl : imageUrl;
+    
+    const isOwner = user.uid === card.uid; 
+    
+    // --- RENDU FINAL ---
+    return (
+        <main className="container mx-auto p-4 max-w-6xl min-h-[80vh]">
+            
+            <div className="mb-6 flex justify-between items-center">
+                <Link href="/collection" className="text-sm text-primary hover:underline">← Retour à la collection</Link>
+                {oracleId && (
+                     <button
+                        onClick={() => setShowAllVersions(!showAllVersions)}
+                        className="bg-secondary hover:bg-border text-foreground px-4 py-2 rounded-lg text-sm font-bold transition flex items-center gap-2"
+                     >
+                        {showAllVersions ? 'Afficher les Détails' : 'Voir toutes les Editions'}
+                     </button>
+                )}
+            </div>
+
+            <h1 className="text-3xl font-bold text-foreground mb-8 border-b border-border pb-4">
+                Détails : {name}
+            </h1>
+
+            {showAllVersions && oracleId ? (
+                <AllVersionsList 
+                    oracleId={oracleId} 
+                    currentCardId={card.id} 
+                    onVersionSelect={handleVersionSelect} 
+                    collectionMap={collectionMap} 
+                />
+            ) : (
+                <div className="grid md:grid-cols-3 gap-8">
+                    
+                    {/* COLONNE GAUCHE : IMAGE */}
+                    <div className="md:col-span-1 flex flex-col items-center">
+                        <div 
+                            className="w-full max-w-sm aspect-[2.5/3.5] rounded-xl overflow-hidden shadow-2xl ring-4 ring-primary/20 cursor-pointer"
+                            onClick={() => isDoubleSided && setIsFlipped(!isFlipped)}
+                        >
+                            <img src={displayImage} alt={name} className="w-full h-full object-cover" />
+                        </div>
+                        
+                        {isDoubleSided && (
+                            <button 
+                                onClick={() => setIsFlipped(!isFlipped)} 
+                                className="mt-4 text-sm text-primary hover:underline font-medium"
+                            >
+                                {isFlipped ? 'Afficher le Recto' : 'Afficher le Verso'}
+                            </button>
+                        )}
+                        
+                        <div className="mt-4 text-center">
+                            <p className="text-lg font-semibold text-foreground">{setName}</p>
+                            <p className="text-sm text-muted">
+                                Quantité totale : {card.quantity} | 
+                                Échange : <span className="font-bold text-success">{card.quantityForTrade ?? 0}</span>
+                            </p>
+                        </div>
+                    </div>
+
+                    {/* COLONNE DROITE : DÉTAILS ET PRIX + GESTION DU STOCK */}
+                    <div className="md:col-span-2 space-y-6">
+                        {isOwner && <QuantityManager card={card} />}
+                        <CardDetailsClient cardData={card} />
+                    </div>
+                </div>
+            )}
+        </main>
+    );
+}
+</file>
+
+<file path="app/mentions-legales/page.tsx">
+// app/politique-confidentialite/page.tsx
+'use client';
+
+import Link from 'next/link';
+
+export default function PrivacyPolicyPage() {
+
+    return (
+        <main className="container mx-auto p-4 max-w-4xl min-h-[80vh]">
+            <h1 className="text-3xl font-bold text-foreground mb-8 border-b border-border pb-4">
+                Politique de Confidentialité (RGPD)
+            </h1>
+
+            <div className="space-y-8 text-muted">
+
+                <div>
+                    <h2 className="text-xl font-bold text-primary mb-3">1. Identité et Contact du Responsable de Traitement</h2>
+                    <p>Le responsable du traitement des données à caractère personnel est :</p>
+                    <ul className="list-disc list-inside ml-4 space-y-1">
+                        <li className="text-foreground font-semibold">Contact : [à completer]</li>
+                    </ul>
+                </div>
+
+                <div>
+                    <h2 className="text-xl font-bold text-primary mb-3">2. Données Collectées, Finalités et Bases Légales</h2>
+                    <p>Nous collectons les données suivantes, nécessaires au bon fonctionnement de l&apos;application :</p>
+                    <div className="space-y-4 mt-3">
+                        
+                        <h3 className="text-lg font-semibold text-foreground">2.1. Données d&apos;Identification et de Profil</h3>
+                        <ul className="list-disc list-inside ml-6 space-y-2">
+                            <li>
+                                <strong>Données :</strong> Adresse email, UID (identifiant unique Firebase), Nom d&apos;affichage, Nom d&apos;utilisateur unique (@pseudo), Photo d&apos;avatar.
+                                <br />
+                                <strong>Finalité :</strong> Identification, authentification, personnalisation du profil utilisateur et du scanner d&apos;échanges.
+                                <br />
+                                <strong>Base Légale :</strong> Exécution du contrat (fourniture du service).
+                            </li>
+                        </ul>
+
+                        <h3 className="text-lg font-semibold text-foreground">2.2. Données de Contenu et d&apos;Activité</h3>
+                        <ul className="list-disc list-inside ml-6 space-y-2">
+                            <li>
+                                <strong>Données :</strong> Collections de cartes, Wishlists multiples, statut des cartes (Foil, à l&apos;échange, customPrice), historique des propositions et des échanges acceptés/refusés.
+                                <br />
+                                <strong>Finalité :</strong> Permettre la gestion de la collection et l&apos;exécution du service d&apos;échange et de matching.
+                                <br />
+                                <strong>Base Légale :</strong> Exécution du contrat (service principal de l&apos;Application).
+                            </li>
+                        </ul>
+
+                        <h3 className="text-lg font-semibold text-foreground">2.3. Données de Paiement (Abonnement Premium)</h3>
+                        <ul className="list-disc list-inside ml-6 space-y-2">
+                            <li>
+                                <strong>Données :</strong> ID client Stripe (stripeCustomerId), ID d&apos;abonnement Stripe (stripeSubscriptionId), statut Premium (isPremium).
+                                <br />
+                                <strong>Finalité :</strong> Gestion des abonnements Premium, facturation et accès aux fonctionnalités sans publicité.
+                                <br />
+                                <strong>Base Légale :</strong> Exécution du contrat (abonnement).
+                            </li>
+                        </ul>
+                    </div>
+                </div>
+
+                <div>
+                    <h2 className="text-xl font-bold text-primary mb-3">3. Destinataires et Transfert de Données</h2>
+                    <p>Vos données sont transmises aux tiers suivants, uniquement dans la mesure où cela est strictement nécessaire :</p>
+                    <ul className="list-disc list-inside ml-4 space-y-2">
+                        <li>
+                            <strong>Firebase/Google (Authentification et Base de données) :</strong> Pour le stockage sécurisé de votre profil et de vos données de collection.
+                        </li>
+                        <li>
+                            <strong>Stripe, Inc. :</strong> Pour le traitement sécurisé de vos paiements d&apos;abonnement Premium. Nous ne stockons jamais vos informations de carte bancaire.
+                        </li>
+                        <li>
+                            <strong>Google AdSense :</strong> Pour l&apos;affichage de publicités. AdSense utilise des cookies publicitaires et des identifiants (sous réserve de votre consentement via le CMP).
+                        </li>
+                        <li>
+                            <strong>Utilisateurs (Profil Public) :</strong> Votre nom d&apos;affichage, pseudo, avatar, collection, et wishlist sont visibles par vos amis et par la fonction de recherche.
+                        </li>
+                    </ul>
+                </div>
+
+                <div>
+                    <h2 className="text-xl font-bold text-primary mb-3">4. Conservation des Données</h2>
+                    <p>Vos données de profil et de collection sont conservées tant que vous maintenez un compte actif sur MagicWish. En cas de suppression de votre compte, vos données personnelles et de collection seront effacées de nos serveurs, sous réserve des obligations légales de conservation (ex: facturation Stripe).</p>
+                </div>
+
+                <div>
+                    <h2 className="text-xl font-bold text-primary mb-3">5. Vos Droits RGPD</h2>
+                    <p>Conformément au Règlement Général sur la Protection des Données (RGPD), vous disposez des droits suivants concernant vos données :</p>
+                    <ul className="list-disc list-inside ml-4 space-y-2">
+                        <li>Droit d&apos;accès (savoir quelles données nous détenons)</li>
+                        <li>Droit de rectification (corriger les données erronées)</li>
+                        <li>Droit à l&apos;effacement (demander la suppression de vos données)</li>
+                        <li>Droit à la limitation du traitement</li>
+                        <li>Droit d&apos;opposition</li>
+                        <li>Droit à la portabilité (récupérer vos données)</li>
+                    </ul>
+                    <p className="mt-4 text-sm">Pour exercer ces droits, veuillez nous contacter par email à : [Votre adresse email de contact].</p>
+                </div>
+
+                <div>
+                    <h2 className="text-xl font-bold text-primary mb-3">6. Cookies et Gestion du Consentement</h2>
+                    <p>L&apos;Application utilise des cookies fonctionnels. L&apos;utilisation de cookies tiers à des fins publicitaires (Google AdSense) est soumise à votre consentement préalable, recueilli via un outil de gestion du consentement (CMP).</p>
+                </div>
+                
+                {/* Lien vers les Mentions Légales */}
+                <div className="pt-4 border-t border-border">
+                    <p className="text-xs text-muted">
+                        Dernière mise à jour : 13 Décembre 2025. Consultez également nos <Link href="/mentions-legales" className="text-primary hover:underline">Mentions Légales</Link>.
+                    </p>
+                </div>
+            </div>
+        </main>
+    );
+}
+</file>
+
+<file path="components/ConfirmModal.tsx">
+// components/ConfirmModal.tsx
+'use client';
+
+type ConfirmModalProps = {
+  isOpen: boolean;
+  onClose: () => void;
+  onConfirm: () => void;
+  title?: string;
+  message?: string;
+};
+
+export default function ConfirmModal({ 
+  isOpen, 
+  onClose, 
+  onConfirm, 
+  title = "Confirmation", 
+  message = "Êtes-vous sûr de vouloir faire ça ?" 
+}: ConfirmModalProps) {
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
+      <div className="bg-white dark:bg-gray-800 rounded-xl p-6 max-w-sm w-full shadow-2xl border border-gray-100 dark:border-gray-700 animate-in fade-in zoom-in duration-200">
+        <h3 className="text-lg font-bold text-gray-900 dark:text-white mb-2">{title}</h3>
+        <p className="text-gray-500 dark:text-gray-300 mb-6">{message}</p>
+        
+        <div className="flex justify-end gap-3">
+          <button
+            onClick={onClose}
+            className="px-4 py-2 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition"
+          >
+            Annuler
+          </button>
+          <button
+            onClick={() => {
+              onConfirm();
+              onClose();
+            }}
+            className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg font-medium transition shadow-sm"
+          >
+            Supprimer
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+</file>
 
 <file path="eslint.config.mjs">
 import { defineConfig, globalIgnores } from "eslint/config";
@@ -352,7 +1049,6 @@ export async function acceptFriendRequestAction(
 import { getAdminFirestore } from '@/lib/firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
 import { z } from 'zod';
-// Import du schéma partagé pour éviter la duplication
 import { CardSchema } from '@/lib/validators';
 
 // On réutilise CardSchema pour définir la structure de la proposition
@@ -368,7 +1064,24 @@ const ProposalSchema = z.object({
 type ActionResponse = {
   success: boolean;
   error?: string;
+  // Nouveau champ pour indiquer un conflit de proposition
+  proposalConflict?: boolean; 
+  existingTradeId?: string; // ID de la proposition existante
 };
+
+// Fonction utilitaire pour normaliser les cartes pour une comparaison stricte
+const normalizeCards = (cards: z.infer<typeof CardSchema>[]) => 
+    cards
+        .map(c => ({ 
+            id: c.id, 
+            qty: c.quantity, 
+            // Ajout du champ pour la comparaison de version spécifique (Foil/Exact)
+            isFoil: c.isFoil || false,
+            isSpecific: c.isSpecificVersion || false,
+        }))
+        // Trie par ID pour garantir que deux propositions avec le même contenu mais un ordre différent sont considérées comme identiques
+        .sort((a, b) => a.id.localeCompare(b.id));
+
 
 export async function proposeTradeAction(rawData: unknown): Promise<ActionResponse> {
   const db = getAdminFirestore();
@@ -377,13 +1090,55 @@ export async function proposeTradeAction(rawData: unknown): Promise<ActionRespon
     // 1. PARSING & VALIDATION
     const data = ProposalSchema.parse(rawData);
 
-    // 2. VALIDATION MÉTIER SUPPLÉMENTAIRE
-    if (data.itemsGiven.length === 0 && data.itemsReceived.length === 0) {
-      throw new Error("La proposition ne peut pas être vide.");
+    // 2. PRÉPARATION DES HASHES POUR LA COMPARAISON
+    const normalizedGiven = normalizeCards(data.itemsGiven);
+    const normalizedReceived = normalizeCards(data.itemsReceived);
+    
+    // Convertir les objets normalisés en chaîne JSON pour une comparaison stricte
+    const hashGiven = JSON.stringify(normalizedGiven);
+    const hashReceived = JSON.stringify(normalizedReceived);
+
+    // 3. VÉRIFICATION DES DOUBLONS EN COURS (pending)
+    
+    const duplicateQuery = db.collection('trades')
+      .where('senderUid', '==', data.senderUid)
+      .where('receiverUid', '==', data.receiverUid)
+      .where('status', '==', 'pending')
+      .limit(10); 
+
+    const snapshot = await duplicateQuery.get();
+    let existingTradeId: string | null = null;
+    let proposalsAreIdentical = false;
+
+    // Vérification approfondie du contenu
+    snapshot.docs.forEach(doc => {
+      const existingData = doc.data();
+      
+      const existingNormalizedGiven = normalizeCards(existingData.itemsGiven as z.infer<typeof CardSchema>[]);
+      const existingNormalizedReceived = normalizeCards(existingData.itemsReceived as z.infer<typeof CardSchema>[]);
+      
+      const existingHashGiven = JSON.stringify(existingNormalizedGiven);
+      const existingHashReceived = JSON.stringify(existingNormalizedReceived);
+
+      // Comparaison stricte des deux côtés de l'échange
+      if (existingHashGiven === hashGiven && existingHashReceived === hashReceived) {
+          proposalsAreIdentical = true;
+          existingTradeId = doc.id;
+      }
+    });
+
+    // 4. GESTION DU CONFLIT
+    if (proposalsAreIdentical && existingTradeId) {
+        // Renvoie une réponse spéciale pour le client
+        return { 
+            success: false, 
+            error: "Une proposition identique est déjà en attente.", 
+            proposalConflict: true, 
+            existingTradeId
+        };
     }
 
-    // 3. ENREGISTREMENT
-    // Les données sont garanties propres par Zod
+    // 5. ENREGISTREMENT (Si pas de doublon)
     await db.collection('trades').add({
       senderUid: data.senderUid,
       senderName: data.senderName,
@@ -456,6 +1211,20 @@ export async function deleteWishlistAction(userId: string, listId: string): Prom
     
     return { success: false, error: errorMessage };
   }
+}
+</file>
+
+<file path="app/ads-validation/page.tsx">
+// app/ads-validation/page.tsx
+// C'est une page Server Component statique par défaut.
+export default function AdsValidationPage() {
+    return (
+        <div>
+            {/* Petit contenu pour être certain que la page ne soit pas vide */}
+            <h1>Validation Google AdSense</h1>
+            <p>Ce contenu est public pour permettre la vérification du site.</p>
+        </div>
+    );
 }
 </file>
 
@@ -648,56 +1417,6 @@ export default function LoginPage() {
         </div>
       </div>
     </main>
-  );
-}
-</file>
-
-<file path="components/ConfirmModal.tsx">
-// components/ConfirmModal.tsx
-'use client';
-
-type ConfirmModalProps = {
-  isOpen: boolean;
-  onClose: () => void;
-  onConfirm: () => void;
-  title?: string;
-  message?: string;
-};
-
-export default function ConfirmModal({ 
-  isOpen, 
-  onClose, 
-  onConfirm, 
-  title = "Confirmation", 
-  message = "Êtes-vous sûr de vouloir faire ça ?" 
-}: ConfirmModalProps) {
-  if (!isOpen) return null;
-
-  return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
-      <div className="bg-white dark:bg-gray-800 rounded-xl p-6 max-w-sm w-full shadow-2xl border border-gray-100 dark:border-gray-700 animate-in fade-in zoom-in duration-200">
-        <h3 className="text-lg font-bold text-gray-900 dark:text-white mb-2">{title}</h3>
-        <p className="text-gray-500 dark:text-gray-300 mb-6">{message}</p>
-        
-        <div className="flex justify-end gap-3">
-          <button
-            onClick={onClose}
-            className="px-4 py-2 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition"
-          >
-            Annuler
-          </button>
-          <button
-            onClick={() => {
-              onConfirm();
-              onClose();
-            }}
-            className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg font-medium transition shadow-sm"
-          >
-            Supprimer
-          </button>
-        </div>
-      </div>
-    </div>
   );
 }
 </file>
@@ -1268,9 +1987,12 @@ export const CardSchema = z.object({
   setCode: z.string().default(''),
   isFoil: z.boolean().default(false),
   isSpecificVersion: z.boolean().default(false),
-  isForTrade: z.boolean().default(false).optional(),
+  
+  // Remplacement de isForTrade par quantityForTrade
+  quantityForTrade: z.number().int().min(0).default(0).optional(), 
+  
   wishlistId: z.string().nullable().optional(),
-  // On accepte un objet inconnu pour scryfallData, mais on le type proprement
+  lastPriceUpdate: z.union([z.number(), z.date()]).optional(), 
   scryfallData: z.record(z.string(), z.unknown()).nullable().optional()
 });
 
@@ -1288,11 +2010,13 @@ export type ValidatedCard = z.infer<typeof CardSchema>;
 </file>
 
 <file path="next.config.ts">
+// next.config.ts
 import type { NextConfig } from 'next';
 
 const nextConfig: NextConfig = {
-  // Mode strict pour détecter les bugs en dev
-  reactStrictMode: true,
+  // CORRECTION MAJEURE: Désactiver reactStrictMode pour éviter les erreurs 
+  // "Firestore INTERNAL ASSERTION FAILED" dues au Hot Reload/Fast Refresh.
+  reactStrictMode: false, 
 
   // Optimisation des images
   images: {
@@ -1300,13 +2024,13 @@ const nextConfig: NextConfig = {
     remotePatterns: [
       {
         protocol: 'https',
-        hostname: 'cards.scryfall.io', // Indispensable pour tes cartes
+        hostname: 'cards.scryfall.io',
         port: '',
         pathname: '/**',
       },
       {
         protocol: 'https',
-        hostname: '*.googleusercontent.com', // Indispensable pour les avatars Google Auth
+        hostname: '*.googleusercontent.com',
         port: '',
         pathname: '/**',
       },
@@ -1329,6 +2053,10 @@ const nextConfig: NextConfig = {
 };
 
 export default nextConfig;
+</file>
+
+<file path="public/ads.txt">
+google.com, pub-5492732016245735, DIRECT, f08c47fec0942fa0
 </file>
 
 <file path="public/manifest.json">
@@ -7586,7 +8314,7 @@ const ProfileSettingsCard = () => {
                             type="text"
                             value={pseudo}
                             onChange={(e) => setPseudo(e.target.value)}
-                            className="flex-grow p-2 border border-border rounded-lg bg-background text-foreground"
+                            className="grow p-2 border border-border rounded-lg bg-background text-foreground"
                             disabled={isLoading}
                         />
                         <button 
@@ -8210,7 +8938,7 @@ export async function POST(req: Request) {
 // app/trades/new/[uid]/page.tsx
 'use client';
 
-import { useState, use, useEffect } from 'react';
+import { useState, use, useEffect, useTransition } from 'react'; // Ajout de useTransition
 import { useAuth } from '@/lib/AuthContext';
 import { useCardCollection, CardType } from '@/hooks/useCardCollection';
 import { useTradeSystem } from '@/hooks/useTradeSystem';
@@ -8226,6 +8954,7 @@ export default function DirectTradePage({ params }: { params: Promise<{ uid: str
   const { user } = useAuth();
   const router = useRouter();
   const { proposeTrade } = useTradeSystem();
+  const [isPending, startTransition] = useTransition(); // Ajout de useTransition pour le blocage
 
   // --- CHARGEMENT ---
   const { cards: myCollection, loading: loadingMe } = useCardCollection('collection');
@@ -8253,7 +8982,10 @@ export default function DirectTradePage({ params }: { params: Promise<{ uid: str
     const targetList = listType === 'give' ? toGive : toReceive;
     const setTarget = listType === 'give' ? setToGive : setToReceive;
     const existing = targetList.find(c => c.id === card.id);
-    const maxStock = card.quantity;
+    
+    // CORRECTION : On utilise quantityForTrade pour le stock Max
+    const maxStock = listType === 'give' ? (card.quantityForTrade ?? 0) : card.quantity; 
+    
     const currentSelected = existing ? existing.quantity : 0;
 
     if (currentSelected < maxStock) {
@@ -8263,7 +8995,7 @@ export default function DirectTradePage({ params }: { params: Promise<{ uid: str
             setTarget(prev => [...prev, { ...card, quantity: 1 }]);
         }
     } else {
-        toast.error("Stock maximum atteint");
+        toast.error(`Stock maximum à échanger atteint (${maxStock}x)`);
     }
   };
 
@@ -8272,10 +9004,13 @@ export default function DirectTradePage({ params }: { params: Promise<{ uid: str
     setTarget(prev => prev.filter(c => c.id !== cardId));
   };
 
-  const handlePropose = async () => {
+  const handlePropose = () => {
     if (toGive.length === 0 && toReceive.length === 0) return;
-    const success = await proposeTrade(targetUid, targetName, toGive, toReceive);
-    if (success) router.push('/trades'); 
+    
+    startTransition(async () => {
+        const success = await proposeTrade(targetUid, targetName, toGive, toReceive);
+        if (success) router.push('/trades');
+    });
   };
 
   // CALCULS
@@ -8283,18 +9018,18 @@ export default function DirectTradePage({ params }: { params: Promise<{ uid: str
   const valReceive = toReceive.reduce((acc, c) => acc + (c.customPrice ?? c.price ?? 0) * c.quantity, 0);
   const balance = valGive - valReceive;
 
-  if (!user) return <div className="p-10 text-center">Connexion requise.</div>;
+  if (!user) return <div className="p-10 text-center text-muted">Connexion requise.</div>;
 
   return (
     <div className="container mx-auto p-4 h-[calc(100vh-64px)] flex flex-col">
         
         {/* HEADER */}
         <div className="flex-none flex items-center gap-4 mb-4">
-            <button onClick={() => router.back()} className="text-gray-500 hover:text-gray-700 bg-gray-100 px-3 py-1 rounded-lg text-sm">
+            <button onClick={() => router.back()} className="text-muted hover:text-foreground bg-secondary px-3 py-1 rounded-lg text-sm">
                 ← Retour
             </button>
-            <h1 className="text-2xl font-bold truncate">
-                Échange avec <span className="text-blue-600">{targetName}</span>
+            <h1 className="text-2xl font-bold truncate text-foreground">
+                Échange avec <span className="text-primary">{targetName}</span>
             </h1>
         </div>
 
@@ -8302,13 +9037,13 @@ export default function DirectTradePage({ params }: { params: Promise<{ uid: str
         <div className="grid lg:grid-cols-2 gap-6 grow overflow-hidden pb-24">
             
             {/* --- COLONNE GAUCHE (MOI) --- */}
-            <div className="flex flex-col h-full bg-red-50/50 dark:bg-red-900/10 rounded-xl border border-red-100 dark:border-red-900 overflow-hidden relative shadow-sm">
+            <div className="flex flex-col h-full bg-danger/5 rounded-xl border border-danger/20 overflow-hidden relative shadow-sm">
                 <div className="p-4 pb-0 flex-none">
-                     <h2 className="font-bold text-red-600 mb-2">📤 Je donne (Ma Collection)</h2>
+                     <h2 className="font-bold text-danger mb-2">📤 Je donne (Ma Collection)</h2>
                      <input 
                         type="text" 
                         placeholder="Filtrer ma collection..." 
-                        className="w-full p-2 mb-2 rounded border dark:bg-gray-800 dark:text-white dark:border-gray-600 text-sm"
+                        className="w-full p-2 mb-2 rounded border border-border bg-surface text-foreground text-sm focus:ring-2 focus:ring-danger outline-none"
                         value={searchMe}
                         onChange={e => setSearchMe(e.target.value)}
                     />
@@ -8319,14 +9054,14 @@ export default function DirectTradePage({ params }: { params: Promise<{ uid: str
                     
                     {/* SÉLECTIONNÉS */}
                     {toGive.length > 0 && (
-                        <div className="bg-white dark:bg-gray-800 rounded-lg border border-red-200 dark:border-red-800 overflow-hidden">
-                            <div className="bg-red-100 dark:bg-red-900/30 px-3 py-1 text-xs font-bold text-red-700 dark:text-red-300">
+                        <div className="bg-surface rounded-lg border border-danger/30 overflow-hidden">
+                            <div className="bg-danger/10 px-3 py-1 text-xs font-bold text-danger">
                                 SÉLECTION ({toGive.reduce((a,c)=>a+c.quantity,0)})
                             </div>
                             {toGive.map(card => (
-                                <div key={card.id} className="flex justify-between items-center text-sm p-2 border-b dark:border-gray-700 last:border-0 hover:bg-gray-50 dark:hover:bg-gray-700/50">
-                                    <span className="truncate">{card.quantity}x {card.name}</span>
-                                    <button onClick={() => handleRemoveCard(card.id, 'give')} className="text-red-500 hover:bg-red-50 rounded px-2">✕</button>
+                                <div key={card.id} className="flex justify-between items-center text-sm p-2 border-b border-border last:border-0 hover:bg-secondary/50">
+                                    <span className="truncate text-foreground">{card.quantity}x {card.name}</span>
+                                    <button onClick={() => handleRemoveCard(card.id, 'give')} className="text-danger hover:bg-danger/10 rounded px-2">✕</button>
                                 </div>
                             ))}
                         </div>
@@ -8334,23 +9069,26 @@ export default function DirectTradePage({ params }: { params: Promise<{ uid: str
 
                     {/* DISPONIBLES */}
                     <div className="space-y-1">
-                        <p className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Mon Classeur d&apos;échange</p>
-                        {loadingMe ? <p className="text-sm">Chargement...</p> : 
+                        <p className="text-xs font-bold text-muted uppercase tracking-wider mb-2">Mon Classeur d&apos;échange</p>
+                        {loadingMe ? <p className="text-sm text-muted">Chargement...</p> : 
                             myCollection
-                                .filter(c => c.isForTrade) // <--- FILTRE AJOUTÉ ICI
+                                .filter(c => (c.quantityForTrade ?? 0) > 0) // CORRECTION : Filtre sur quantityForTrade
                                 .filter(c => c.name.toLowerCase().includes(searchMe.toLowerCase()))
                                 .slice(0, 50) 
                                 .map(card => (
-                                    <div key={card.id} onClick={() => handleSelectCard(card, 'give')} className="cursor-pointer bg-white dark:bg-gray-800/50 hover:bg-red-100 dark:hover:bg-red-900/30 p-2 rounded flex items-center gap-2 border border-transparent hover:border-red-200 transition shadow-sm group">
-                                        <div className="w-8 h-11 bg-gray-200 rounded shrink-0 overflow-hidden relative">
+                                    <div key={card.id} onClick={() => handleSelectCard(card, 'give')} className="cursor-pointer bg-surface hover:bg-danger/10 p-2 rounded flex items-center gap-2 border border-transparent hover:border-danger/20 transition shadow-sm group">
+                                        <div className="w-8 h-11 bg-secondary rounded shrink-0 overflow-hidden relative">
                                             <img src={card.imageUrl} className="w-full h-full object-cover" alt="" />
-                                            {card.isForTrade && <div className="absolute bottom-0 right-0 bg-green-500 text-white text-[8px] px-1">🤝</div>}
+                                            {/* CORRECTION : Utilise quantityForTrade dans le badge */}
+                                            <div className="absolute bottom-0 right-0 bg-success text-white text-[8px] px-1">
+                                                🤝 {card.quantityForTrade}x
+                                            </div>
                                         </div>
                                         <div className="grow min-w-0">
-                                            <p className="font-bold text-xs truncate dark:text-gray-200">{card.name}</p>
-                                            <p className="text-[10px] text-gray-500">{card.setName} - Dispo: {card.quantity}</p>
+                                            <p className="font-bold text-xs truncate text-foreground">{card.name}</p>
+                                            <p className="text-[10px] text-muted">{card.setName} - Dispo: {card.quantityForTrade ?? 0} ({card.quantity} total)</p>
                                         </div>
-                                        <span className="text-xs font-bold text-gray-400 group-hover:text-red-500 transition-colors shrink-0">+</span>
+                                        <span className="text-xs font-bold text-muted group-hover:text-danger transition-colors shrink-0">+</span>
                                     </div>
                                 ))
                         }
@@ -8358,20 +9096,20 @@ export default function DirectTradePage({ params }: { params: Promise<{ uid: str
                 </div>
 
                 {/* TOTAL COLONNE GAUCHE (Fixe en bas de colonne) */}
-                <div className="flex-none bg-red-50 dark:bg-red-900/20 p-3 border-t border-red-100 dark:border-red-900 text-center">
-                    <span className="text-xs text-red-600 dark:text-red-400 font-bold uppercase">Total Donné</span>
-                    <div className="text-xl font-bold text-red-700 dark:text-red-300">{valGive.toFixed(2)} €</div>
+                <div className="flex-none bg-danger/10 p-3 border-t border-danger/20 text-center">
+                    <span className="text-xs text-danger font-bold uppercase">Total Donné</span>
+                    <div className="text-xl font-bold text-danger">{valGive.toFixed(2)} €</div>
                 </div>
             </div>
 
             {/* --- COLONNE DROITE (AMI) --- */}
-            <div className="flex flex-col h-full bg-blue-50/50 dark:bg-blue-900/10 rounded-xl border border-blue-100 dark:border-blue-900 overflow-hidden relative shadow-sm">
+            <div className="flex flex-col h-full bg-success/5 rounded-xl border border-success/20 overflow-hidden relative shadow-sm">
                 <div className="p-4 pb-0 flex-none">
-                    <h2 className="font-bold text-blue-600 mb-2">📥 Je reçois (Sa Collection)</h2>
+                    <h2 className="font-bold text-success mb-2">📥 Je reçois (Sa Collection)</h2>
                     <input 
                         type="text" 
                         placeholder={`Filtrer chez ${targetName}...`}
-                        className="w-full p-2 mb-2 rounded border dark:bg-gray-800 dark:text-white dark:border-gray-600 text-sm"
+                        className="w-full p-2 mb-2 rounded border border-border bg-surface text-foreground text-sm focus:ring-2 focus:ring-success outline-none"
                         value={searchHim}
                         onChange={e => setSearchHim(e.target.value)}
                     />
@@ -8381,14 +9119,14 @@ export default function DirectTradePage({ params }: { params: Promise<{ uid: str
                 <div className="grow overflow-y-auto custom-scrollbar p-4 pt-0 space-y-4">
                      {/* SÉLECTIONNÉS */}
                      {toReceive.length > 0 && (
-                        <div className="bg-white dark:bg-gray-800 rounded-lg border border-blue-200 dark:border-blue-800 overflow-hidden">
-                            <div className="bg-blue-100 dark:bg-blue-900/30 px-3 py-1 text-xs font-bold text-blue-700 dark:text-blue-300">
+                        <div className="bg-surface rounded-lg border border-success/30 overflow-hidden">
+                            <div className="bg-success/10 px-3 py-1 text-xs font-bold text-success">
                                 SÉLECTION ({toReceive.reduce((a,c)=>a+c.quantity,0)})
                             </div>
                             {toReceive.map(card => (
-                                <div key={card.id} className="flex justify-between items-center text-sm p-2 border-b dark:border-gray-700 last:border-0 hover:bg-gray-50 dark:hover:bg-gray-700/50">
-                                    <span className="truncate">{card.quantity}x {card.name}</span>
-                                    <button onClick={() => handleRemoveCard(card.id, 'receive')} className="text-red-500 hover:bg-red-50 rounded px-2">✕</button>
+                                <div key={card.id} className="flex justify-between items-center text-sm p-2 border-b border-border last:border-0 hover:bg-secondary/50">
+                                    <span className="truncate text-foreground">{card.quantity}x {card.name}</span>
+                                    <button onClick={() => handleRemoveCard(card.id, 'receive')} className="text-danger hover:bg-danger/10 rounded px-2">✕</button>
                                 </div>
                             ))}
                         </div>
@@ -8396,23 +9134,26 @@ export default function DirectTradePage({ params }: { params: Promise<{ uid: str
 
                     {/* DISPONIBLES */}
                     <div className="space-y-1">
-                        <p className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Son Classeur d&apos;échange</p>
-                        {loadingHim ? <p className="text-sm">Chargement...</p> : 
+                        <p className="text-xs font-bold text-muted uppercase tracking-wider mb-2">Son Classeur d&apos;échange</p>
+                        {loadingHim ? <p className="text-sm text-muted">Chargement...</p> : 
                             friendCollection
-                                .filter(c => c.isForTrade) // FILTRE DÉJÀ PRÉSENT
+                                .filter(c => (c.quantityForTrade ?? 0) > 0) // CORRECTION : Filtre sur quantityForTrade
                                 .filter(c => c.name.toLowerCase().includes(searchHim.toLowerCase()))
                                 .slice(0, 50)
                                 .map(card => (
-                                    <div key={card.id} onClick={() => handleSelectCard(card, 'receive')} className="cursor-pointer bg-white dark:bg-gray-800/50 hover:bg-blue-100 dark:hover:bg-blue-900/30 p-2 rounded flex items-center gap-2 border border-transparent hover:border-blue-200 transition shadow-sm group">
-                                        <div className="w-8 h-11 bg-gray-200 rounded shrink-0 overflow-hidden relative">
+                                    <div key={card.id} onClick={() => handleSelectCard(card, 'receive')} className="cursor-pointer bg-surface hover:bg-success/10 p-2 rounded flex items-center gap-2 border border-transparent hover:border-success/20 transition shadow-sm group">
+                                        <div className="w-8 h-11 bg-secondary rounded shrink-0 overflow-hidden relative">
                                             <img src={card.imageUrl} className="w-full h-full object-cover" alt="" />
-                                            <div className="absolute bottom-0 right-0 bg-green-500 text-white text-[8px] px-1">🤝</div>
+                                            {/* CORRECTION : Utilise quantityForTrade dans le badge */}
+                                            <div className="absolute bottom-0 right-0 bg-success text-white text-[8px] px-1">
+                                                🤝 {card.quantityForTrade}x
+                                            </div>
                                         </div>
                                         <div className="grow min-w-0">
-                                            <p className="font-bold text-xs truncate dark:text-gray-200">{card.name}</p>
-                                            <p className="text-[10px] text-gray-500">{card.setName} - Dispo: {card.quantity}</p>
+                                            <p className="font-bold text-xs truncate text-foreground">{card.name}</p>
+                                            <p className="text-[10px] text-muted">{card.setName} - Dispo: {card.quantityForTrade ?? 0}</p>
                                         </div>
-                                        <span className="text-xs font-bold text-gray-400 group-hover:text-blue-500 transition-colors shrink-0">+</span>
+                                        <span className="text-xs font-bold text-muted group-hover:text-success transition-colors shrink-0">+</span>
                                     </div>
                                 ))
                         }
@@ -8420,23 +9161,23 @@ export default function DirectTradePage({ params }: { params: Promise<{ uid: str
                 </div>
 
                 {/* TOTAL COLONNE DROITE (Fixe en bas de colonne) */}
-                <div className="flex-none bg-blue-50 dark:bg-blue-900/20 p-3 border-t border-blue-100 dark:border-blue-900 text-center">
-                    <span className="text-xs text-blue-600 dark:text-blue-400 font-bold uppercase">Total Reçu</span>
-                    <div className="text-xl font-bold text-blue-700 dark:text-blue-300">{valReceive.toFixed(2)} €</div>
+                <div className="flex-none bg-success/10 p-3 border-t border-success/20 text-center">
+                    <span className="text-xs text-success font-bold uppercase">Total Reçu</span>
+                    <div className="text-xl font-bold text-success">{valReceive.toFixed(2)} €</div>
                 </div>
             </div>
         </div>
 
         {/* FOOTER PRINCIPAL AVEC BALANCE CENTRÉE */}
-        <div className="fixed bottom-0 left-0 right-0 h-20 bg-white dark:bg-gray-900 border-t dark:border-gray-800 flex items-center px-6 z-40 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)]">
+        <div className="fixed bottom-0 left-0 right-0 h-20 bg-surface border-t border-border flex items-center px-6 z-40 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)]">
             
             {/* Espace vide à gauche pour l'équilibre */}
             <div className="flex-1"></div>
 
             {/* BALANCE CENTRALE */}
             <div className="flex-1 flex flex-col items-center justify-center">
-                <span className="text-xs text-gray-400 font-bold uppercase tracking-widest">Valeur Résiduelle</span>
-                <div className={`text-2xl font-black ${balance >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                <span className="text-xs text-muted font-bold uppercase tracking-widest">Valeur Résiduelle</span>
+                <div className={`text-2xl font-black ${balance >= 0 ? 'text-success' : 'text-danger'}`}>
                     {balance > 0 ? '+' : ''}{balance.toFixed(2)} €
                 </div>
             </div>
@@ -8445,81 +9186,14 @@ export default function DirectTradePage({ params }: { params: Promise<{ uid: str
             <div className="flex-1 flex justify-end">
                 <button 
                     onClick={handlePropose}
-                    disabled={toGive.length === 0 && toReceive.length === 0}
-                    className="bg-purple-600 hover:bg-purple-700 text-white px-8 py-3 rounded-xl font-bold disabled:opacity-50 transition shadow-lg transform active:scale-95 flex items-center gap-2"
+                    disabled={isPending || (toGive.length === 0 && toReceive.length === 0)}
+                    className="bg-primary hover:opacity-90 text-primary-foreground px-8 py-3 rounded-xl font-bold disabled:opacity-50 transition shadow-lg transform active:scale-95 flex items-center gap-2"
                 >
-                    <span>🚀</span> Proposer
+                    <span>🚀</span> {isPending ? 'Envoi...' : 'Proposer'}
                 </button>
             </div>
         </div>
 
-    </div>
-  );
-}
-</file>
-
-<file path="components/AdContainer.tsx">
-// Fichier : components/AdContainer.tsx
-'use client';
-import { usePremium } from '@/hooks/usePremium';
-import Link from 'next/link';
-import { useEffect } from 'react'; // <-- Correctement importé
-
-// Type pour les paramètres passés aux endroits où la pub s'affiche
-type Props = {
-    message?: string;
-    adSlotId?: string; 
-};
-
-export default function AdContainer({ message = "Publicité", adSlotId = "YOUR_ADSENSE_SLOT_ID" }: Props) {
-  const { isPremium, loading } = usePremium();
-
-  // Déclencher le rafraîchissement AdSense après le rendu
-  useEffect(() => {
-
-    const win = window as typeof window & { adsbygoogle?: unknown[] };
-
-    if (!isPremium && win.adsbygoogle && Array.isArray(win.adsbygoogle)) {
-      try {
-        win.adsbygoogle.push({}); 
-      } catch (e) {
-        console.warn("Erreur chargement AdSense", e);
-      }
-    }
-  }, [isPremium, adSlotId]);
-
-
-  // Conditionnel : ne pas charger si Premium, si en chargement, ou si l'ID n'est pas fourni
-  if (loading || isPremium || !process.env.NEXT_PUBLIC_ADSENSE_PUB_ID) return null;
-
-  return (
-    <div className="w-full my-6 animate-in fade-in slide-in-from-bottom-4 duration-700">
-        <div className="bg-surface border-2 border-dashed border-primary/30 rounded-xl p-4 flex flex-col items-center justify-center text-center relative overflow-hidden group">
-            
-            <div className="relative z-10 w-full">
-                <p className="text-xs font-bold text-muted uppercase tracking-widest mb-2">{message}</p>
-                
-                {/* BLOC DE CODE ADSENSE */}
-                <div className="w-full flex justify-center min-h-[100px] mb-2">
-                  <ins 
-                    className="adsbygoogle"
-                    style={{ display: 'block', width: '100%', minHeight: '100px' }}
-                    data-ad-client={process.env.NEXT_PUBLIC_ADSENSE_PUB_ID}
-                    data-ad-slot={adSlotId}
-                    data-ad-format="auto"
-                    data-full-width-responsive="true"
-                  ></ins>
-                </div>
-                {/* FIN DU BLOC ADSENSE */}
-
-                <Link 
-                    href="/premium" 
-                    className="inline-block bg-primary hover:opacity-90 text-primary-foreground px-6 py-2 rounded-full text-xs font-bold shadow-md transition transform active:scale-95"
-                >
-                    Retirer les pubs (1€/mois)
-                </Link>
-            </div>
-        </div>
     </div>
   );
 }
@@ -8850,6 +9524,73 @@ export function usePremium() {
 }
 </file>
 
+<file path="components/AdContainer.tsx">
+// Fichier : components/AdContainer.tsx
+'use client';
+import { usePremium } from '@/hooks/usePremium';
+import Link from 'next/link';
+import { useEffect } from 'react'; // <-- Correctement importé
+
+// Type pour les paramètres passés aux endroits où la pub s'affiche
+type Props = {
+    message?: string;
+    adSlotId?: string; 
+};
+
+export default function AdContainer({ message = "Publicité", adSlotId = "YOUR_ADSENSE_SLOT_ID" }: Props) {
+  const { isPremium, loading } = usePremium();
+
+  // Déclencher le rafraîchissement AdSense après le rendu
+  useEffect(() => {
+
+    const win = window as typeof window & { adsbygoogle?: unknown[] };
+
+    if (!isPremium && win.adsbygoogle && Array.isArray(win.adsbygoogle)) {
+      try {
+        win.adsbygoogle.push({}); 
+      } catch (e) {
+        console.warn("Erreur chargement AdSense", e);
+      }
+    }
+  }, [isPremium, adSlotId]);
+
+
+  // Conditionnel : ne pas charger si Premium, si en chargement, ou si l'ID n'est pas fourni
+  if (loading || isPremium || !process.env.NEXT_PUBLIC_ADSENSE_PUB_ID) return null;
+
+  return (
+    <div className="w-full my-6 animate-in fade-in slide-in-from-bottom-4 duration-700">
+        <div className="bg-surface border-2 border-dashed border-primary/30 rounded-xl p-4 flex flex-col items-center justify-center text-center relative overflow-hidden group">
+            
+            <div className="relative z-10 w-full">
+                <p className="text-xs font-bold text-muted uppercase tracking-widest mb-2">{message}</p>
+                
+                {/* BLOC DE CODE ADSENSE */}
+                <div className="w-full flex justify-center min-h-[100px] mb-2">
+                  <ins 
+                    className="adsbygoogle"
+                    style={{ display: 'block', width: '100%', minHeight: '100px' }}
+                    data-ad-client={process.env.NEXT_PUBLIC_ADSENSE_PUB_ID}
+                    data-ad-slot={adSlotId}
+                    data-ad-format="auto"
+                    data-full-width-responsive="true"
+                  ></ins>
+                </div>
+                {/* FIN DU BLOC ADSENSE */}
+
+                <Link 
+                    href="/premium" 
+                    className="inline-block bg-primary hover:opacity-90 text-primary-foreground px-6 py-2 rounded-full text-xs font-bold shadow-md transition transform active:scale-95"
+                >
+                    Retirer les pubs (1€/mois)
+                </Link>
+            </div>
+        </div>
+    </div>
+  );
+}
+</file>
+
 <file path="hooks/useFriends.ts">
 // hooks/useFriends.ts
 import { useState, useEffect } from 'react';
@@ -9122,68 +9863,41 @@ export const normalizeCardData = (data: ScryfallRawData) => {
 };
 </file>
 
-<file path="app/layout.tsx">
-import type { Metadata } from 'next';
-import { Inter } from 'next/font/google';
-import './globals.css';
-import { AuthProvider } from '@/lib/AuthContext';
-import { ThemeProvider } from '@/components/ThemeProvider';
-import Header from '@/components/Header'; 
-import { Toaster } from 'react-hot-toast';
-import UsernameSetupModal from '@/components/UsernameSetupModal'; 
-import Script from 'next/script'; // Import de Script pour AdSense
-
-const inter = Inter({ subsets: ['latin'] });
-
-export const metadata: Metadata = {
-  title: 'MagicWish',
-  description: 'Gérez vos cartes Pokémon, Yu-Gi-Oh! et Magic the Gathering',
-};
-// ---------------------------------------------------
-
-export default function RootLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
-  // On s'assure que les publicités ne s'affichent qu'en production 
-  // et seulement si l'ID AdSense est configuré.
-  const isProd = process.env.NODE_ENV === 'production';
-  const adsensePubId = process.env.NEXT_PUBLIC_ADSENSE_PUB_ID;
-
-  return (
-    <html lang="fr" suppressHydrationWarning>
-      
-      {/* SCRIPT GOOGLE ADSENSE (Intégré dans le HEAD de la page) */}
-      {isProd && adsensePubId && (
-        <Script
-          async
-          // Utilise l'ID de publication de la variable d'environnement
-          src={`https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=${adsensePubId}`}
-          // 'afterInteractive' est une bonne stratégie pour les scripts publicitaires
-          strategy="afterInteractive" 
-          crossOrigin="anonymous"
-        />
-      )}
-      {/* FIN SCRIPT ADSENSE */}
-
-      <body className={inter.className}>
-        <ThemeProvider 
-            attribute="class" 
-            defaultTheme="light" 
-            enableSystem={false} 
-            disableTransitionOnChange 
-        >
-          <AuthProvider>
-            <Header />
-            {children}
-            <UsernameSetupModal />
-            <Toaster position="bottom-right" />
-          </AuthProvider>
-        </ThemeProvider>
-      </body>
-    </html>
-  );
+<file path="package.json">
+{
+  "name": "magicwish",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint"
+  },
+  "dependencies": {
+    "@types/papaparse": "^5.5.1",
+    "firebase": "^12.5.0",
+    "firebase-admin": "^13.6.0",
+    "next": "^16.0.8",
+    "next-themes": "^0.4.6",
+    "papaparse": "^5.5.3",
+    "react": "^19.2.1",
+    "react-dom": "^19.2.1",
+    "react-hot-toast": "^2.6.0",
+    "stripe": "^20.0.0",
+    "zod": "^4.1.13"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "babel-plugin-react-compiler": "1.0.0",
+    "eslint": "^9",
+    "eslint-config-next": "16.0.3",
+    "tailwindcss": "^4",
+    "typescript": "^5"
+  }
 }
 </file>
 
@@ -9450,44 +10164,6 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     </AuthContext.Provider>
   );
 };
-</file>
-
-<file path="package.json">
-{
-  "name": "magicwish",
-  "version": "0.1.0",
-  "private": true,
-  "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
-    "lint": "eslint"
-  },
-  "dependencies": {
-    "@types/papaparse": "^5.5.1",
-    "firebase": "^12.5.0",
-    "firebase-admin": "^13.6.0",
-    "next": "^16.0.8",
-    "next-themes": "^0.4.6",
-    "papaparse": "^5.5.3",
-    "react": "^19.2.1",
-    "react-dom": "^19.2.1",
-    "react-hot-toast": "^2.6.0",
-    "stripe": "^20.0.0",
-    "zod": "^4.1.13"
-  },
-  "devDependencies": {
-    "@tailwindcss/postcss": "^4",
-    "@types/node": "^20",
-    "@types/react": "^19",
-    "@types/react-dom": "^19",
-    "babel-plugin-react-compiler": "1.0.0",
-    "eslint": "^9",
-    "eslint-config-next": "16.0.3",
-    "tailwindcss": "^4",
-    "typescript": "^5"
-  }
-}
 </file>
 
 <file path="app/globals.css">
@@ -9760,6 +10436,108 @@ export default function SearchPage() {
 }
 </file>
 
+<file path="app/layout.tsx">
+// app/layout.tsx
+import type { Metadata } from 'next';
+import { Inter } from 'next/font/google';
+import './globals.css';
+import { AuthProvider } from '@/lib/AuthContext';
+import { ThemeProvider } from '@/components/ThemeProvider';
+import Header from '@/components/Header'; 
+import { Toaster } from 'react-hot-toast';
+import UsernameSetupModal from '@/components/UsernameSetupModal'; 
+import Script from 'next/script'; 
+
+const inter = Inter({ subsets: ['latin'] });
+
+// 1. Récupération des IDs depuis l'environnement
+const adsensePubId = process.env.NEXT_PUBLIC_ADSENSE_PUB_ID; 
+const cmpMessageId = process.env.NEXT_PUBLIC_CMP_MESSAGE_ID; 
+
+export const metadata: Metadata = {
+  title: 'MagicWish',
+  description: 'Gérez vos cartes Pokémon, Yu-Gi-Oh! et Magic the Gathering',
+
+  // Balise Méta de vérification (gardée pour la propreté)
+  verification: adsensePubId ? {
+      google: adsensePubId 
+  } : undefined,
+};
+
+export default function RootLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  const isProd = process.env.NODE_ENV === 'production';
+  // L'ID du CMP sans le préfixe 'pub-'
+  const cleanPubId = adsensePubId?.replace('pub-', ''); 
+  // L'ID de l'extrait du script CMP (souvent le pubId sans préfixe ou un ID spécifique)
+  const dataId = cmpMessageId || cleanPubId; 
+
+  return (
+    <html lang="fr" suppressHydrationWarning>
+      
+      {/* 1. SCRIPT DE GESTION DU CONSENTEMENT (CMP) - DOIT ÊTRE EN PREMIER */}
+      {(isProd && adsensePubId && dataId) && (
+        <>
+          <Script
+            // Premier extrait : Charge le message CMP 
+            async
+            src={`https://fundingchoicesmessages.google.com/i/${cleanPubId}?hl=fr`}
+            data-id={dataId!} 
+            strategy="beforeInteractive" 
+            crossOrigin="anonymous"
+          />
+          <Script
+            // Deuxième extrait : Démarre le CMP
+            id="cmp-starter-script"   // <--- CORRECTION next/script ID
+            strategy="beforeInteractive"
+            dangerouslySetInnerHTML={{
+              __html: `
+                (function(){
+                  var s = document.createElement('script'); 
+                  s.async = true; 
+                  s.src = 'https://fundingchoicesmessages.google.com/start.js?id=${adsensePubId}';
+                  document.head.appendChild(s);
+                })();
+              `,
+            }}
+          />
+        </>
+      )}
+
+      {/* 2. SCRIPT GOOGLE ADSENSE (Pour l'affichage des publicités) - DOIT ÊTRE EN SECOND */}
+      {isProd && adsensePubId && (
+        <Script
+          async
+          src={`https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=${adsensePubId}`}
+          strategy="beforeInteractive" 
+          crossOrigin="anonymous"
+        />
+      )}
+      {/* FIN SCRIPT ADSENSE */}
+
+      <body className={inter.className}>
+        <ThemeProvider 
+            attribute="class" 
+            defaultTheme="light" 
+            enableSystem={false} 
+            disableTransitionOnChange 
+        >
+          <AuthProvider>
+            <Header />
+            {children}
+            <UsernameSetupModal />
+            <Toaster position="bottom-right" />
+          </AuthProvider>
+        </ThemeProvider>
+      </body>
+    </html>
+  );
+}
+</file>
+
 <file path="hooks/useTradeMatcher.ts">
 // hooks/useTradeMatcher.ts
 import { useState } from 'react';
@@ -9801,28 +10579,21 @@ export function useTradeMatcher() {
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("");
 
-  // --- 1. CHARGEMENT OPTIMISÉ (Avec filtrage 'isForTrade' côté serveur) ---
+  // --- 1. CHARGEMENT OPTIMISÉ ---
   const fetchCardsAsMap = async (
       uid: string, 
       mode: 'collection' | 'wishlist', 
       userLists: WishlistMeta[] = [],
-      onlyTradeable: boolean = false // <--- Nouveau paramètre d'optimisation
+      // 'onlyTradeable' est retiré ou non utilisé ici car le filtre se fait côté client/mémoire
   ) => {
     const cardsMap = new Map<string, CardType>();
 
     try {
         if (mode === 'collection') {
             const colRef = collection(db, 'users', uid, 'collection');
-            
-            // OPTIMISATION : Si on ne veut que les échanges, on filtre via Firestore (économie de lectures)
-            let q;
-            if (onlyTradeable) {
-                q = query(colRef, where('isForTrade', '==', true));
-            } else {
-                q = colRef;
-            }
-
-            const snap = await getDocs(q);
+            // Retrait de la query where('isForTrade', '==', true) 
+            // pour charger toutes les cartes et filtrer sur quantityForTrade plus tard.
+            const snap = await getDocs(colRef);
             snap.forEach(d => cardsMap.set(d.id, { id: d.id, ...d.data() } as CardType));
         } else {
             // Charge la liste par défaut
@@ -9855,24 +10626,38 @@ export function useTradeMatcher() {
     return cardsMap;
   };
 
-  // --- 2. MISE À JOUR PRIX CIBLÉE (CORRIGÉE & STRICTE) ---
+  // --- 2. MISE À JOUR PRIX CIBLÉE (TTL 48h) ---
   const refreshPricesForProposals = async (currentProposals: TradeProposal[], myUid: string) => {
+     
+     // Logique TTL de 48 heures
+     const FORTY_EIGHT_HOURS_MS = 48 * 60 * 60 * 1000;
+     const NOW = Date.now();
+
      // On extrait toutes les cartes uniques impliquées
-     const cardsToUpdateMap = new Map<string, { card: CardType, ownerUid: string, collection: string }>();
+     const cardsToCheckMap = new Map<string, { card: CardType, ownerUid: string, collection: string }>();
 
      currentProposals.forEach(p => {
-         // IMPORTANT: On ne mettra pas à jour les cartes de l'ami ici car on n'a pas les droits d'écriture
-         p.toReceive.forEach(c => cardsToUpdateMap.set(`${p.friend.uid}_${c.id}`, { card: c, ownerUid: p.friend.uid, collection: 'collection' }));
-         p.toGive.forEach(c => cardsToUpdateMap.set(`${myUid}_${c.id}`, { card: c, ownerUid: myUid, collection: 'collection' }));
+         // Mes cartes à donner
+         p.toGive.forEach(c => cardsToCheckMap.set(`${myUid}_${c.id}`, { card: c, ownerUid: myUid, collection: 'collection' }));
+         // Cartes de l'ami à recevoir
+         p.toReceive.forEach(c => cardsToCheckMap.set(`${p.friend.uid}_${c.id}`, { card: c, ownerUid: p.friend.uid, collection: 'collection' }));
      });
 
-     const updatesArray = Array.from(cardsToUpdateMap.values());
-     if (updatesArray.length === 0) return;
+     const updatesArray = Array.from(cardsToCheckMap.values());
+     
+     // FILTRER SEULEMENT LES CARTES VIEILLES DE + DE 48H
+     const cardsToUpdate = updatesArray.filter(item => {
+         const lastUpdateMS = item.card.lastPriceUpdate instanceof Date ? item.card.lastPriceUpdate.getTime() : 0;
+         const freshness = NOW - lastUpdateMS;
+         return freshness > FORTY_EIGHT_HOURS_MS;
+     });
+
+     if (cardsToUpdate.length === 0) return;
 
      // On traite par paquets de 75 (limite Scryfall)
      const chunks = [];
-     for (let i = 0; i < updatesArray.length; i += 75) {
-         chunks.push(updatesArray.slice(i, i + 75));
+     for (let i = 0; i < cardsToUpdate.length; i += 75) {
+         chunks.push(cardsToUpdate.slice(i, i + 75));
      }
 
      const batch = writeBatch(db); 
@@ -9880,7 +10665,6 @@ export function useTradeMatcher() {
 
      for (const chunk of chunks) {
          try {
-             // On ne demande à Scryfall que les IDs
              const identifiers = chunk.map(item => ({ id: item.card.id }));
              
              const res = await fetch('https://api.scryfall.com/cards/collection', {
@@ -9891,27 +10675,26 @@ export function useTradeMatcher() {
 
              if (!res.ok) continue;
 
-             // Typage strict de la réponse
              const data = await res.json() as ScryfallCollectionResponse;
              const foundCards = data.data || [];
 
              foundCards.forEach(scryCard => {
                  const newPrice = parseFloat(scryCard.prices.eur || "0");
                  
-                 // On retrouve les cartes locales qui correspondent à cet ID Scryfall
                  const localMatches = chunk.filter(item => item.card.id === scryCard.id);
 
                  localMatches.forEach(match => {
-                     // Update mémoire (ref) pour l'affichage immédiat
                      if (match.card.price !== newPrice) {
+                         // 1. Update mémoire pour l'affichage immédiat
                          match.card.price = newPrice;
                          
-                         // Update Firestore : UNIQUEMENT SI C'EST MA CARTE
-                         if (match.ownerUid === myUid) {
-                             const ref = doc(db, 'users', match.ownerUid, match.collection, match.card.id);
-                             batch.update(ref, { price: newPrice });
-                             hasUpdates = true;
-                         }
+                         // 2. Update Firestore : ON UPDATE MA CARTE ET LA CARTE DE L'AMI
+                         const ref = doc(db, 'users', match.ownerUid, match.collection, match.card.id);
+                         batch.update(ref, { 
+                             price: newPrice,
+                             lastPriceUpdate: new Date(), // <-- MARQUE L'HEURE D'ACTUALISATION
+                         });
+                         hasUpdates = true;
                      }
                  });
              });
@@ -9931,13 +10714,13 @@ export function useTradeMatcher() {
 
     try {
         // A. Charger MES données
-        // OPTIMISATION: Pour ma collection, je ne charge que ce qui est "For Trade"
+        // On charge tout, le filtre de trade se fait en mémoire après
         const [myCollectionMap, myWishlistMap] = await Promise.all([
-            fetchCardsAsMap(user.uid, 'collection', [], true), 
+            fetchCardsAsMap(user.uid, 'collection'), 
             fetchCardsAsMap(user.uid, 'wishlist', lists)
         ]);
 
-        // B. Indexation de MA Wishlist (Set pour O(1))
+        // B. Indexation de MA Wishlist
         const myWishlistIds = new Set<string>();
         const myWishlistNames = new Set<string>();
         myWishlistMap.forEach(c => {
@@ -9945,34 +10728,36 @@ export function useTradeMatcher() {
             else myWishlistNames.add(c.name);
         });
 
-        // C. Indexation de MON Trade Binder
-        // Note: myCollectionMap ne contient déjà QUE les cartes isForTrade grâce au filtre Firestore
-        const myTradeCards = Array.from(myCollectionMap.values());
+        // C. Indexation de MON Trade Binder (Filtrage sur la quantité)
+        const myTradeCards = Array.from(myCollectionMap.values()).filter(c => (c.quantityForTrade ?? 0) > 0);
 
         setStatus(`Analyse simultanée de ${friends.length} amis...`);
 
         // D. SCAN PARALLÈLE DES AMIS
         const matchPromises = friends.map(async (friend) => {
-            // OPTIMISATION: On ne charge que les cartes échangeables de l'ami
+            // On charge tout, le filtre de trade se fait en mémoire après
             const [friendCollectionMap, friendWishlistMap] = await Promise.all([
-                fetchCardsAsMap(friend.uid, 'collection', [], true),
+                fetchCardsAsMap(friend.uid, 'collection'),
                 fetchCardsAsMap(friend.uid, 'wishlist')
             ]);
+            
+            // FILTRER SES CARTES ÉCHANGEABLES
+            const friendTradeCards = Array.from(friendCollectionMap.values()).filter(c => (c.quantityForTrade ?? 0) > 0);
 
             const toReceive: CardType[] = [];
             const toGive: CardType[] = [];
 
-            // 1. Check ce que JE reçois (Sa Collection [déjà filtrée Trade] vs Ma Wishlist)
-            friendCollectionMap.forEach(card => {
-                // Le check isForTrade est redondant ici si le serveur a bien filtré, mais on garde par sécurité
-                if (card.isForTrade) { 
+            // 1. Check ce que JE reçois (Sa Collection [Tradeable] vs Ma Wishlist)
+            friendTradeCards.forEach(card => {
+                // On s'assure que la carte est bien marquée comme tradeable
+                if ((card.quantityForTrade ?? 0) > 0) { 
                     if (myWishlistIds.has(card.id) || myWishlistNames.has(card.name)) {
                         toReceive.push(card);
                     }
                 }
             });
 
-            // 2. Check ce que JE donne (Ma Collection vs Sa Wishlist)
+            // 2. Check ce que JE donne (Ma Collection [Tradeable] vs Sa Wishlist)
             const friendWishlistIds = new Set<string>();
             const friendWishlistNames = new Set<string>();
             friendWishlistMap.forEach(c => {
@@ -9981,8 +10766,11 @@ export function useTradeMatcher() {
             });
 
             myTradeCards.forEach(card => {
-                if (friendWishlistIds.has(card.id) || friendWishlistNames.has(card.name)) {
-                    toGive.push(card);
+                // On s'assure que ma carte est bien marquée comme tradeable
+                if ((card.quantityForTrade ?? 0) > 0) {
+                    if (friendWishlistIds.has(card.id) || friendWishlistNames.has(card.name)) {
+                        toGive.push(card);
+                    }
                 }
             });
 
@@ -10003,6 +10791,7 @@ export function useTradeMatcher() {
         // E. MISE À JOUR DES PRIX (Seulement pour les cartes matchées)
         if (validProposals.length > 0) {
             setStatus("Actualisation des prix...");
+            // APPEL PROACTIF DU TTL 48H SUR TOUTES LES CARTES IMPLIQUÉES
             await refreshPricesForProposals(validProposals, user.uid);
             
             validProposals.forEach(p => {
@@ -10038,7 +10827,7 @@ import {
 import { useAuth } from '@/lib/AuthContext';
 import { CardType } from './useCardCollection';
 import { executeServerTrade } from '@/app/actions/trade'; 
-import { proposeTradeAction } from '@/app/actions/trade-proposal'; // <--- IMPORT
+import { proposeTradeAction } from '@/app/actions/trade-proposal'; 
 import toast from 'react-hot-toast';
 
 export type TradeStatus = 'pending' | 'completed' | 'rejected' | 'cancelled';
@@ -10056,13 +10845,35 @@ export type TradeRequest = {
 };
 
 // Fonction utilitaire pour convertir les CardType du client vers le format attendu par le serveur
-// (Gère les incompatibilités de types strictes si nécessaire)
 const mapCardsForServer = (cards: CardType[]) => {
-    return cards.map(c => ({
-        ...c,
-        imageBackUrl: c.imageBackUrl || null,
-        scryfallData: (c.scryfallData as Record<string, unknown>) || null
-    }));
+    return cards.map(c => {
+        const clean = { ...c };
+        
+        // Suppression des objets Firestore Timestamp (non sérialisables par Server Actions)
+        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+        // @ts-expect-error
+        delete clean.addedAt;
+        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+        // @ts-expect-error
+        delete clean.importedAt;
+        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+        // @ts-expect-error
+        delete clean.lastUpdated;
+        
+        // Suppression des champs qui peuvent être ajoutés par l'import/DB mais qui ne sont pas dans le CardSchema Zod
+        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+        // @ts-expect-error 
+        delete clean.condition;
+        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+        // @ts-expect-error 
+        delete clean.language;
+
+        return {
+            ...clean,
+            imageBackUrl: c.imageBackUrl || null,
+            scryfallData: (c.scryfallData as Record<string, unknown>) || null
+        };
+    });
 };
 
 export function useTradeSystem() {
@@ -10072,6 +10883,8 @@ export function useTradeSystem() {
   const [outgoingTrades, setOutgoingTrades] = useState<TradeRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
+
+  // NOTE: isProposing est retiré ici car géré localement par useTransition dans les pages
 
   useEffect(() => {
     if (!user) return;
@@ -10104,6 +10917,8 @@ export function useTradeSystem() {
 
   const proposeTrade = async (receiverUid: string, receiverName: string, toGive: CardType[], toReceive: CardType[]) => {
     if (!user) return false;
+    
+    // L'état de chargement local (isPending) est géré par useTransition
     const toastId = toast.loading("Envoi de la proposition...");
 
     try {
@@ -10118,12 +10933,30 @@ export function useTradeSystem() {
       };
 
       // Appel de la Server Action
-      const result = await proposeTradeAction(payload);
+      const result = await proposeTradeAction(payload) as { 
+          success: boolean; 
+          error?: string; 
+          proposalConflict?: boolean; // <--- Réponse de conflit
+          existingTradeId?: string; 
+      }; 
 
       if (result.success) {
           toast.success("Proposition envoyée !", { id: toastId });
           return true;
-      } else {
+      } 
+      else if (result.proposalConflict) {
+          // GESTION DU CONFLIT DE PROPOSITION
+          const friendName = receiverName || "cet ami";
+          
+          toast.error(`Vous avez déjà une proposition en attente avec ${friendName} pour ces cartes.`, { 
+              id: toastId, 
+              duration: 5000 
+          });
+          // Option future : ajouter ici un lien ou une modale pour éditer la proposition existante (ID: result.existingTradeId)
+          
+          return false; // Échec de la création, mais l'UI est informée
+      }
+      else {
           throw new Error(result.error);
       }
 
@@ -10143,7 +10976,6 @@ export function useTradeSystem() {
     const toastId = toast.loading("Validation sécurisée en cours...");
 
     try {
-        // executeServerTrade attend toujours CardType[], on passe directement
         const result = await executeServerTrade(
             trade.id, 
             trade.senderUid,
@@ -10194,7 +11026,7 @@ export function useTradeSystem() {
   return { 
     incomingTrades, outgoingTrades, loading, 
     proposeTrade, acceptTrade, rejectTrade, cancelTrade,
-    isProcessing 
+    isProcessing,
   };
 }
 </file>
@@ -10353,6 +11185,7 @@ export default function ContactsPage() {
 </file>
 
 <file path="app/trades/manual/page.tsx">
+// app/trades/manual/page.tsx
 'use client';
 
 import { useState, useMemo, useTransition } from 'react';
@@ -10362,6 +11195,22 @@ import { executeManualTrade } from '@/app/actions/trade';
 import toast from 'react-hot-toast';
 import CardVersionPickerModal from '@/components/CardVersionPickerModal';
 import { ScryfallRawData } from '@/lib/cardUtils';
+
+// Helper pour sérialiser/nettoyer les cartes
+const mapCardsForServer = (cards: CardType[]) => {
+    return cards.map(c => {
+        const clean = { ...c };
+        
+        // Supprimez les propriétés qui sont des objets Date/Timestamp
+        // C'est cette étape qui résout l'erreur "Objects with toJSON methods are not supported"
+        if ('importedAt' in clean) delete (clean as Partial<CardType> & { importedAt?: unknown }).importedAt;
+        if ('lastUpdated' in clean) delete (clean as Partial<CardType> & { lastUpdated?: unknown }).lastUpdated;
+        if ('addedAt' in clean) delete (clean as Partial<CardType> & { addedAt?: unknown }).addedAt;
+        if ('lastPriceUpdate' in clean) delete (clean as Partial<CardType> & { lastPriceUpdate?: unknown }).lastPriceUpdate;
+        
+        return clean;
+    });
+};
 
 export default function ManualTradePage() {
   const { user } = useAuth();
@@ -10382,14 +11231,17 @@ export default function ManualTradePage() {
 
   const handleAddToGive = (card: CardType) => {
       const existing = toGive.find(c => c.id === card.id);
-      if (existing) {
-          if (existing.quantity < card.quantity) { 
+      const maxStock = card.quantity;
+      const currentSelected = existing ? existing.quantity : 0;
+
+      if (currentSelected < maxStock) { 
+          if (existing) {
               setToGive(prev => prev.map(c => c.id === card.id ? { ...c, quantity: c.quantity + 1 } : c));
           } else {
-              toast.error("Stock max atteint");
+              setToGive(prev => [...prev, { ...card, quantity: 1 }]);
           }
       } else {
-          setToGive(prev => [...prev, { ...card, quantity: 1 }]);
+          toast.error("Stock max atteint");
       }
   };
 
@@ -10427,6 +11279,7 @@ export default function ManualTradePage() {
       toast.success(`Ajouté : ${card.name}`);
   };
 
+  // --- LOGIQUE DE VALIDATION SÉCURISÉE (Utilise mapCardsForServer) ---
   const handleValidate = async () => {
       if (!user) return;
       if (toGive.length === 0 && toReceive.length === 0) return;
@@ -10435,7 +11288,12 @@ export default function ManualTradePage() {
       const toastId = toast.loading("Validation sécurisée...");
 
       startTransition(async () => {
-        const result = await executeManualTrade(user.uid, toGive, toReceive);
+        // CORRECTION : Nettoyer les cartes ici avant de les envoyer au serveur
+        const cleanToGive = mapCardsForServer(toGive);
+        const cleanToReceive = mapCardsForServer(toReceive);
+
+        // Appel du serveur
+        const result = await executeManualTrade(user.uid, cleanToGive, cleanToReceive);
         
         if (result.success) {
             toast.success("Echange validé !", { id: toastId });
@@ -10722,7 +11580,8 @@ export default function CardVersionPickerModal({
         isFoil: isFoil,
         isSpecificVersion: !anyVersion,
         scryfallData: currentCardRaw,
-        wishlistId: destination === 'wishlist' ? selectedListId : undefined 
+        wishlistId: destination === 'wishlist' ? selectedListId : undefined,
+        uid: ''
     };
     
     onConfirm(finalCard, selectedListId);
@@ -10854,17 +11713,146 @@ export default function CardVersionPickerModal({
 }
 </file>
 
-<file path="app/trades/page.tsx">
+<file path="app/wishlist/page.tsx">
 'use client';
 
 import { useState } from 'react';
+import { useAuth } from '@/lib/AuthContext';
+import { useWishlists } from '@/hooks/useWishlists';
+import SingleWishlistView from '@/components/wishlist/SingleWishlistView';
+import GlobalWishlistView from '@/components/wishlist/GlobalWishlistView';
+
+export default function WishlistPage() {
+  const { user } = useAuth();
+  const { lists, createList, deleteList, loading: metaLoading } = useWishlists();
+  
+  const [selectedListId, setSelectedListId] = useState<string>('default');
+  const [newListName, setNewListName] = useState('');
+
+  if (!user) return <p className="p-10 text-center text-muted">Veuillez vous connecter.</p>;
+
+  const handleCreate = (e: React.FormEvent) => {
+    e.preventDefault();
+    if(newListName.trim()) {
+        createList(newListName);
+        setNewListName('');
+    }
+  };
+
+  return (
+    <main className="container mx-auto p-4 flex flex-col md:flex-row gap-8 min-h-[85vh]">
+      
+      {/* SIDEBAR */}
+      <aside className="w-full md:w-72 flex-none space-y-6">
+        <div className="bg-surface p-5 rounded-xl shadow-sm border border-border sticky top-24">
+            <h3 className="font-bold mb-4 text-foreground flex items-center gap-2 border-b border-border pb-2">
+                📑 Mes Listes
+            </h3>
+            
+            {metaLoading ? (
+                <p className="text-sm text-muted">Chargement...</p>
+            ) : (
+                <div className="flex flex-col gap-1 max-h-[60vh] overflow-y-auto pr-1 custom-scrollbar">
+                    
+                    {/* BOUTON VUE GLOBALE CORRIGÉ */}
+                    <button
+                        onClick={() => setSelectedListId('GLOBAL_VIEW')}
+                        className={`text-left px-3 py-2.5 rounded-lg text-sm transition-all duration-200 flex items-center gap-2 mb-2 ${
+                            selectedListId === 'GLOBAL_VIEW'
+                            ? 'bg-purple-600 text-white shadow-md font-medium' 
+                            : 'bg-purple-50 text-purple-700 hover:bg-purple-100 dark:bg-purple-900/40 dark:text-purple-200'
+                        }`}
+                    >
+                        <span>🌍</span> Tout voir (Fusionné)
+                    </button>
+
+                    <div className="border-t border-border my-2"></div>
+
+                    {lists.map(list => (
+                        <div key={list.id} className="group flex items-center relative">
+                            <button
+                                onClick={() => setSelectedListId(list.id)}
+                                className={`grow text-left px-3 py-2.5 rounded-lg text-sm transition-all duration-200 ${
+                                    selectedListId === list.id 
+                                    ? 'bg-primary text-primary-foreground shadow-md font-medium' 
+                                    : 'hover:bg-secondary text-muted hover:text-foreground'
+                                }`}
+                            >
+                                {list.name}
+                            </button>
+                            
+                            {list.id !== 'default' && (
+                                <button 
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        deleteList(list.id);
+                                        if (selectedListId === list.id) setSelectedListId('default');
+                                    }}
+                                    className={`absolute right-2 p-1.5 rounded-md transition-opacity ${
+                                        selectedListId === list.id 
+                                        ? 'text-white/70 hover:text-white' 
+                                        : 'opacity-0 group-hover:opacity-100 text-muted hover:text-danger'
+                                    }`}
+                                    title="Supprimer"
+                                >
+                                    ✕
+                                </button>
+                            )}
+                        </div>
+                    ))}
+                </div>
+            )}
+
+            {/* Formulaire Création */}
+            <form onSubmit={handleCreate} className="mt-6 pt-4 border-t border-border">
+                <div className="flex gap-2">
+                    <input 
+                        type="text" 
+                        placeholder="Nom nouvelle liste..." 
+                        className="w-full text-sm p-2 border border-border rounded-lg bg-background text-foreground focus:ring-2 focus:ring-primary outline-none"
+                        value={newListName}
+                        onChange={e => setNewListName(e.target.value)}
+                    />
+                    <button 
+                        type="submit"
+                        className="bg-primary hover:opacity-90 text-primary-foreground px-3 rounded-lg font-bold text-lg leading-none pb-1 transition"
+                    >
+                        +
+                    </button>
+                </div>
+            </form>
+        </div>
+      </aside>
+
+      <section className="grow min-w-0">
+          {selectedListId === 'GLOBAL_VIEW' ? (
+              <GlobalWishlistView lists={lists} />
+          ) : (
+              <SingleWishlistView 
+                key={selectedListId} 
+                listId={selectedListId} 
+                listName={lists.find(l => l.id === selectedListId)?.name || 'Liste'} 
+              />
+          )}
+      </section>
+
+    </main>
+  );
+}
+</file>
+
+<file path="app/trades/page.tsx">
+// app/trades/page.tsx
+'use client';
+
+import { useState, useTransition } from 'react'; // <-- Ajout de useTransition
 import { useAuth } from '@/lib/AuthContext';
 import { useTradeMatcher, TradeProposal } from '@/hooks/useTradeMatcher';
 import { useTradeSystem, TradeRequest } from '@/hooks/useTradeSystem';
 import Link from 'next/link';
 import { useCardCollection, CardType } from '@/hooks/useCardCollection'; 
 import MagicCard from '@/components/MagicCard'; 
-import AdContainer from '@/components/AdContainer'; // <--- IMPORT AJOUTÉ
+import AdContainer from '@/components/AdContainer';
 
 // --- COMPOSANT : CARTE DE DEMANDE RECUE ---
 const IncomingRequestCard = ({ trade }: { trade: TradeRequest }) => {
@@ -10875,7 +11863,7 @@ const IncomingRequestCard = ({ trade }: { trade: TradeRequest }) => {
     const valGive = trade.itemsReceived.reduce((acc: number, c: CardType) => acc + (c.price || 0), 0);
 
     return (
-        <div className="bg-surface rounded-xl border-l-4 border-primary shadow-sm p-4 mb-4 border-y border-r border-border">
+        <div className="bg-surface rounded-xl border-l-4 border-primary shadow-sm p-4 mb-4 border-y border-r">
             <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-3">
                 <div>
                     <h3 className="font-bold text-foreground">Proposition de {trade.senderName}</h3>
@@ -10903,11 +11891,25 @@ const IncomingRequestCard = ({ trade }: { trade: TradeRequest }) => {
 // --- COMPOSANT : PROPOSITION D'ÉCHANGE ---
 const TradeRowProposal = ({ proposal, onProposalSent }: { proposal: TradeProposal, onProposalSent: () => void }) => {
     const { setCustomPrice } = useCardCollection('collection');
+    // CORRECTION : on ne destructure PLUS isProposing ici
     const { proposeTrade } = useTradeSystem(); 
+    const [isPending, startTransition] = useTransition(); // <-- Utilisation de useTransition pour le blocage immédiat
+
     const totalGive = proposal.toGive.reduce((acc, c) => acc + (c.customPrice ?? c.price ?? 0), 0);
     const totalReceive = proposal.toReceive.reduce((acc, c) => acc + (c.customPrice ?? c.price ?? 0), 0);
     const delta = totalGive - totalReceive;
-    const handlePropose = async () => { const success = await proposeTrade(proposal.friend.uid, proposal.friend.displayName, proposal.toGive, proposal.toReceive); if (success) onProposalSent(); };
+    
+    const handlePropose = () => { 
+        startTransition(async () => {
+            const success = await proposeTrade(
+                proposal.friend.uid,
+                proposal.friend.displayName,
+                proposal.toGive,
+                proposal.toReceive 
+            );
+            if (success) onProposalSent(); 
+        });
+    };
 
     return (
         <div className="bg-surface rounded-2xl shadow-sm border border-border overflow-hidden mb-8 shrink-0">
@@ -10921,7 +11923,13 @@ const TradeRowProposal = ({ proposal, onProposalSent }: { proposal: TradeProposa
                         <Link href={`/user/${proposal.friend.uid}`} className="text-sm text-primary hover:underline">Voir profil</Link>
                     </div>
                 </div>
-                <button onClick={handlePropose} className="bg-primary hover:opacity-90 text-primary-foreground px-4 py-2 rounded-lg font-bold shadow-sm transition text-sm w-full sm:w-auto">Proposer</button>
+                <button 
+                    onClick={handlePropose} 
+                    disabled={isPending} // <--- UTILISATION DE isPending
+                    className="bg-primary hover:opacity-90 text-primary-foreground px-4 py-2 rounded-lg font-bold shadow-sm transition text-sm w-full sm:w-auto disabled:opacity-50"
+                >
+                    {isPending ? 'Envoi...' : 'Proposer'}
+                </button>
             </div>
             <div className="grid md:grid-cols-2 divide-y md:divide-y-0 md:divide-x border-border">
                 <div className="p-4 bg-danger/5">
@@ -10941,6 +11949,7 @@ const TradeRowProposal = ({ proposal, onProposalSent }: { proposal: TradeProposa
 export default function TradesPage() {
   const { user } = useAuth();
   const { proposals, loading, status, runScan } = useTradeMatcher();
+  // CORRECTION : on ne destructure PLUS isProposing
   const { incomingTrades, outgoingTrades, cancelTrade } = useTradeSystem(); 
   const [activeTab, setActiveTab] = useState<'scan' | 'requests'>('scan');
 
@@ -10980,26 +11989,35 @@ export default function TradesPage() {
                         </button>
                     </div>
 
-                    {/* AJOUT DE LA PUB PENDANT LE CHARGEMENT */}
-                    {loading && (
-                        <div className="mb-8">
-                            <AdContainer message="Analyse en cours..." adSlotId="0987654321" /> {/* <--- AJOUTÉ */}
+                    {/* --- BLOC DE CHARGEMENT --- */}
+                    {loading ? (
+                        <div className="text-center py-20">
+                            <div className="inline-block w-8 h-8 border-4 border-primary border-t-transparent rounded-full animate-spin mb-4"></div>
+                            <p className="text-muted mb-6">{status}</p>
+                            
+                            {/* Pub PENDANT l'attente */}
+                            <AdContainer message="Analyse en cours..." adSlotId="9999999999" />
                         </div>
+                    ) : (
+                        <>
+                            {proposals.length === 0 ? (
+                                <div className="space-y-6">
+                                    <div className="text-center py-20 text-muted border-2 border-dashed border-border rounded-xl">
+                                        Lancez le scanner pour trouver des &quot;matchs&quot; avec vos amis.
+                                    </div>
+                                    {/* Pub quand c'est vide */}
+                                    <AdContainer adSlotId="2468135790" />
+                                </div>
+                            ) : (
+                                <div className="space-y-8">
+                                    {proposals.map(proposal => (
+                                        <TradeRowProposal key={proposal.friend.uid} proposal={proposal} onProposalSent={runScan} />
+                                    ))}
+                                </div>
+                            )}
+                        </>
                     )}
-
-                    {proposals.length === 0 && !loading && (
-                        <div className="space-y-6">
-                            <div className="text-center py-20 text-muted border-2 border-dashed border-border rounded-xl">
-                                Lancez le scanner pour trouver des &quot;matchs&quot; avec vos amis.
-                            </div>
-                            {/* Pub aussi quand c'est vide pour remplir l'espace */}
-                            <AdContainer adSlotId="2468135790" />
-                        </div>
-                    )}
-
-                    <div className="space-y-8">
-                        {proposals.map(proposal => (<TradeRowProposal key={proposal.friend.uid} proposal={proposal} onProposalSent={runScan} />))}
-                    </div>
+                    {/* FIN BLOC DE CHARGEMENT */}
                 </div>
             )}
 
@@ -11044,6 +12062,7 @@ type ScryfallDataRaw = {
 };
 
 export type CardType = {
+  uid: string;
   id: string;
   name: string;
   imageUrl: string;
@@ -11057,7 +12076,11 @@ export type CardType = {
   
   isFoil?: boolean;             
   isSpecificVersion?: boolean;
-  isForTrade?: boolean; 
+  
+  // Remplacement de isForTrade
+  quantityForTrade?: number; 
+  
+  lastPriceUpdate?: Date | null; 
   
   scryfallData?: Record<string, unknown>;
 };
@@ -11135,9 +12158,19 @@ export function useCardCollection(
       }
   };
 
+  // NOUVELLE FONCTION pour la quantité d'échange
+  const setTradeQuantity = async (cardId: string, quantity: number) => {
+      if (!isOwner) return;
+      const ref = getDocRef(cardId);
+      if (ref) {
+          await updateDoc(ref, { quantityForTrade: quantity });
+      }
+  };
+
+
   const toggleAttribute = async (
       cardId: string, 
-      field: 'isFoil' | 'isSpecificVersion' | 'isForTrade', 
+      field: 'isFoil' | 'isSpecificVersion', // 'isForTrade' est retiré
       currentValue: boolean
   ) => {
       if (!isOwner) return;
@@ -11167,12 +12200,29 @@ export function useCardCollection(
   // --- MISE À JOUR GLOBALE DES PRIX ---
   const refreshCollectionPrices = async () => {
       if (!isOwner || cards.length === 0) return;
-      const toastId = toast.loading(`Mise à jour de ${cards.length} cartes...`);
+      const toastId = toast.loading(`Mise à jour des prix...`);
 
+      // 1. DÉFINITION DE LA LOGIQUE TTL (48h pour toutes les cartes lors d'une action manuelle)
+      const NOW = Date.now();
+      const FORTY_EIGHT_HOURS_MS = 48 * 60 * 60 * 1000;
+
+      const cardsToUpdate = cards.filter(card => {
+          const lastUpdateMS = card.lastPriceUpdate instanceof Date ? card.lastPriceUpdate.getTime() : 0;
+          const freshness = NOW - lastUpdateMS;
+
+          return freshness > FORTY_EIGHT_HOURS_MS;
+      });
+      
+      if (cardsToUpdate.length === 0) {
+          toast.success("Prix déjà à jour !", { id: toastId });
+          return;
+      }
+      
+      // 2. LOGIQUE D'APPEL ET DE BATCH (Utilise cardsToUpdate)
       try {
           const chunks = [];
-          for (let i = 0; i < cards.length; i += 75) {
-              chunks.push(cards.slice(i, i + 75));
+          for (let i = 0; i < cardsToUpdate.length; i += 75) {
+              chunks.push(cardsToUpdate.slice(i, i + 75));
           }
 
           for (const chunk of chunks) {
@@ -11201,6 +12251,7 @@ export function useCardCollection(
                       if (ref) {
                           batch.update(ref, { 
                               price: newPrice,
+                              lastPriceUpdate: new Date(),
                               scryfallData: scryCard as Record<string, unknown>
                           });
                           batchHasOps = true;
@@ -11209,10 +12260,10 @@ export function useCardCollection(
               });
 
               if (batchHasOps) await batch.commit();
-              await new Promise(r => setTimeout(r, 100));
+              await new Promise(r => setTimeout(r, 100)); // Respect de la limite Scryfall
           }
 
-          toast.success("Collection mise à jour avec succès !", { id: toastId });
+          toast.success(`Succès : ${cardsToUpdate.length} cartes mises à jour !`, { id: toastId });
 
       } catch (e) {
           console.error(e);
@@ -11221,6 +12272,7 @@ export function useCardCollection(
   };
 
   // --- GESTION DE MASSE DU CLASSEUR D'ÉCHANGE ---
+  // Mise à jour pour utiliser setTradeQuantity (met à jour le nombre)
   const bulkSetTradeStatus = async (
       action: 'excess' | 'all' | 'reset', 
       threshold: number = 4
@@ -11233,33 +12285,34 @@ export function useCardCollection(
 
       cards.forEach(card => {
           let shouldUpdate = false;
-          let newValue = false;
+          let newValue = 0; 
 
           if (action === 'reset') {
-              if (card.isForTrade) {
+              if ((card.quantityForTrade ?? 0) > 0) {
                   shouldUpdate = true;
-                  newValue = false;
+                  newValue = 0;
               }
               label = "Remise à zéro";
           } 
           else if (action === 'all') {
-              if (!card.isForTrade) {
+              if ((card.quantityForTrade ?? 0) !== card.quantity) {
                   shouldUpdate = true;
-                  newValue = true;
+                  newValue = card.quantity; // Met tout le stock à l'échange
               }
               label = "Tout ajouter";
           } 
           else if (action === 'excess') {
-              if (card.quantity > threshold && !card.isForTrade) {
+              const tradeableQty = Math.max(0, card.quantity - threshold);
+              if ((card.quantityForTrade ?? 0) !== tradeableQty) {
                   shouldUpdate = true;
-                  newValue = true;
+                  newValue = tradeableQty; // Met le surplus à l'échange
               }
           }
 
           if (shouldUpdate) {
               const ref = getDocRef(card.id);
               if (ref) {
-                  batch.update(ref, { isForTrade: newValue });
+                  batch.update(ref, { quantityForTrade: newValue });
                   opCount++;
               }
           }
@@ -11273,7 +12326,7 @@ export function useCardCollection(
       }
   };
 
-  // --- NOUVEAU : ACTIONS DE SÉLECTION MULTIPLE ---
+  // --- NOUVEAU : ACTIONS DE SÉLECTION MULTIPLE (Mise à jour) ---
 
   const bulkRemoveCards = async (cardIds: string[]) => {
       if (!isOwner || cardIds.length === 0) return;
@@ -11288,13 +12341,22 @@ export function useCardCollection(
       toast.success(`${cardIds.length} cartes supprimées`);
   };
 
-  const bulkUpdateAttribute = async (cardIds: string[], field: 'isForTrade' | 'isFoil', value: boolean) => {
+  // Mise à jour pour gérer le statut de trade différemment
+  const bulkUpdateAttribute = async (cardIds: string[], field: 'isFoil' | 'quantityForTrade' | 'isSpecificVersion', value: boolean | number) => {
       if (!isOwner || cardIds.length === 0) return;
 
       const batch = writeBatch(db);
       cardIds.forEach(id => {
           const ref = getDocRef(id);
-          if (ref) batch.update(ref, { [field]: value });
+          if (ref) {
+             if (field === 'quantityForTrade') {
+                 // Si on passe une valeur booléenne pour l'échange (ex: true/false), on la convertit en quantité 
+                 const tradeQty = typeof value === 'boolean' ? (value ? 99 : 0) : value; // 99 si true
+                 batch.update(ref, { [field]: tradeQty });
+             } else {
+                 batch.update(ref, { [field]: value });
+             }
+          }
       });
 
       await batch.commit();
@@ -11311,6 +12373,7 @@ export function useCardCollection(
   return { 
       cards, loading, isOwner, totalPrice,
       updateQuantity, removeCard, setCustomPrice, toggleAttribute,
+      setTradeQuantity, // NOUVEAU
       refreshCollectionPrices, bulkSetTradeStatus,
       bulkRemoveCards, bulkUpdateAttribute 
   };
@@ -11528,135 +12591,8 @@ export default function DashboardPage() {
 }
 </file>
 
-<file path="app/wishlist/page.tsx">
-'use client';
-
-import { useState } from 'react';
-import { useAuth } from '@/lib/AuthContext';
-import { useWishlists } from '@/hooks/useWishlists';
-import SingleWishlistView from '@/components/wishlist/SingleWishlistView';
-import GlobalWishlistView from '@/components/wishlist/GlobalWishlistView';
-
-export default function WishlistPage() {
-  const { user } = useAuth();
-  const { lists, createList, deleteList, loading: metaLoading } = useWishlists();
-  
-  const [selectedListId, setSelectedListId] = useState<string>('default');
-  const [newListName, setNewListName] = useState('');
-
-  if (!user) return <p className="p-10 text-center text-muted">Veuillez vous connecter.</p>;
-
-  const handleCreate = (e: React.FormEvent) => {
-    e.preventDefault();
-    if(newListName.trim()) {
-        createList(newListName);
-        setNewListName('');
-    }
-  };
-
-  return (
-    <main className="container mx-auto p-4 flex flex-col md:flex-row gap-8 min-h-[85vh]">
-      
-      {/* SIDEBAR */}
-      <aside className="w-full md:w-72 flex-none space-y-6">
-        <div className="bg-surface p-5 rounded-xl shadow-sm border border-border sticky top-24">
-            <h3 className="font-bold mb-4 text-foreground flex items-center gap-2 border-b border-border pb-2">
-                📑 Mes Listes
-            </h3>
-            
-            {metaLoading ? (
-                <p className="text-sm text-muted">Chargement...</p>
-            ) : (
-                <div className="flex flex-col gap-1 max-h-[60vh] overflow-y-auto pr-1 custom-scrollbar">
-                    
-                    {/* BOUTON VUE GLOBALE CORRIGÉ */}
-                    <button
-                        onClick={() => setSelectedListId('GLOBAL_VIEW')}
-                        className={`text-left px-3 py-2.5 rounded-lg text-sm transition-all duration-200 flex items-center gap-2 mb-2 ${
-                            selectedListId === 'GLOBAL_VIEW'
-                            ? 'bg-purple-600 text-white shadow-md font-medium' 
-                            : 'bg-purple-50 text-purple-700 hover:bg-purple-100 dark:bg-purple-900/40 dark:text-purple-200'
-                        }`}
-                    >
-                        <span>🌍</span> Tout voir (Fusionné)
-                    </button>
-
-                    <div className="border-t border-border my-2"></div>
-
-                    {lists.map(list => (
-                        <div key={list.id} className="group flex items-center relative">
-                            <button
-                                onClick={() => setSelectedListId(list.id)}
-                                className={`grow text-left px-3 py-2.5 rounded-lg text-sm transition-all duration-200 ${
-                                    selectedListId === list.id 
-                                    ? 'bg-primary text-primary-foreground shadow-md font-medium' 
-                                    : 'hover:bg-secondary text-muted hover:text-foreground'
-                                }`}
-                            >
-                                {list.name}
-                            </button>
-                            
-                            {list.id !== 'default' && (
-                                <button 
-                                    onClick={(e) => {
-                                        e.stopPropagation();
-                                        deleteList(list.id);
-                                        if (selectedListId === list.id) setSelectedListId('default');
-                                    }}
-                                    className={`absolute right-2 p-1.5 rounded-md transition-opacity ${
-                                        selectedListId === list.id 
-                                        ? 'text-white/70 hover:text-white' 
-                                        : 'opacity-0 group-hover:opacity-100 text-muted hover:text-danger'
-                                    }`}
-                                    title="Supprimer"
-                                >
-                                    ✕
-                                </button>
-                            )}
-                        </div>
-                    ))}
-                </div>
-            )}
-
-            {/* Formulaire Création */}
-            <form onSubmit={handleCreate} className="mt-6 pt-4 border-t border-border">
-                <div className="flex gap-2">
-                    <input 
-                        type="text" 
-                        placeholder="Nom nouvelle liste..." 
-                        className="w-full text-sm p-2 border border-border rounded-lg bg-background text-foreground focus:ring-2 focus:ring-primary outline-none"
-                        value={newListName}
-                        onChange={e => setNewListName(e.target.value)}
-                    />
-                    <button 
-                        type="submit"
-                        className="bg-primary hover:opacity-90 text-primary-foreground px-3 rounded-lg font-bold text-lg leading-none pb-1 transition"
-                    >
-                        +
-                    </button>
-                </div>
-            </form>
-        </div>
-      </aside>
-
-      <section className="grow min-w-0">
-          {selectedListId === 'GLOBAL_VIEW' ? (
-              <GlobalWishlistView lists={lists} />
-          ) : (
-              <SingleWishlistView 
-                key={selectedListId} 
-                listId={selectedListId} 
-                listName={lists.find(l => l.id === selectedListId)?.name || 'Liste'} 
-              />
-          )}
-      </section>
-
-    </main>
-  );
-}
-</file>
-
 <file path="components/Header.tsx">
+// components/Header.tsx
 'use client';
 
 import { useState } from 'react';
@@ -11721,10 +12657,7 @@ export default function Header() {
                     className={`p-2 rounded-full hover:bg-secondary transition-colors ${pathname === '/settings' ? 'text-primary' : 'text-muted hover:text-foreground'}`}
                     title="Paramètres"
                   >
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5">
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.318.674.674.843l1.173.567c.47.228.6.814.242 1.258l-.77.842a1.275 1.275 0 0 0-.291.872v2.146c0 .371.196.702.503.882l.77.452c.364.214.5.659.242 1.082l-1.173 1.296c-.356.394-.85.584-1.332.584h-1.396a1.275 1.275 0 0 0-.872.291l-.842.77c-.444.356-1.03.223-1.258-.242l-.567-1.173a1.275 1.275 0 0 0-.843-.674l-1.28-.213c-.543-.09-.94-.56-.94-1.11V11.23c0-.55.398-1.02.94-1.11l1.28-.213a1.275 1.275 0 0 0 .843-.674l.567-1.173c.228-.47.814-.6.258-.242l.77.842c.307.336.702.503 1.125.503h1.396Z" />
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
-                    </svg>
+                    ⚙️
                   </Link>
 
                   {user.photoURL && (
@@ -11769,7 +12702,7 @@ export default function Header() {
                <Link href="/collection" className={linkClass('/collection')} onClick={() => setIsMenuOpen(false)}>Collection</Link>
                <Link href="/trades" className={linkClass('/trades')} onClick={() => setIsMenuOpen(false)}>Echanges</Link>
                <Link href="/contacts" className={linkClass('/contacts')} onClick={() => setIsMenuOpen(false)}>Contacts</Link>
-               <Link href="/settings" className={linkClass('/settings')} onClick={() => setIsMenuOpen(false)}>Paramètres</Link> {/* AJOUT MOBILE */}
+               <Link href="/settings" className={linkClass('/settings')} onClick={() => setIsMenuOpen(false)}>Paramètres</Link> {/* LIEN PARAMÈTRES MOBILE */}
                <button onClick={() => { logOut(); setIsMenuOpen(false); }} className="text-left py-2 text-danger text-sm font-medium">Déconnexion</button>
              </nav>
           </div>
@@ -11781,6 +12714,7 @@ export default function Header() {
 </file>
 
 <file path="app/collection/page.tsx">
+// app/collection/page.tsx
 'use client';
 
 import { useState, useMemo, useEffect } from 'react';
@@ -11821,17 +12755,27 @@ export default function CollectionPage() {
   const [filterSet, setFilterSet] = useState<string>('all');
   const [filterTrade, setFilterTrade] = useState(false);
   const [filterFoil, setFilterFoil] = useState(false);
+  
+  // NOUVEAU : Filtres par prix
+  const [minPriceFilter, setMinPriceFilter] = useState<string>('');
+  const [maxPriceFilter, setMaxPriceFilter] = useState<string>('');
 
   useEffect(() => {
+    // Si un filtre change, on revient au début de la liste
     if (visibleCount !== ITEMS_PER_PAGE) {
       setVisibleCount(ITEMS_PER_PAGE);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchQuery, sortBy, filterSet, filterTrade, filterFoil]);
+  }, [searchQuery, sortBy, filterSet, filterTrade, filterFoil, minPriceFilter, maxPriceFilter]); // AJOUT DES NOUVEAUX FILTRES
 
   const filteredAndSortedCards = useMemo(() => {
     let result = [...cards];
+    
+    // Convertir les chaînes de prix en nombres
+    const minPrice = parseFloat(minPriceFilter);
+    const maxPrice = parseFloat(maxPriceFilter);
 
+    // --- FILTRAGE ---
     if (searchQuery) {
         const lowerQ = searchQuery.toLowerCase();
         result = result.filter(c => c.name.toLowerCase().includes(lowerQ));
@@ -11840,12 +12784,23 @@ export default function CollectionPage() {
         result = result.filter(c => c.setName === filterSet);
     }
     if (filterTrade) {
-        result = result.filter(c => c.isForTrade);
+        result = result.filter(c => (c.quantityForTrade ?? 0) > 0);
     }
     if (filterFoil) {
         result = result.filter(c => c.isFoil);
     }
+    
+    // NOUVEAU : FILTRAGE PAR PRIX
+    if (!isNaN(minPrice) || !isNaN(maxPrice)) {
+        result = result.filter(c => {
+            const cardPrice = c.customPrice ?? c.price ?? 0;
+            const isAboveMin = isNaN(minPrice) || cardPrice >= minPrice;
+            const isBelowMax = isNaN(maxPrice) || cardPrice <= maxPrice;
+            return isAboveMin && isBelowMax;
+        });
+    }
 
+    // --- TRI ---
     result.sort((a, b) => {
         const priceA = a.customPrice ?? a.price ?? 0;
         const priceB = b.customPrice ?? b.price ?? 0;
@@ -11859,7 +12814,7 @@ export default function CollectionPage() {
     });
 
     return result;
-  }, [cards, searchQuery, sortBy, filterSet, filterTrade, filterFoil]);
+  }, [cards, searchQuery, sortBy, filterSet, filterTrade, filterFoil, minPriceFilter, maxPriceFilter]); // AJOUT DES NOUVEAUX FILTRES
 
   const visibleCards = useMemo(() => {
       return filteredAndSortedCards.slice(0, visibleCount);
@@ -11899,7 +12854,8 @@ export default function CollectionPage() {
   };
 
   const handleBulkTrade = async (isTrade: boolean) => {
-      await bulkUpdateAttribute(selectedIds, 'isForTrade', isTrade);
+      const targetQuantity = isTrade ? 99 : 0; 
+      await bulkUpdateAttribute(selectedIds, 'quantityForTrade', targetQuantity); 
       setSelectedIds([]);
       setIsSelectMode(false);
   };
@@ -11958,7 +12914,7 @@ export default function CollectionPage() {
         </div>
       </div>
 
-      {/* FILTRES (Remplacé bg-white par bg-surface) */}
+      {/* FILTRES */}
       <div className="bg-surface p-4 rounded-xl border border-border shadow-sm mb-6">
           <div className="flex gap-2 items-center">
               <div className="grow">
@@ -11979,6 +12935,7 @@ export default function CollectionPage() {
           </div>
 
           <div className={`mt-4 space-y-4 md:space-y-0 md:flex md:items-end md:gap-4 ${showFilters ? 'block' : 'hidden md:flex'}`}>
+            
             <div className="min-w-[200px]">
                 <label className="block text-xs font-bold text-muted mb-1 uppercase">Edition</label>
                 <select value={filterSet} onChange={(e) => setFilterSet(e.target.value)} className="w-full p-2.5 rounded-lg border border-border bg-background text-foreground text-sm cursor-pointer">
@@ -11986,6 +12943,33 @@ export default function CollectionPage() {
                     {availableSets.map(set => <option key={set} value={set}>{set}</option>)}
                 </select>
             </div>
+            
+            {/* NOUVEAU : FILTRE PAR PRIX */}
+            <div className="min-w-[150px]">
+                <label className="block text-xs font-bold text-muted mb-1 uppercase">Prix Min (€)</label>
+                <input 
+                    type="number"
+                    min="0"
+                    step="any"
+                    placeholder="Min"
+                    value={minPriceFilter}
+                    onChange={(e) => setMinPriceFilter(e.target.value)}
+                    className="w-full p-2.5 rounded-lg border border-border bg-background text-foreground text-sm focus:ring-2 focus:ring-primary outline-none"
+                />
+            </div>
+            <div className="min-w-[150px]">
+                <label className="block text-xs font-bold text-muted mb-1 uppercase">Prix Max (€)</label>
+                <input 
+                    type="number"
+                    min="0"
+                    step="any"
+                    placeholder="Max"
+                    value={maxPriceFilter}
+                    onChange={(e) => setMaxPriceFilter(e.target.value)}
+                    className="w-full p-2.5 rounded-lg border border-border bg-background text-foreground text-sm focus:ring-2 focus:ring-primary outline-none"
+                />
+            </div>
+            
             <div className="min-w-[180px]">
                 <label className="block text-xs font-bold text-muted mb-1 uppercase">Trier par</label>
                 <select value={sortBy} onChange={(e) => setSortBy(e.target.value as SortOption)} className="w-full p-2.5 rounded-lg border border-border bg-background text-foreground text-sm cursor-pointer">
@@ -12024,7 +13008,7 @@ export default function CollectionPage() {
       {filteredAndSortedCards.length === 0 ? (
         <div className="text-center py-20 bg-secondary/50 rounded-xl border-2 border-dashed border-border">
           <p className="text-xl text-muted mb-4">Aucun résultat ne correspond à vos filtres.</p>
-          <button onClick={() => { setSearchQuery(''); setFilterSet('all'); setFilterTrade(false); setFilterFoil(false); }} className="text-primary hover:underline">Réinitialiser les filtres</button>
+          <button onClick={() => { setSearchQuery(''); setFilterSet('all'); setFilterTrade(false); setFilterFoil(false); setMinPriceFilter(''); setMaxPriceFilter(''); }} className="text-primary hover:underline">Réinitialiser les filtres</button>
         </div>
       ) : (
         <>
@@ -12060,7 +13044,7 @@ export default function CollectionPage() {
       {/* ACTION BAR FLOTTANTE */}
       {isSelectMode && selectedIds.length > 0 && (
           <div className="fixed bottom-6 left-4 right-4 md:left-1/2 md:right-auto md:-translate-x-1/2 bg-surface shadow-2xl border border-border p-2 rounded-2xl flex items-center justify-around gap-2 z-50 animate-in slide-in-from-bottom-6 duration-300">
-              <button onClick={() => handleBulkTrade(true)} className="px-4 py-2 bg-green-100 hover:bg-green-200 text-green-800 rounded-xl text-sm font-bold transition flex flex-col items-center leading-none gap-1">
+              <button onClick={() => handleBulkTrade(true)} className="px-4 py-2 bg-success/10 hover:bg-success/20 text-success rounded-xl text-sm font-bold transition flex flex-col items-center leading-none gap-1">
                   <span>Trade</span>
               </button>
               <button onClick={() => handleBulkTrade(false)} className="px-4 py-2 bg-secondary hover:bg-border text-foreground rounded-xl text-sm font-bold transition flex flex-col items-center leading-none gap-1">
@@ -12082,6 +13066,7 @@ export default function CollectionPage() {
 </file>
 
 <file path="components/MagicCard.tsx">
+// components/MagicCard.tsx
 'use client';
 
 import { useState, useEffect, memo } from 'react';
@@ -12097,12 +13082,12 @@ type MagicCardProps = {
   setName?: string;
   isFoil?: boolean;
   isSpecificVersion?: boolean;
-  isForTrade?: boolean; 
+  quantityForTrade?: number; 
   onIncrement?: () => void;
   onDecrement?: () => void;
   onMove?: () => void;
   onEditPrice?: (newPrice: number) => void;
-  onToggleAttribute?: (field: 'isFoil' | 'isSpecificVersion' | 'isForTrade', currentValue: boolean) => void;
+  onToggleAttribute?: (field: 'isFoil' | 'isSpecificVersion', currentValue: boolean) => void; 
   isWishlist?: boolean;
   readOnly?: boolean;
   isTradeView?: boolean;
@@ -12118,7 +13103,7 @@ function MagicCard(props: MagicCardProps) {
   const { 
       name, imageUrl, imageBackUrl, quantity = 1, 
       price, customPrice, setName, 
-      isFoil, isSpecificVersion, isForTrade,
+      isFoil, isSpecificVersion, quantityForTrade,
       isTradeView, allowPriceEdit, 
       onEditPrice, onToggleAttribute, 
       readOnly, isWishlist,
@@ -12139,6 +13124,7 @@ function MagicCard(props: MagicCardProps) {
   }, [customPrice, price, isEditingPrice]);
 
   const effectivePrice = customPrice !== undefined ? customPrice : (price || 0);
+  const isTradeable = (quantityForTrade ?? 0) > 0;
 
   const handleSavePrice = () => {
       if (onEditPrice) {
@@ -12152,12 +13138,27 @@ function MagicCard(props: MagicCardProps) {
   const handleCardClick = () => {
       if (isSelectMode && onSelect) {
           onSelect();
-      } else if (imageBackUrl) {
+          return;
+      } 
+      
+      if (readOnly || isTradeView) {
+         if (imageBackUrl) {
+            setIsFlipped(!isFlipped);
+         }
+         return;
+      }
+      
+      if (props.id) {
+          window.location.href = `/card/${props.id}`;
+          return;
+      }
+
+      if (imageBackUrl) {
           setIsFlipped(!isFlipped);
       }
   };
 
-  // --- VUE LISTE ---
+  // --- VUE LISTE (TradeView) ---
   if (isTradeView) {
       return (
         <div className="flex items-center gap-3 bg-surface p-2 rounded-lg border border-border content-visibility-auto transition-colors">
@@ -12192,7 +13193,7 @@ function MagicCard(props: MagicCardProps) {
       );
   }
 
-  // --- VUE GRILLE ---
+  // --- VUE GRILLE (Collection / Wishlist) ---
   return (
     <div 
         onClick={handleCardClick}
@@ -12204,7 +13205,7 @@ function MagicCard(props: MagicCardProps) {
             ? 'border-primary ring-1 ring-primary bg-primary/5' 
             : 'border-border hover:border-primary'
         }
-        ${isSelectMode ? 'cursor-pointer' : ''}
+        ${isSelectMode || (!isSelectMode && !readOnly && !isTradeView) ? 'cursor-pointer' : ''} 
         `}
     >
 
@@ -12236,6 +13237,8 @@ function MagicCard(props: MagicCardProps) {
         </div>
         
         <p className="text-[11px] text-muted truncate mb-2">{setName}</p>
+        
+        {/* L'ancien bloc de Trade centré est retiré ici */}
 
         <div className={`flex flex-wrap gap-1 mb-2 ${isSelectMode ? 'pointer-events-none opacity-50' : ''}`}>
             {onToggleAttribute ? (
@@ -12264,20 +13267,7 @@ function MagicCard(props: MagicCardProps) {
                         {isSpecificVersion ? 'Exact' : 'Auto'}
                     </button>
                 )
-            ) : (
-                onToggleAttribute && (
-                    <button 
-                        onClick={(e) => { e.stopPropagation(); onToggleAttribute('isForTrade', !!isForTrade); }}
-                        className={`text-[10px] px-2 py-1 rounded border transition-colors font-medium flex-1 text-center ${
-                            isForTrade 
-                            ? 'bg-success/10 text-success border-success/20' 
-                            : 'bg-secondary text-muted border-transparent hover:bg-border'
-                        }`}
-                    >
-                        {isForTrade ? 'Trade' : 'Privé'}
-                    </button>
-                )
-            )}
+            ) : null}
             
             {isWishlist && !readOnly && !isSelectMode && onMove && (
                 <button 
@@ -12290,13 +13280,33 @@ function MagicCard(props: MagicCardProps) {
             )}
         </div>
         
+        {/* NOUVELLE LIGNE : QUANTITÉ ET PRIX */}
         <div className={`mt-auto flex justify-between items-center border-t border-border pt-2 ${isSelectMode ? 'pointer-events-none opacity-50' : ''}`}>
+          
+          {/* BLOC GAUCHE : QUANTITÉ TOTALE */}
           <div className="flex items-center gap-1">
             {!readOnly && <button onClick={(e) => {e.stopPropagation(); onDecrement?.()}} className="w-5 h-5 rounded bg-secondary hover:bg-border text-muted hover:text-foreground flex items-center justify-center text-xs font-bold transition">-</button>}
-            <span className={`text-sm ${readOnly ? 'font-bold text-foreground' : 'w-4 text-center text-foreground'}`}>{readOnly && "x"}{quantity}</span>
+            
+            <span className={`text-sm ${readOnly ? 'font-bold text-foreground' : 'w-4 text-center text-foreground'}`}>
+                {quantity}
+            </span>
+            
             {!readOnly && <button onClick={(e) => {e.stopPropagation(); onIncrement?.()}} className="w-5 h-5 rounded bg-primary/10 hover:bg-primary/20 text-primary border border-primary/30 flex items-center justify-center text-xs font-bold transition">+</button>}
           </div>
+
+          {/* BLOC CENTRAL : STATUT DE TRADE (Alignement automatique au centre de l'espace disponible) */}
+          {isTradeable && !isWishlist && !isSelectMode && (
+               <div className="flex-grow text-center min-w-fit mx-1">
+                   <span 
+                       className="text-xs font-bold text-success bg-success/10 px-2 py-0.5 rounded-full"
+                       title={`${quantityForTrade} exemplaire(s) disponible(s) pour l'échange sur ${quantity} possédé(s).`}
+                   >
+                       {quantityForTrade} / {quantity} 🤝
+                   </span>
+               </div>
+          )}
           
+          {/* BLOC DROIT : PRIX */}
           <div className="text-right leading-none">
              <p className={`font-bold text-sm ${customPrice ? 'text-orange-600' : 'text-foreground'}`}>
                  {(effectivePrice * quantity).toFixed(2)} €

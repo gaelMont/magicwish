@@ -1,10 +1,13 @@
+// components/wishlist/SingleWishlistView.tsx
 'use client';
 
+import { useState } from 'react'; // <--- IMPORT useState
 import { useAuth } from '@/lib/AuthContext';
 import { useCardCollection, CardType } from '@/hooks/useCardCollection';
 import MagicCard from '@/components/MagicCard';
 import toast from 'react-hot-toast';
 import { moveCardFromWishlistToCollection } from '@/lib/services/collectionService'; 
+import ColumnSlider from '@/components/ColumnSlider'; // <--- IMPORT
 
 type Props = {
     listId: string;
@@ -15,6 +18,8 @@ export default function SingleWishlistView({ listId, listName }: Props) {
     const { cards, loading, updateQuantity, removeCard, toggleAttribute, totalPrice } = useCardCollection('wishlist', listId);
     const { user } = useAuth();
     
+    const [columns, setColumns] = useState(5); // <--- ÉTAT LOCAL
+
     const moveToCollection = async (card: CardType) => {
         if (!user) return;
         const toastId = toast.loading("Déplacement...");
@@ -32,11 +37,17 @@ export default function SingleWishlistView({ listId, listName }: Props) {
 
     return (
         <div className="animate-in fade-in duration-300">
-            <div className="flex justify-between items-end mb-6 border-b border-border pb-4">
+            <div className="flex flex-col md:flex-row justify-between items-end mb-6 border-b border-border pb-4 gap-4">
                 <h2 className="text-2xl font-bold text-foreground">{listName}</h2>
-                <div className="text-right">
-                    <span className="text-xs text-muted uppercase font-semibold">Total estimé</span>
-                    <p className="text-2xl font-bold text-success">{totalPrice.toFixed(2)} €</p>
+                
+                <div className="flex items-center gap-4">
+                    {/* SLIDER AJOUTÉ ICI */}
+                    <ColumnSlider columns={columns} setColumns={setColumns} />
+
+                    <div className="text-right">
+                        <span className="text-xs text-muted uppercase font-semibold">Total estimé</span>
+                        <p className="text-2xl font-bold text-success">{totalPrice.toFixed(2)} €</p>
+                    </div>
                 </div>
             </div>
 
@@ -45,7 +56,10 @@ export default function SingleWishlistView({ listId, listName }: Props) {
                     <p className="text-muted italic">Cette liste est vide.</p>
                 </div>
             ) : (
-                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                <div 
+                    className="grid gap-4"
+                    style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}
+                >
                     {cards.map(card => (
                         <MagicCard 
                             key={card.id} 

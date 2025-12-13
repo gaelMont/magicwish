@@ -1,3 +1,4 @@
+// app/trades/manual/page.tsx
 'use client';
 
 import { useState, useMemo, useTransition } from 'react';
@@ -7,6 +8,22 @@ import { executeManualTrade } from '@/app/actions/trade';
 import toast from 'react-hot-toast';
 import CardVersionPickerModal from '@/components/CardVersionPickerModal';
 import { ScryfallRawData } from '@/lib/cardUtils';
+
+// Helper pour sérialiser/nettoyer les cartes
+const mapCardsForServer = (cards: CardType[]) => {
+    return cards.map(c => {
+        const clean = { ...c };
+        
+        // Supprimez les propriétés qui sont des objets Date/Timestamp
+        // C'est cette étape qui résout l'erreur "Objects with toJSON methods are not supported"
+        if ('importedAt' in clean) delete (clean as Partial<CardType> & { importedAt?: unknown }).importedAt;
+        if ('lastUpdated' in clean) delete (clean as Partial<CardType> & { lastUpdated?: unknown }).lastUpdated;
+        if ('addedAt' in clean) delete (clean as Partial<CardType> & { addedAt?: unknown }).addedAt;
+        if ('lastPriceUpdate' in clean) delete (clean as Partial<CardType> & { lastPriceUpdate?: unknown }).lastPriceUpdate;
+        
+        return clean;
+    });
+};
 
 export default function ManualTradePage() {
   const { user } = useAuth();
@@ -27,14 +44,17 @@ export default function ManualTradePage() {
 
   const handleAddToGive = (card: CardType) => {
       const existing = toGive.find(c => c.id === card.id);
-      if (existing) {
-          if (existing.quantity < card.quantity) { 
+      const maxStock = card.quantity;
+      const currentSelected = existing ? existing.quantity : 0;
+
+      if (currentSelected < maxStock) { 
+          if (existing) {
               setToGive(prev => prev.map(c => c.id === card.id ? { ...c, quantity: c.quantity + 1 } : c));
           } else {
-              toast.error("Stock max atteint");
+              setToGive(prev => [...prev, { ...card, quantity: 1 }]);
           }
       } else {
-          setToGive(prev => [...prev, { ...card, quantity: 1 }]);
+          toast.error("Stock max atteint");
       }
   };
 
@@ -72,6 +92,7 @@ export default function ManualTradePage() {
       toast.success(`Ajouté : ${card.name}`);
   };
 
+  // --- LOGIQUE DE VALIDATION SÉCURISÉE (Utilise mapCardsForServer) ---
   const handleValidate = async () => {
       if (!user) return;
       if (toGive.length === 0 && toReceive.length === 0) return;
@@ -80,7 +101,12 @@ export default function ManualTradePage() {
       const toastId = toast.loading("Validation sécurisée...");
 
       startTransition(async () => {
-        const result = await executeManualTrade(user.uid, toGive, toReceive);
+        // CORRECTION : Nettoyer les cartes ici avant de les envoyer au serveur
+        const cleanToGive = mapCardsForServer(toGive);
+        const cleanToReceive = mapCardsForServer(toReceive);
+
+        // Appel du serveur
+        const result = await executeManualTrade(user.uid, cleanToGive, cleanToReceive);
         
         if (result.success) {
             toast.success("Echange validé !", { id: toastId });

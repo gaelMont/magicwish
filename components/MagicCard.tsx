@@ -1,3 +1,4 @@
+// components/MagicCard.tsx
 'use client';
 
 import { useState, useEffect, memo } from 'react';
@@ -13,12 +14,12 @@ type MagicCardProps = {
   setName?: string;
   isFoil?: boolean;
   isSpecificVersion?: boolean;
-  isForTrade?: boolean; 
+  quantityForTrade?: number; 
   onIncrement?: () => void;
   onDecrement?: () => void;
   onMove?: () => void;
   onEditPrice?: (newPrice: number) => void;
-  onToggleAttribute?: (field: 'isFoil' | 'isSpecificVersion' | 'isForTrade', currentValue: boolean) => void;
+  onToggleAttribute?: (field: 'isFoil' | 'isSpecificVersion', currentValue: boolean) => void; 
   isWishlist?: boolean;
   readOnly?: boolean;
   isTradeView?: boolean;
@@ -34,7 +35,7 @@ function MagicCard(props: MagicCardProps) {
   const { 
       name, imageUrl, imageBackUrl, quantity = 1, 
       price, customPrice, setName, 
-      isFoil, isSpecificVersion, isForTrade,
+      isFoil, isSpecificVersion, quantityForTrade,
       isTradeView, allowPriceEdit, 
       onEditPrice, onToggleAttribute, 
       readOnly, isWishlist,
@@ -55,6 +56,7 @@ function MagicCard(props: MagicCardProps) {
   }, [customPrice, price, isEditingPrice]);
 
   const effectivePrice = customPrice !== undefined ? customPrice : (price || 0);
+  const isTradeable = (quantityForTrade ?? 0) > 0;
 
   const handleSavePrice = () => {
       if (onEditPrice) {
@@ -66,14 +68,33 @@ function MagicCard(props: MagicCardProps) {
   const currentImage = isFlipped && imageBackUrl ? imageBackUrl : imageUrl;
 
   const handleCardClick = () => {
+      // 1. Mode Sélection
       if (isSelectMode && onSelect) {
           onSelect();
-      } else if (imageBackUrl) {
+          return;
+      } 
+      
+      // 2. Vue Trade : Uniquement Flip (pas de navigation pour ne pas perdre le contexte)
+      if (isTradeView) {
+         if (imageBackUrl) {
+            setIsFlipped(!isFlipped);
+         }
+         return;
+      }
+      
+      // 3. Navigation vers Détails (Même en readOnly !)
+      if (props.id) {
+          window.location.href = `/card/${props.id}`;
+          return;
+      }
+
+      // 4. Flip par défaut si pas d'ID
+      if (imageBackUrl) {
           setIsFlipped(!isFlipped);
       }
   };
 
-  // --- VUE LISTE ---
+  // --- VUE LISTE (TradeView) ---
   if (isTradeView) {
       return (
         <div className="flex items-center gap-3 bg-surface p-2 rounded-lg border border-border content-visibility-auto transition-colors">
@@ -108,7 +129,7 @@ function MagicCard(props: MagicCardProps) {
       );
   }
 
-  // --- VUE GRILLE ---
+  // --- VUE GRILLE (Collection / Wishlist) ---
   return (
     <div 
         onClick={handleCardClick}
@@ -120,7 +141,7 @@ function MagicCard(props: MagicCardProps) {
             ? 'border-primary ring-1 ring-primary bg-primary/5' 
             : 'border-border hover:border-primary'
         }
-        ${isSelectMode ? 'cursor-pointer' : ''}
+        ${isSelectMode || !isTradeView ? 'cursor-pointer' : ''} 
         `}
     >
 
@@ -180,20 +201,7 @@ function MagicCard(props: MagicCardProps) {
                         {isSpecificVersion ? 'Exact' : 'Auto'}
                     </button>
                 )
-            ) : (
-                onToggleAttribute && (
-                    <button 
-                        onClick={(e) => { e.stopPropagation(); onToggleAttribute('isForTrade', !!isForTrade); }}
-                        className={`text-[10px] px-2 py-1 rounded border transition-colors font-medium flex-1 text-center ${
-                            isForTrade 
-                            ? 'bg-success/10 text-success border-success/20' 
-                            : 'bg-secondary text-muted border-transparent hover:bg-border'
-                        }`}
-                    >
-                        {isForTrade ? 'Trade' : 'Privé'}
-                    </button>
-                )
-            )}
+            ) : null}
             
             {isWishlist && !readOnly && !isSelectMode && onMove && (
                 <button 
@@ -207,12 +215,31 @@ function MagicCard(props: MagicCardProps) {
         </div>
         
         <div className={`mt-auto flex justify-between items-center border-t border-border pt-2 ${isSelectMode ? 'pointer-events-none opacity-50' : ''}`}>
+          
+          {/* BLOC GAUCHE : QUANTITÉ TOTALE */}
           <div className="flex items-center gap-1">
             {!readOnly && <button onClick={(e) => {e.stopPropagation(); onDecrement?.()}} className="w-5 h-5 rounded bg-secondary hover:bg-border text-muted hover:text-foreground flex items-center justify-center text-xs font-bold transition">-</button>}
-            <span className={`text-sm ${readOnly ? 'font-bold text-foreground' : 'w-4 text-center text-foreground'}`}>{readOnly && "x"}{quantity}</span>
+            
+            <span className={`text-sm ${readOnly ? 'font-bold text-foreground' : 'w-4 text-center text-foreground'}`}>
+                {quantity}
+            </span>
+            
             {!readOnly && <button onClick={(e) => {e.stopPropagation(); onIncrement?.()}} className="w-5 h-5 rounded bg-primary/10 hover:bg-primary/20 text-primary border border-primary/30 flex items-center justify-center text-xs font-bold transition">+</button>}
           </div>
+
+          {/* BLOC CENTRAL : STATUT DE TRADE */}
+          {isTradeable && !isWishlist && !isSelectMode && (
+               <div className="flex-grow text-center min-w-fit mx-1">
+                   <span 
+                       className="text-xs font-bold text-success bg-success/10 px-2 py-0.5 rounded-full"
+                       title={`${quantityForTrade} exemplaire(s) disponible(s) pour l'échange sur ${quantity} possédé(s).`}
+                   >
+                       {quantityForTrade} / {quantity} 🤝
+                   </span>
+               </div>
+          )}
           
+          {/* BLOC DROIT : PRIX */}
           <div className="text-right leading-none">
              <p className={`font-bold text-sm ${customPrice ? 'text-orange-600' : 'text-foreground'}`}>
                  {(effectivePrice * quantity).toFixed(2)} €

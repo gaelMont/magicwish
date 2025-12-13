@@ -13,6 +13,7 @@ type ScryfallDataRaw = {
 };
 
 export type CardType = {
+  uid: string;
   id: string;
   name: string;
   imageUrl: string;
@@ -26,7 +27,11 @@ export type CardType = {
   
   isFoil?: boolean;             
   isSpecificVersion?: boolean;
-  isForTrade?: boolean; 
+  
+  // Remplacement de isForTrade
+  quantityForTrade?: number; 
+  
+  lastPriceUpdate?: Date | null; 
   
   scryfallData?: Record<string, unknown>;
 };
@@ -104,9 +109,19 @@ export function useCardCollection(
       }
   };
 
+  // NOUVELLE FONCTION pour la quantité d'échange
+  const setTradeQuantity = async (cardId: string, quantity: number) => {
+      if (!isOwner) return;
+      const ref = getDocRef(cardId);
+      if (ref) {
+          await updateDoc(ref, { quantityForTrade: quantity });
+      }
+  };
+
+
   const toggleAttribute = async (
       cardId: string, 
-      field: 'isFoil' | 'isSpecificVersion' | 'isForTrade', 
+      field: 'isFoil' | 'isSpecificVersion', // 'isForTrade' est retiré
       currentValue: boolean
   ) => {
       if (!isOwner) return;
@@ -136,12 +151,29 @@ export function useCardCollection(
   // --- MISE À JOUR GLOBALE DES PRIX ---
   const refreshCollectionPrices = async () => {
       if (!isOwner || cards.length === 0) return;
-      const toastId = toast.loading(`Mise à jour de ${cards.length} cartes...`);
+      const toastId = toast.loading(`Mise à jour des prix...`);
 
+      // 1. DÉFINITION DE LA LOGIQUE TTL (48h pour toutes les cartes lors d'une action manuelle)
+      const NOW = Date.now();
+      const FORTY_EIGHT_HOURS_MS = 48 * 60 * 60 * 1000;
+
+      const cardsToUpdate = cards.filter(card => {
+          const lastUpdateMS = card.lastPriceUpdate instanceof Date ? card.lastPriceUpdate.getTime() : 0;
+          const freshness = NOW - lastUpdateMS;
+
+          return freshness > FORTY_EIGHT_HOURS_MS;
+      });
+      
+      if (cardsToUpdate.length === 0) {
+          toast.success("Prix déjà à jour !", { id: toastId });
+          return;
+      }
+      
+      // 2. LOGIQUE D'APPEL ET DE BATCH (Utilise cardsToUpdate)
       try {
           const chunks = [];
-          for (let i = 0; i < cards.length; i += 75) {
-              chunks.push(cards.slice(i, i + 75));
+          for (let i = 0; i < cardsToUpdate.length; i += 75) {
+              chunks.push(cardsToUpdate.slice(i, i + 75));
           }
 
           for (const chunk of chunks) {
@@ -170,6 +202,7 @@ export function useCardCollection(
                       if (ref) {
                           batch.update(ref, { 
                               price: newPrice,
+                              lastPriceUpdate: new Date(),
                               scryfallData: scryCard as Record<string, unknown>
                           });
                           batchHasOps = true;
@@ -178,10 +211,10 @@ export function useCardCollection(
               });
 
               if (batchHasOps) await batch.commit();
-              await new Promise(r => setTimeout(r, 100));
+              await new Promise(r => setTimeout(r, 100)); // Respect de la limite Scryfall
           }
 
-          toast.success("Collection mise à jour avec succès !", { id: toastId });
+          toast.success(`Succès : ${cardsToUpdate.length} cartes mises à jour !`, { id: toastId });
 
       } catch (e) {
           console.error(e);
@@ -190,6 +223,7 @@ export function useCardCollection(
   };
 
   // --- GESTION DE MASSE DU CLASSEUR D'ÉCHANGE ---
+  // Mise à jour pour utiliser setTradeQuantity (met à jour le nombre)
   const bulkSetTradeStatus = async (
       action: 'excess' | 'all' | 'reset', 
       threshold: number = 4
@@ -202,33 +236,34 @@ export function useCardCollection(
 
       cards.forEach(card => {
           let shouldUpdate = false;
-          let newValue = false;
+          let newValue = 0; 
 
           if (action === 'reset') {
-              if (card.isForTrade) {
+              if ((card.quantityForTrade ?? 0) > 0) {
                   shouldUpdate = true;
-                  newValue = false;
+                  newValue = 0;
               }
               label = "Remise à zéro";
           } 
           else if (action === 'all') {
-              if (!card.isForTrade) {
+              if ((card.quantityForTrade ?? 0) !== card.quantity) {
                   shouldUpdate = true;
-                  newValue = true;
+                  newValue = card.quantity; // Met tout le stock à l'échange
               }
               label = "Tout ajouter";
           } 
           else if (action === 'excess') {
-              if (card.quantity > threshold && !card.isForTrade) {
+              const tradeableQty = Math.max(0, card.quantity - threshold);
+              if ((card.quantityForTrade ?? 0) !== tradeableQty) {
                   shouldUpdate = true;
-                  newValue = true;
+                  newValue = tradeableQty; // Met le surplus à l'échange
               }
           }
 
           if (shouldUpdate) {
               const ref = getDocRef(card.id);
               if (ref) {
-                  batch.update(ref, { isForTrade: newValue });
+                  batch.update(ref, { quantityForTrade: newValue });
                   opCount++;
               }
           }
@@ -242,7 +277,7 @@ export function useCardCollection(
       }
   };
 
-  // --- NOUVEAU : ACTIONS DE SÉLECTION MULTIPLE ---
+  // --- NOUVEAU : ACTIONS DE SÉLECTION MULTIPLE (Mise à jour) ---
 
   const bulkRemoveCards = async (cardIds: string[]) => {
       if (!isOwner || cardIds.length === 0) return;
@@ -257,13 +292,22 @@ export function useCardCollection(
       toast.success(`${cardIds.length} cartes supprimées`);
   };
 
-  const bulkUpdateAttribute = async (cardIds: string[], field: 'isForTrade' | 'isFoil', value: boolean) => {
+  // Mise à jour pour gérer le statut de trade différemment
+  const bulkUpdateAttribute = async (cardIds: string[], field: 'isFoil' | 'quantityForTrade' | 'isSpecificVersion', value: boolean | number) => {
       if (!isOwner || cardIds.length === 0) return;
 
       const batch = writeBatch(db);
       cardIds.forEach(id => {
           const ref = getDocRef(id);
-          if (ref) batch.update(ref, { [field]: value });
+          if (ref) {
+             if (field === 'quantityForTrade') {
+                 // Si on passe une valeur booléenne pour l'échange (ex: true/false), on la convertit en quantité 
+                 const tradeQty = typeof value === 'boolean' ? (value ? 99 : 0) : value; // 99 si true
+                 batch.update(ref, { [field]: tradeQty });
+             } else {
+                 batch.update(ref, { [field]: value });
+             }
+          }
       });
 
       await batch.commit();
@@ -280,6 +324,7 @@ export function useCardCollection(
   return { 
       cards, loading, isOwner, totalPrice,
       updateQuantity, removeCard, setCustomPrice, toggleAttribute,
+      setTradeQuantity, // NOUVEAU
       refreshCollectionPrices, bulkSetTradeStatus,
       bulkRemoveCards, bulkUpdateAttribute 
   };

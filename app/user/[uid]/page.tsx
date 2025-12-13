@@ -1,3 +1,4 @@
+// app/user/[uid]/page.tsx
 'use client';
 
 import { useState, useEffect, use } from 'react';
@@ -6,6 +7,7 @@ import { doc, getDoc } from 'firebase/firestore';
 import { useCardCollection } from '@/hooks/useCardCollection';
 import MagicCard from '@/components/MagicCard';
 import { FriendProfile } from '@/hooks/useFriends'; 
+import ColumnSlider from '@/components/ColumnSlider'; // <--- IMPORT
 
 export default function UserProfilePage({ params }: { params: Promise<{ uid: string }> }) {
   const unwrappedParams = use(params);
@@ -14,6 +16,9 @@ export default function UserProfilePage({ params }: { params: Promise<{ uid: str
   const [profile, setProfile] = useState<FriendProfile | null>(null);
   const [activeTab, setActiveTab] = useState<'collection' | 'wishlist'>('collection');
   
+  // État local pour le slider
+  const [columns, setColumns] = useState(4); // <--- NOUVEAU
+
   const { cards, loading, totalPrice } = useCardCollection(activeTab, 'default', targetUid);
 
   useEffect(() => {
@@ -38,12 +43,10 @@ export default function UserProfilePage({ params }: { params: Promise<{ uid: str
         
         {/* HEADER PROFIL */}
         <div className="bg-surface rounded-2xl p-6 shadow-sm border border-border mb-6 flex flex-col md:flex-row items-center md:items-start gap-6">
-            {/* Avatar */}
             <div className="w-24 h-24 rounded-full bg-linear-to-br from-primary to-purple-600 flex items-center justify-center text-white text-3xl font-bold border-4 border-surface shadow-md overflow-hidden">
                 {profile?.photoURL ? <img src={profile.photoURL} alt="" className="w-full h-full object-cover"/> : profile?.username?.[0]?.toUpperCase()}
             </div>
             
-            {/* Infos */}
             <div className="text-center md:text-left flex-grow">
                 <h1 className="text-3xl font-bold text-foreground mb-1">
                     {profile?.displayName || 'Utilisateur'}
@@ -53,14 +56,13 @@ export default function UserProfilePage({ params }: { params: Promise<{ uid: str
                 </p>
             </div>
 
-            {/* Stats Valeur */}
             <div className="bg-success/10 px-6 py-4 rounded-xl border border-success/20 text-center">
                 <p className="text-xs uppercase text-success font-bold mb-1">Valeur affichée</p>
                 <p className="text-2xl font-bold text-success">{totalPrice.toFixed(2)} €</p>
             </div>
         </div>
 
-        {/* TABS (Style unifié avec ta collection) */}
+        {/* TABS */}
         <div className="flex justify-center mb-8 border-b border-border">
             <button 
                 onClick={() => setActiveTab('collection')}
@@ -84,7 +86,12 @@ export default function UserProfilePage({ params }: { params: Promise<{ uid: str
             </button>
         </div>
 
-        {/* GRILLE DE CARTES */}
+        {/* BARRE D'OUTILS D'AFFICHAGE */}
+        <div className="flex justify-end mb-4">
+            <ColumnSlider columns={columns} setColumns={setColumns} />
+        </div>
+
+        {/* GRILLE DE CARTES DYNAMIQUE */}
         {loading ? (
             <p className="text-center p-10 text-muted">Chargement des cartes...</p>
         ) : cards.length === 0 ? (
@@ -92,7 +99,12 @@ export default function UserProfilePage({ params }: { params: Promise<{ uid: str
                 <p className="text-muted italic">Cette liste est vide.</p>
             </div>
         ) : (
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 animate-in fade-in slide-in-from-bottom-4 duration-500">
+            <div 
+                className="grid gap-4 animate-in fade-in slide-in-from-bottom-4 duration-500"
+                style={{ 
+                    gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` 
+                }}
+            >
                 {cards.map(card => (
                     <MagicCard 
                         key={card.id} 

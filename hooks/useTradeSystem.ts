@@ -9,7 +9,7 @@ import {
 import { useAuth } from '@/lib/AuthContext';
 import { CardType } from './useCardCollection';
 import { executeServerTrade } from '@/app/actions/trade'; 
-import { proposeTradeAction } from '@/app/actions/trade-proposal'; // <--- IMPORT
+import { proposeTradeAction } from '@/app/actions/trade-proposal'; 
 import toast from 'react-hot-toast';
 
 export type TradeStatus = 'pending' | 'completed' | 'rejected' | 'cancelled';
@@ -27,13 +27,35 @@ export type TradeRequest = {
 };
 
 // Fonction utilitaire pour convertir les CardType du client vers le format attendu par le serveur
-// (Gère les incompatibilités de types strictes si nécessaire)
 const mapCardsForServer = (cards: CardType[]) => {
-    return cards.map(c => ({
-        ...c,
-        imageBackUrl: c.imageBackUrl || null,
-        scryfallData: (c.scryfallData as Record<string, unknown>) || null
-    }));
+    return cards.map(c => {
+        const clean = { ...c };
+        
+        // Suppression des objets Firestore Timestamp (non sérialisables par Server Actions)
+        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+        // @ts-expect-error
+        delete clean.addedAt;
+        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+        // @ts-expect-error
+        delete clean.importedAt;
+        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+        // @ts-expect-error
+        delete clean.lastUpdated;
+        
+        // Suppression des champs qui peuvent être ajoutés par l'import/DB mais qui ne sont pas dans le CardSchema Zod
+        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+        // @ts-expect-error 
+        delete clean.condition;
+        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+        // @ts-expect-error 
+        delete clean.language;
+
+        return {
+            ...clean,
+            imageBackUrl: c.imageBackUrl || null,
+            scryfallData: (c.scryfallData as Record<string, unknown>) || null
+        };
+    });
 };
 
 export function useTradeSystem() {
@@ -43,6 +65,8 @@ export function useTradeSystem() {
   const [outgoingTrades, setOutgoingTrades] = useState<TradeRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
+
+  // NOTE: isProposing est retiré ici car géré localement par useTransition dans les pages
 
   useEffect(() => {
     if (!user) return;
@@ -75,6 +99,8 @@ export function useTradeSystem() {
 
   const proposeTrade = async (receiverUid: string, receiverName: string, toGive: CardType[], toReceive: CardType[]) => {
     if (!user) return false;
+    
+    // L'état de chargement local (isPending) est géré par useTransition
     const toastId = toast.loading("Envoi de la proposition...");
 
     try {
@@ -89,12 +115,30 @@ export function useTradeSystem() {
       };
 
       // Appel de la Server Action
-      const result = await proposeTradeAction(payload);
+      const result = await proposeTradeAction(payload) as { 
+          success: boolean; 
+          error?: string; 
+          proposalConflict?: boolean; // <--- Réponse de conflit
+          existingTradeId?: string; 
+      }; 
 
       if (result.success) {
           toast.success("Proposition envoyée !", { id: toastId });
           return true;
-      } else {
+      } 
+      else if (result.proposalConflict) {
+          // GESTION DU CONFLIT DE PROPOSITION
+          const friendName = receiverName || "cet ami";
+          
+          toast.error(`Vous avez déjà une proposition en attente avec ${friendName} pour ces cartes.`, { 
+              id: toastId, 
+              duration: 5000 
+          });
+          // Option future : ajouter ici un lien ou une modale pour éditer la proposition existante (ID: result.existingTradeId)
+          
+          return false; // Échec de la création, mais l'UI est informée
+      }
+      else {
           throw new Error(result.error);
       }
 
@@ -114,7 +158,6 @@ export function useTradeSystem() {
     const toastId = toast.loading("Validation sécurisée en cours...");
 
     try {
-        // executeServerTrade attend toujours CardType[], on passe directement
         const result = await executeServerTrade(
             trade.id, 
             trade.senderUid,
@@ -165,6 +208,6 @@ export function useTradeSystem() {
   return { 
     incomingTrades, outgoingTrades, loading, 
     proposeTrade, acceptTrade, rejectTrade, cancelTrade,
-    isProcessing 
+    isProcessing,
   };
 }

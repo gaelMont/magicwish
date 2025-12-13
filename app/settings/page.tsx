@@ -173,7 +173,7 @@ const ProfileSettingsCard = () => {
                             type="text"
                             value={pseudo}
                             onChange={(e) => setPseudo(e.target.value)}
-                            className="flex-grow p-2 border border-border rounded-lg bg-background text-foreground"
+                            className="grow p-2 border border-border rounded-lg bg-background text-foreground"
                             disabled={isLoading}
                         />
                         <button 

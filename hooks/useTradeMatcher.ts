@@ -38,28 +38,21 @@ export function useTradeMatcher() {
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("");
 
-  // --- 1. CHARGEMENT OPTIMISÉ (Avec filtrage 'isForTrade' côté serveur) ---
+  // --- 1. CHARGEMENT OPTIMISÉ ---
   const fetchCardsAsMap = async (
       uid: string, 
       mode: 'collection' | 'wishlist', 
       userLists: WishlistMeta[] = [],
-      onlyTradeable: boolean = false // <--- Nouveau paramètre d'optimisation
+      // 'onlyTradeable' est retiré ou non utilisé ici car le filtre se fait côté client/mémoire
   ) => {
     const cardsMap = new Map<string, CardType>();
 
     try {
         if (mode === 'collection') {
             const colRef = collection(db, 'users', uid, 'collection');
-            
-            // OPTIMISATION : Si on ne veut que les échanges, on filtre via Firestore (économie de lectures)
-            let q;
-            if (onlyTradeable) {
-                q = query(colRef, where('isForTrade', '==', true));
-            } else {
-                q = colRef;
-            }
-
-            const snap = await getDocs(q);
+            // Retrait de la query where('isForTrade', '==', true) 
+            // pour charger toutes les cartes et filtrer sur quantityForTrade plus tard.
+            const snap = await getDocs(colRef);
             snap.forEach(d => cardsMap.set(d.id, { id: d.id, ...d.data() } as CardType));
         } else {
             // Charge la liste par défaut
@@ -92,24 +85,38 @@ export function useTradeMatcher() {
     return cardsMap;
   };
 
-  // --- 2. MISE À JOUR PRIX CIBLÉE (CORRIGÉE & STRICTE) ---
+  // --- 2. MISE À JOUR PRIX CIBLÉE (TTL 48h) ---
   const refreshPricesForProposals = async (currentProposals: TradeProposal[], myUid: string) => {
+     
+     // Logique TTL de 48 heures
+     const FORTY_EIGHT_HOURS_MS = 48 * 60 * 60 * 1000;
+     const NOW = Date.now();
+
      // On extrait toutes les cartes uniques impliquées
-     const cardsToUpdateMap = new Map<string, { card: CardType, ownerUid: string, collection: string }>();
+     const cardsToCheckMap = new Map<string, { card: CardType, ownerUid: string, collection: string }>();
 
      currentProposals.forEach(p => {
-         // IMPORTANT: On ne mettra pas à jour les cartes de l'ami ici car on n'a pas les droits d'écriture
-         p.toReceive.forEach(c => cardsToUpdateMap.set(`${p.friend.uid}_${c.id}`, { card: c, ownerUid: p.friend.uid, collection: 'collection' }));
-         p.toGive.forEach(c => cardsToUpdateMap.set(`${myUid}_${c.id}`, { card: c, ownerUid: myUid, collection: 'collection' }));
+         // Mes cartes à donner
+         p.toGive.forEach(c => cardsToCheckMap.set(`${myUid}_${c.id}`, { card: c, ownerUid: myUid, collection: 'collection' }));
+         // Cartes de l'ami à recevoir
+         p.toReceive.forEach(c => cardsToCheckMap.set(`${p.friend.uid}_${c.id}`, { card: c, ownerUid: p.friend.uid, collection: 'collection' }));
      });
 
-     const updatesArray = Array.from(cardsToUpdateMap.values());
-     if (updatesArray.length === 0) return;
+     const updatesArray = Array.from(cardsToCheckMap.values());
+     
+     // FILTRER SEULEMENT LES CARTES VIEILLES DE + DE 48H
+     const cardsToUpdate = updatesArray.filter(item => {
+         const lastUpdateMS = item.card.lastPriceUpdate instanceof Date ? item.card.lastPriceUpdate.getTime() : 0;
+         const freshness = NOW - lastUpdateMS;
+         return freshness > FORTY_EIGHT_HOURS_MS;
+     });
+
+     if (cardsToUpdate.length === 0) return;
 
      // On traite par paquets de 75 (limite Scryfall)
      const chunks = [];
-     for (let i = 0; i < updatesArray.length; i += 75) {
-         chunks.push(updatesArray.slice(i, i + 75));
+     for (let i = 0; i < cardsToUpdate.length; i += 75) {
+         chunks.push(cardsToUpdate.slice(i, i + 75));
      }
 
      const batch = writeBatch(db); 
@@ -117,7 +124,6 @@ export function useTradeMatcher() {
 
      for (const chunk of chunks) {
          try {
-             // On ne demande à Scryfall que les IDs
              const identifiers = chunk.map(item => ({ id: item.card.id }));
              
              const res = await fetch('https://api.scryfall.com/cards/collection', {
@@ -128,27 +134,26 @@ export function useTradeMatcher() {
 
              if (!res.ok) continue;
 
-             // Typage strict de la réponse
              const data = await res.json() as ScryfallCollectionResponse;
              const foundCards = data.data || [];
 
              foundCards.forEach(scryCard => {
                  const newPrice = parseFloat(scryCard.prices.eur || "0");
                  
-                 // On retrouve les cartes locales qui correspondent à cet ID Scryfall
                  const localMatches = chunk.filter(item => item.card.id === scryCard.id);
 
                  localMatches.forEach(match => {
-                     // Update mémoire (ref) pour l'affichage immédiat
                      if (match.card.price !== newPrice) {
+                         // 1. Update mémoire pour l'affichage immédiat
                          match.card.price = newPrice;
                          
-                         // Update Firestore : UNIQUEMENT SI C'EST MA CARTE
-                         if (match.ownerUid === myUid) {
-                             const ref = doc(db, 'users', match.ownerUid, match.collection, match.card.id);
-                             batch.update(ref, { price: newPrice });
-                             hasUpdates = true;
-                         }
+                         // 2. Update Firestore : ON UPDATE MA CARTE ET LA CARTE DE L'AMI
+                         const ref = doc(db, 'users', match.ownerUid, match.collection, match.card.id);
+                         batch.update(ref, { 
+                             price: newPrice,
+                             lastPriceUpdate: new Date(), // <-- MARQUE L'HEURE D'ACTUALISATION
+                         });
+                         hasUpdates = true;
                      }
                  });
              });
@@ -168,13 +173,13 @@ export function useTradeMatcher() {
 
     try {
         // A. Charger MES données
-        // OPTIMISATION: Pour ma collection, je ne charge que ce qui est "For Trade"
+        // On charge tout, le filtre de trade se fait en mémoire après
         const [myCollectionMap, myWishlistMap] = await Promise.all([
-            fetchCardsAsMap(user.uid, 'collection', [], true), 
+            fetchCardsAsMap(user.uid, 'collection'), 
             fetchCardsAsMap(user.uid, 'wishlist', lists)
         ]);
 
-        // B. Indexation de MA Wishlist (Set pour O(1))
+        // B. Indexation de MA Wishlist
         const myWishlistIds = new Set<string>();
         const myWishlistNames = new Set<string>();
         myWishlistMap.forEach(c => {
@@ -182,34 +187,36 @@ export function useTradeMatcher() {
             else myWishlistNames.add(c.name);
         });
 
-        // C. Indexation de MON Trade Binder
-        // Note: myCollectionMap ne contient déjà QUE les cartes isForTrade grâce au filtre Firestore
-        const myTradeCards = Array.from(myCollectionMap.values());
+        // C. Indexation de MON Trade Binder (Filtrage sur la quantité)
+        const myTradeCards = Array.from(myCollectionMap.values()).filter(c => (c.quantityForTrade ?? 0) > 0);
 
         setStatus(`Analyse simultanée de ${friends.length} amis...`);
 
         // D. SCAN PARALLÈLE DES AMIS
         const matchPromises = friends.map(async (friend) => {
-            // OPTIMISATION: On ne charge que les cartes échangeables de l'ami
+            // On charge tout, le filtre de trade se fait en mémoire après
             const [friendCollectionMap, friendWishlistMap] = await Promise.all([
-                fetchCardsAsMap(friend.uid, 'collection', [], true),
+                fetchCardsAsMap(friend.uid, 'collection'),
                 fetchCardsAsMap(friend.uid, 'wishlist')
             ]);
+            
+            // FILTRER SES CARTES ÉCHANGEABLES
+            const friendTradeCards = Array.from(friendCollectionMap.values()).filter(c => (c.quantityForTrade ?? 0) > 0);
 
             const toReceive: CardType[] = [];
             const toGive: CardType[] = [];
 
-            // 1. Check ce que JE reçois (Sa Collection [déjà filtrée Trade] vs Ma Wishlist)
-            friendCollectionMap.forEach(card => {
-                // Le check isForTrade est redondant ici si le serveur a bien filtré, mais on garde par sécurité
-                if (card.isForTrade) { 
+            // 1. Check ce que JE reçois (Sa Collection [Tradeable] vs Ma Wishlist)
+            friendTradeCards.forEach(card => {
+                // On s'assure que la carte est bien marquée comme tradeable
+                if ((card.quantityForTrade ?? 0) > 0) { 
                     if (myWishlistIds.has(card.id) || myWishlistNames.has(card.name)) {
                         toReceive.push(card);
                     }
                 }
             });
 
-            // 2. Check ce que JE donne (Ma Collection vs Sa Wishlist)
+            // 2. Check ce que JE donne (Ma Collection [Tradeable] vs Sa Wishlist)
             const friendWishlistIds = new Set<string>();
             const friendWishlistNames = new Set<string>();
             friendWishlistMap.forEach(c => {
@@ -218,8 +225,11 @@ export function useTradeMatcher() {
             });
 
             myTradeCards.forEach(card => {
-                if (friendWishlistIds.has(card.id) || friendWishlistNames.has(card.name)) {
-                    toGive.push(card);
+                // On s'assure que ma carte est bien marquée comme tradeable
+                if ((card.quantityForTrade ?? 0) > 0) {
+                    if (friendWishlistIds.has(card.id) || friendWishlistNames.has(card.name)) {
+                        toGive.push(card);
+                    }
                 }
             });
 
@@ -240,6 +250,7 @@ export function useTradeMatcher() {
         // E. MISE À JOUR DES PRIX (Seulement pour les cartes matchées)
         if (validProposals.length > 0) {
             setStatus("Actualisation des prix...");
+            // APPEL PROACTIF DU TTL 48H SUR TOUTES LES CARTES IMPLIQUÉES
             await refreshPricesForProposals(validProposals, user.uid);
             
             validProposals.forEach(p => {

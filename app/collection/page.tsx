@@ -1,3 +1,4 @@
+// app/collection/page.tsx
 'use client';
 
 import { useState, useMemo, useEffect } from 'react';
@@ -8,6 +9,7 @@ import ImportModal from '@/components/ImportModal';
 import ConfirmModal from '@/components/ConfirmModal';
 import DeleteAllButton from '@/components/DeleteAllButton';
 import CollectionToolsModal from '@/components/CollectionToolsModal';
+import ColumnSlider from '@/components/ColumnSlider'; // <--- IMPORT
 
 type SortOption = 'name' | 'price_desc' | 'price_asc' | 'quantity' | 'date';
 
@@ -33,21 +35,30 @@ export default function CollectionPage() {
   const [visibleCount, setVisibleCount] = useState(ITEMS_PER_PAGE);
   const [showFilters, setShowFilters] = useState(false);
 
+  // État pour les colonnes
+  const [columns, setColumns] = useState(5); // <--- NOUVEAU
+
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<SortOption>('date');
   const [filterSet, setFilterSet] = useState<string>('all');
   const [filterTrade, setFilterTrade] = useState(false);
   const [filterFoil, setFilterFoil] = useState(false);
+  
+  const [minPriceFilter, setMinPriceFilter] = useState<string>('');
+  const [maxPriceFilter, setMaxPriceFilter] = useState<string>('');
 
   useEffect(() => {
     if (visibleCount !== ITEMS_PER_PAGE) {
       setVisibleCount(ITEMS_PER_PAGE);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchQuery, sortBy, filterSet, filterTrade, filterFoil]);
+  }, [searchQuery, sortBy, filterSet, filterTrade, filterFoil, minPriceFilter, maxPriceFilter]);
 
   const filteredAndSortedCards = useMemo(() => {
     let result = [...cards];
+    
+    const minPrice = parseFloat(minPriceFilter);
+    const maxPrice = parseFloat(maxPriceFilter);
 
     if (searchQuery) {
         const lowerQ = searchQuery.toLowerCase();
@@ -57,10 +68,19 @@ export default function CollectionPage() {
         result = result.filter(c => c.setName === filterSet);
     }
     if (filterTrade) {
-        result = result.filter(c => c.isForTrade);
+        result = result.filter(c => (c.quantityForTrade ?? 0) > 0);
     }
     if (filterFoil) {
         result = result.filter(c => c.isFoil);
+    }
+    
+    if (!isNaN(minPrice) || !isNaN(maxPrice)) {
+        result = result.filter(c => {
+            const cardPrice = c.customPrice ?? c.price ?? 0;
+            const isAboveMin = isNaN(minPrice) || cardPrice >= minPrice;
+            const isBelowMax = isNaN(maxPrice) || cardPrice <= maxPrice;
+            return isAboveMin && isBelowMax;
+        });
     }
 
     result.sort((a, b) => {
@@ -76,7 +96,7 @@ export default function CollectionPage() {
     });
 
     return result;
-  }, [cards, searchQuery, sortBy, filterSet, filterTrade, filterFoil]);
+  }, [cards, searchQuery, sortBy, filterSet, filterTrade, filterFoil, minPriceFilter, maxPriceFilter]);
 
   const visibleCards = useMemo(() => {
       return filteredAndSortedCards.slice(0, visibleCount);
@@ -116,7 +136,8 @@ export default function CollectionPage() {
   };
 
   const handleBulkTrade = async (isTrade: boolean) => {
-      await bulkUpdateAttribute(selectedIds, 'isForTrade', isTrade);
+      const targetQuantity = isTrade ? 99 : 0; 
+      await bulkUpdateAttribute(selectedIds, 'quantityForTrade', targetQuantity); 
       setSelectedIds([]);
       setIsSelectMode(false);
   };
@@ -128,8 +149,6 @@ export default function CollectionPage() {
     <main className="container mx-auto p-4 pb-24 relative">
       
       <div className="flex flex-col gap-4 mb-6">
-        
-        {/* TITRE + TOTAL */}
         <div className="flex justify-between items-center">
             <h1 className="text-2xl md:text-3xl font-bold text-primary truncate">
                 Ma Collection 
@@ -175,7 +194,6 @@ export default function CollectionPage() {
         </div>
       </div>
 
-      {/* FILTRES (Remplacé bg-white par bg-surface) */}
       <div className="bg-surface p-4 rounded-xl border border-border shadow-sm mb-6">
           <div className="flex gap-2 items-center">
               <div className="grow">
@@ -196,6 +214,7 @@ export default function CollectionPage() {
           </div>
 
           <div className={`mt-4 space-y-4 md:space-y-0 md:flex md:items-end md:gap-4 ${showFilters ? 'block' : 'hidden md:flex'}`}>
+            
             <div className="min-w-[200px]">
                 <label className="block text-xs font-bold text-muted mb-1 uppercase">Edition</label>
                 <select value={filterSet} onChange={(e) => setFilterSet(e.target.value)} className="w-full p-2.5 rounded-lg border border-border bg-background text-foreground text-sm cursor-pointer">
@@ -203,6 +222,32 @@ export default function CollectionPage() {
                     {availableSets.map(set => <option key={set} value={set}>{set}</option>)}
                 </select>
             </div>
+            
+            <div className="min-w-[150px]">
+                <label className="block text-xs font-bold text-muted mb-1 uppercase">Prix Min (€)</label>
+                <input 
+                    type="number"
+                    min="0"
+                    step="any"
+                    placeholder="Min"
+                    value={minPriceFilter}
+                    onChange={(e) => setMinPriceFilter(e.target.value)}
+                    className="w-full p-2.5 rounded-lg border border-border bg-background text-foreground text-sm focus:ring-2 focus:ring-primary outline-none"
+                />
+            </div>
+            <div className="min-w-[150px]">
+                <label className="block text-xs font-bold text-muted mb-1 uppercase">Prix Max (€)</label>
+                <input 
+                    type="number"
+                    min="0"
+                    step="any"
+                    placeholder="Max"
+                    value={maxPriceFilter}
+                    onChange={(e) => setMaxPriceFilter(e.target.value)}
+                    className="w-full p-2.5 rounded-lg border border-border bg-background text-foreground text-sm focus:ring-2 focus:ring-primary outline-none"
+                />
+            </div>
+            
             <div className="min-w-[180px]">
                 <label className="block text-xs font-bold text-muted mb-1 uppercase">Trier par</label>
                 <select value={sortBy} onChange={(e) => setSortBy(e.target.value as SortOption)} className="w-full p-2.5 rounded-lg border border-border bg-background text-foreground text-sm cursor-pointer">
@@ -213,6 +258,12 @@ export default function CollectionPage() {
                     <option value="quantity">Quantité</option>
                 </select>
             </div>
+
+            {/* SLIDER AJOUTÉ ICI */}
+            <div className="pt-2 md:pt-0">
+                <ColumnSlider columns={columns} setColumns={setColumns} />
+            </div>
+
             <div className="flex items-center gap-4 pb-3 pt-2 md:pt-0">
                 <label className="flex items-center gap-2 cursor-pointer select-none">
                     <input type="checkbox" checked={filterFoil} onChange={(e) => setFilterFoil(e.target.checked)} className="w-4 h-4 text-primary rounded border-border" />
@@ -241,24 +292,30 @@ export default function CollectionPage() {
       {filteredAndSortedCards.length === 0 ? (
         <div className="text-center py-20 bg-secondary/50 rounded-xl border-2 border-dashed border-border">
           <p className="text-xl text-muted mb-4">Aucun résultat ne correspond à vos filtres.</p>
-          <button onClick={() => { setSearchQuery(''); setFilterSet('all'); setFilterTrade(false); setFilterFoil(false); }} className="text-primary hover:underline">Réinitialiser les filtres</button>
+          <button onClick={() => { setSearchQuery(''); setFilterSet('all'); setFilterTrade(false); setFilterFoil(false); setMinPriceFilter(''); setMaxPriceFilter(''); }} className="text-primary hover:underline">Réinitialiser les filtres</button>
         </div>
       ) : (
         <>
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
-            {visibleCards.map((card) => (
-                <MagicCard 
-                    key={card.id}
-                    {...card}
-                    onIncrement={() => updateQuantity(card.id, 1, card.quantity)}
-                    onDecrement={() => handleDecrement(card.id, card.quantity)}
-                    onEditPrice={(newPrice) => setCustomPrice(card.id, newPrice)}
-                    onToggleAttribute={(field, val) => toggleAttribute(card.id, field, val)}
-                    isSelectMode={isSelectMode}
-                    isSelected={selectedIds.includes(card.id)}
-                    onSelect={() => toggleSelection(card.id)}
-                />
-            ))}
+            {/* GRILLE DYNAMIQUE */}
+            <div 
+                className="grid gap-4"
+                style={{ 
+                    gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` 
+                }}
+            >
+                {visibleCards.map((card) => (
+                    <MagicCard 
+                        key={card.id}
+                        {...card}
+                        onIncrement={() => updateQuantity(card.id, 1, card.quantity)}
+                        onDecrement={() => handleDecrement(card.id, card.quantity)}
+                        onEditPrice={(newPrice) => setCustomPrice(card.id, newPrice)}
+                        onToggleAttribute={(field, val) => toggleAttribute(card.id, field, val)}
+                        isSelectMode={isSelectMode}
+                        isSelected={selectedIds.includes(card.id)}
+                        onSelect={() => toggleSelection(card.id)}
+                    />
+                ))}
             </div>
 
             {visibleCount < filteredAndSortedCards.length && (
@@ -277,7 +334,7 @@ export default function CollectionPage() {
       {/* ACTION BAR FLOTTANTE */}
       {isSelectMode && selectedIds.length > 0 && (
           <div className="fixed bottom-6 left-4 right-4 md:left-1/2 md:right-auto md:-translate-x-1/2 bg-surface shadow-2xl border border-border p-2 rounded-2xl flex items-center justify-around gap-2 z-50 animate-in slide-in-from-bottom-6 duration-300">
-              <button onClick={() => handleBulkTrade(true)} className="px-4 py-2 bg-green-100 hover:bg-green-200 text-green-800 rounded-xl text-sm font-bold transition flex flex-col items-center leading-none gap-1">
+              <button onClick={() => handleBulkTrade(true)} className="px-4 py-2 bg-success/10 hover:bg-success/20 text-success rounded-xl text-sm font-bold transition flex flex-col items-center leading-none gap-1">
                   <span>Trade</span>
               </button>
               <button onClick={() => handleBulkTrade(false)} className="px-4 py-2 bg-secondary hover:bg-border text-foreground rounded-xl text-sm font-bold transition flex flex-col items-center leading-none gap-1">
