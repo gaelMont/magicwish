@@ -60,12 +60,7 @@ export default function DashboardPage() {
                 >
                     Commencer gratuitement
                 </Link>
-                <a 
-                    href="#features"
-                    className="px-8 py-4 rounded-xl font-bold border border-border text-foreground hover:bg-surface transition"
-                >
-                    En savoir plus
-                </a>
+                
             </div>
         </section>
 
