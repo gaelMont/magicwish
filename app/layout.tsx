@@ -12,7 +12,7 @@ const inter = Inter({ subsets: ['latin'] });
 
 export const metadata: Metadata = {
   title: 'MagicWish',
-  description: 'Gérez vos cartes Pokémon, Yu-Gi-Oh! et Magic the Gathering',
+  description: 'Gérez vos cartes Magic the Gathering',
 };
 // ---------------------------------------------------
 
