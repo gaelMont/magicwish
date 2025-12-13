@@ -6,37 +6,40 @@ import { ThemeProvider } from '@/components/ThemeProvider';
 import Header from '@/components/Header'; 
 import { Toaster } from 'react-hot-toast';
 import UsernameSetupModal from '@/components/UsernameSetupModal'; 
-import Script from 'next/script'; // Import de Script pour AdSense
+import Script from 'next/script'; 
 
 const inter = Inter({ subsets: ['latin'] });
+
+const adsensePubId = process.env.NEXT_PUBLIC_ADSENSE_PUB_ID;
 
 export const metadata: Metadata = {
   title: 'MagicWish',
   description: 'Gérez vos cartes Magic the Gathering',
+
+  verification: adsensePubId ? {
+      google: adsensePubId 
+  } : undefined,
+
 };
-// ---------------------------------------------------
 
 export default function RootLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  // On s'assure que les publicités ne s'affichent qu'en production 
-  // et seulement si l'ID AdSense est configuré.
+  
+  // Maintenu pour le script de chargement (à faire uniquement en production)
   const isProd = process.env.NODE_ENV === 'production';
-  const adsensePubId = process.env.NEXT_PUBLIC_ADSENSE_PUB_ID;
 
   return (
     <html lang="fr" suppressHydrationWarning>
       
-      {/* SCRIPT GOOGLE ADSENSE (Intégré dans le HEAD de la page) */}
+      {/* SCRIPT GOOGLE ADSENSE (Pour l'affichage des publicités) */}
       {isProd && adsensePubId && (
         <Script
           async
-          // Utilise l'ID de publication de la variable d'environnement
           src={`https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=${adsensePubId}`}
-          // 'afterInteractive' est une bonne stratégie pour les scripts publicitaires
-          strategy="afterInteractive" 
+          strategy="beforeInteractive" // 3. CHANGEMENT : Injection plus précoce
           crossOrigin="anonymous"
         />
       )}
