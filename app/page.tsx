@@ -33,26 +33,71 @@ export default function DashboardPage() {
 
   if (authLoading) return <div className="flex h-screen items-center justify-center animate-pulse text-primary">Chargement...</div>;
 
+  // --- VUE DÉCONNECTÉE (LANDING PAGE) ---
   if (!user) {
     return (
-      <div className="flex flex-col items-center justify-center min-h-[80vh] text-center p-4">
-        <h1 className="text-5xl font-black text-primary mb-6 tracking-tight">
-          MagicWish
-        </h1>
-        <p className="text-xl text-muted max-w-lg mb-8">
-          Gérez votre collection, vos wishlists et vos échanges en toute simplicité.
-        </p>
-        <Link 
-          href="/login"
-          className="btn-primary py-3 px-8 rounded-full text-lg shadow-lg transition transform hover:scale-105"
-        >
-          Commencer maintenant
-        </Link>
+      <div className="flex flex-col min-h-[90vh]">
+        
+        {/* HERO SECTION */}
+        <section className="flex-1 flex flex-col items-center justify-center text-center p-6 space-y-8 max-w-4xl mx-auto mt-10">
+            <div className="space-y-4">
+                <span className="bg-primary/10 text-primary px-4 py-1.5 rounded-full text-xs font-bold uppercase tracking-wider">
+                    Bêta v1.0
+                </span>
+                <h1 className="text-5xl md:text-7xl font-black text-foreground tracking-tight">
+                    Gérez vos cartes <br/>
+                    <span className="bg-linear-to-r from-primary to-purple-600 bg-clip-text text-transparent">Magic: The Gathering</span>
+                </h1>
+                <p className="text-xl text-muted max-w-2xl mx-auto leading-relaxed">
+                    Importez votre collection, créez des wishlists et trouvez automatiquement des échanges avec vos amis grâce à notre scanner intelligent.
+                </p>
+            </div>
+
+            <div className="flex flex-col sm:flex-row gap-4 w-full justify-center">
+                <Link 
+                    href="/login"
+                    className="btn-primary py-4 px-8 rounded-xl text-lg shadow-lg shadow-primary/25 transition transform hover:scale-105"
+                >
+                    Commencer gratuitement
+                </Link>
+                <a 
+                    href="#features"
+                    className="px-8 py-4 rounded-xl font-bold border border-border text-foreground hover:bg-surface transition"
+                >
+                    En savoir plus
+                </a>
+            </div>
+        </section>
+
+        {/* FEATURES GRID */}
+        <section id="features" className="container mx-auto px-4 py-20">
+            <div className="grid md:grid-cols-3 gap-8">
+                {/* Feature 1 */}
+                <div className="bg-surface p-8 rounded-2xl border border-border shadow-sm hover:shadow-md transition">
+                    <div className="w-12 h-12 bg-blue-100 dark:bg-blue-900/30 rounded-xl flex items-center justify-center text-2xl mb-4">📚</div>
+                    <h3 className="text-xl font-bold text-foreground mb-2">Collection & Prix</h3>
+                    <p className="text-muted">Suivez la valeur de votre collection en temps réel grâce à l&apos;intégration Scryfall.</p>
+                </div>
+                {/* Feature 2 */}
+                <div className="bg-surface p-8 rounded-2xl border border-border shadow-sm hover:shadow-md transition">
+                    <div className="w-12 h-12 bg-purple-100 dark:bg-purple-900/30 rounded-xl flex items-center justify-center text-2xl mb-4">🤝</div>
+                    <h3 className="text-xl font-bold text-foreground mb-2">Échanges Intelligents</h3>
+                    <p className="text-muted">Notre algorithme croise votre collection avec les wishlists de vos amis pour proposer des deals.</p>
+                </div>
+                {/* Feature 3 */}
+                <div className="bg-surface p-8 rounded-2xl border border-border shadow-sm hover:shadow-md transition">
+                    <div className="w-12 h-12 bg-green-100 dark:bg-green-900/30 rounded-xl flex items-center justify-center text-2xl mb-4">✨</div>
+                    <h3 className="text-xl font-bold text-foreground mb-2">Wishlist Centralisée</h3>
+                    <p className="text-muted">Gérez vos recherches et partagez-les automatiquement avec votre cercle de jeu.</p>
+                </div>
+            </div>
+        </section>
+
       </div>
     );
   }
 
-  // Styles centralisés utilisant les variables sémantiques (bg-surface, border-border)
+  // --- VUE CONNECTÉE (DASHBOARD) ---
   const cardStyle = "p-6 rounded-2xl border border-border transition-all duration-200 shadow-sm hover:shadow-md hover:-translate-y-1 group bg-surface hover:border-primary";
 
   return (
