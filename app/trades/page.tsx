@@ -19,7 +19,7 @@ const IncomingRequestCard = ({ trade }: { trade: TradeRequest }) => {
     const valGive = trade.itemsReceived.reduce((acc: number, c: CardType) => acc + (c.price || 0), 0);
 
     return (
-        <div className="bg-surface rounded-xl border-l-4 border-primary shadow-sm p-4 mb-4 border-y border-r border-border">
+        <div className="bg-surface rounded-xl border-l-4 shadow-sm p-4 mb-4 border-y border-r border-border">
             <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-3">
                 <div>
                     <h3 className="font-bold text-foreground">Proposition de {trade.senderName}</h3>

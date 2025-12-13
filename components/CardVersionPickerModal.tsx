@@ -67,14 +67,19 @@ export default function CardVersionPickerModal({
 
   if (!isOpen || !currentCardRaw) return null;
 
-  const { imageUrl, imageBackUrl, name, setName, setCode, price } = normalizeCardData(currentCardRaw);
+  const { imageUrl, imageBackUrl, name, setName, setCode } = normalizeCardData(currentCardRaw);
   
+  // --- OPTIMISATION ICI : CLACUL DU PRIX ---
   const priceNormal = parseFloat(currentCardRaw.prices?.eur || "0");
   const priceFoil = parseFloat(currentCardRaw.prices?.eur_foil || "0");
-  const currentPrice = isFoil ? (priceFoil || priceNormal) : (priceNormal || priceFoil);
   
-  const hasFoilVersion = currentCardRaw.finishes?.includes('foil') || !!currentCardRaw.prices?.eur_foil;
-  const hasNonFoilVersion = currentCardRaw.finishes?.includes('nonfoil') || !!currentCardRaw.prices?.eur;
+  // Logique simplifiée pour le prix : Foil > Normal > 0
+  const currentPrice = isFoil 
+    ? (priceFoil > 0 ? priceFoil : priceNormal) 
+    : (priceNormal > 0 ? priceNormal : priceFoil);
+
+  const hasFoilVersion = currentCardRaw.finishes?.includes('foil') || priceFoil > 0;
+  const hasNonFoilVersion = currentCardRaw.finishes?.includes('nonfoil') || priceNormal > 0;
 
   const handleConfirm = () => {
     const finalCard: CardType = {
@@ -90,7 +95,7 @@ export default function CardVersionPickerModal({
         isSpecificVersion: !anyVersion,
         scryfallData: currentCardRaw,
         wishlistId: destination === 'wishlist' ? selectedListId : undefined,
-        uid: ''
+        uid: '' // uid est ajouté par le hook collection ou le serveur
     };
     
     onConfirm(finalCard, selectedListId);
@@ -129,14 +134,14 @@ export default function CardVersionPickerModal({
                 {loading ? (
                     <div className="w-full h-full bg-secondary animate-pulse flex items-center justify-center text-muted">Chargement...</div>
                 ) : (
-                    <img src={isFlipped && imageBackUrl ? imageBackUrl : imageUrl} alt="" className={`w-full h-full object-cover transition-transform duration-300 ${anyVersion ? 'opacity-80 grayscale-[50%]' : ''}`} />
+                    <img src={isFlipped && imageBackUrl ? imageBackUrl : imageUrl} alt="" className={`w-full h-full object-cover transition-transform duration-300 ${anyVersion ? 'opacity-80 grayscale-50' : ''}`} />
                 )}
                 {anyVersion && (
                     <div className="absolute inset-0 flex items-center justify-center bg-black/40 backdrop-blur-[2px]">
                         <span className="bg-primary text-primary-foreground font-bold px-3 py-1 rounded-full text-sm shadow-lg border border-white/20">Générique</span>
                     </div>
                 )}
-                {isFoil && !anyVersion && <div className="absolute inset-0 bg-gradient-to-tr from-purple-500/30 to-transparent mix-blend-overlay pointer-events-none" />}
+                {isFoil && !anyVersion && <div className="absolute inset-0 bg-linear-to-tr from-purple-500/30 to-transparent mix-blend-overlay pointer-events-none" />}
             </div>
 
             {destination === 'wishlist' && availableLists && availableLists.length > 0 && (
@@ -172,7 +177,6 @@ export default function CardVersionPickerModal({
 
             <div className="w-full space-y-4">
                 
-                {/* --- CORRECTION : Affichage conditionnel de "Peu importe l'édition" --- */}
                 {destination === 'wishlist' && (
                     <label className="flex items-center justify-between bg-primary/10 p-3 rounded-xl border border-primary/20 cursor-pointer hover:bg-primary/20 transition">
                         <div className="flex flex-col">
@@ -186,7 +190,7 @@ export default function CardVersionPickerModal({
                                 checked={anyVersion} 
                                 onChange={(e) => handleAnyVersionChange(e.target.checked)} 
                             />
-                            <div className="w-11 h-6 bg-gray-200 dark:bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary"></div>
+                            <div className="w-11 h-6 bg-gray-200 dark:bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary"></div>
                         </div>
                     </label>
                 )}
@@ -208,6 +212,17 @@ export default function CardVersionPickerModal({
                          </div>
                     </div>
                 </div>
+
+                {/* Ajout du prix estimé au pied du sélecteur */}
+                <div className="w-full text-center p-2 bg-secondary rounded-lg border border-border">
+                    <p className="text-sm font-medium text-foreground">
+                        Prix estimé par carte : 
+                        <span className={`font-bold ml-2 ${currentPrice > 0 ? 'text-success' : 'text-muted'}`}>
+                           {currentPrice.toFixed(2)} €
+                        </span>
+                    </p>
+                </div>
+                
             </div>
         </div>
 
@@ -217,7 +232,7 @@ export default function CardVersionPickerModal({
                 className={`w-full font-bold py-4 rounded-xl text-lg transition shadow-lg transform active:scale-95 flex justify-center items-center gap-2 ${anyVersion ? 'bg-primary text-primary-foreground hover:opacity-90' : 'bg-amber-500 hover:bg-amber-400 text-black'}`}
             >
                 <span>{anyVersion ? 'Ajouter (Générique)' : 'Ajouter (Exact)'}</span>
-                {quantity > 1 && <span className="bg-black/20 px-2 py-0.5 rounded text-sm">{quantity}</span>}
+                {quantity > 1 && <span className="bg-black/20 px-2 py-0.5 rounded text-sm">{quantity}x</span>}
             </button>
         </div>
       </div>

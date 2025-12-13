@@ -7,7 +7,9 @@ import { useAuth } from '@/lib/AuthContext';
 import { db } from '@/lib/firebase';
 import { doc, writeBatch, increment } from 'firebase/firestore';
 import toast from 'react-hot-toast';
-import AdContainer from './AdContainer'; // <--- IMPORT AJOUTÉ
+import AdContainer from './AdContainer'; 
+
+// --- Types unifiés pour l'Import/Sync (strictement typé) ---
 
 type ManaboxRow = {
   "Binder Name": string;
@@ -25,20 +27,25 @@ type ManaboxRow = {
   "Condition": string;
 };
 
+// Structures de sous-objets pour les objets Scryfall
+interface ScryfallImageUris {
+    normal?: string;
+}
+interface ScryfallCardFace {
+    name: string;
+    image_uris?: ScryfallImageUris;
+}
+
 type ScryfallCard = {
   id: string;
   name: string;
   set: string;
-  collector_number: string;
   set_name: string;
+  collector_number: string;
   prices?: { eur?: string; usd?: string };
-  image_uris?: { normal?: string };
-  card_faces?: Array<{ 
-    name: string;
-    image_uris?: { normal?: string } 
-  }>;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  [key: string]: any;
+  image_uris?: ScryfallImageUris; 
+  card_faces?: ScryfallCardFace[];
+  [key: string]: unknown;
 };
 
 type ExistingCard = {
@@ -48,17 +55,74 @@ type ExistingCard = {
   foil?: boolean;
 };
 
+// --- Props mises à jour ---
+
 type ImportModalProps = {
   isOpen: boolean;
   onClose: () => void;
-  targetCollection?: string;
+  targetCollection?: 'collection' | 'wishlist'; 
   currentCollection?: ExistingCard[];
+  onGoBack: () => void; 
+  onCloseAll: () => void; 
 };
 
-export default function ImportModal({ isOpen, onClose, targetCollection = 'collection', currentCollection = [] }: ImportModalProps) {
+// --- Fonctions utilitaires ---
+
+const chunkArray = <T,>(array: T[], size: number): T[][] => {
+    const chunks = [];
+    for (let i = 0; i < array.length; i += size) {
+      chunks.push(array.slice(i, i + size));
+    }
+    return chunks;
+};
+
+const getCardInfo = (scryfallCard: ScryfallCard) => {
+    
+    // 1. Définition des valeurs initiales
+    let name = scryfallCard.name as string;
+    let imageUrl = scryfallCard.image_uris?.normal;
+    let imageBackUrl: string | null = null;
+    
+    // 2. Vérification des faces de carte (pour les cartes double face)
+    const cardFaces = scryfallCard.card_faces;
+
+    if (cardFaces && cardFaces.length > 1) {
+        // Face 1 (Recto)
+        name = cardFaces[0].name;
+
+        // Si l'image de la face 1 est meilleure que l'image globale (ou si l'image globale n'existe pas)
+        if (!imageUrl && cardFaces[0].image_uris?.normal) {
+            imageUrl = cardFaces[0].image_uris.normal;
+        }
+
+        // Face 2 (Verso)
+        if (cardFaces[1]?.image_uris?.normal) {
+            imageBackUrl = cardFaces[1].image_uris.normal;
+        }
+    }
+    
+    // 3. Fallback pour l'URL d'image
+    if (!imageUrl) {
+        imageUrl = "https://cards.scryfall.io/large/front/a/6/a6984342-f723-4e80-8e69-902d287a915f.jpg";
+    }
+
+    // Le retour est propre : imageUrl est toujours une chaîne, imageBackUrl est string ou null.
+    return { name, imageUrl, imageBackUrl };
+};
+
+// --- Composant ImportModal ---
+
+export default function ImportModal({ 
+    isOpen, 
+    onClose, 
+    targetCollection = 'collection', 
+    currentCollection = [],
+    onGoBack,
+    onCloseAll
+}: ImportModalProps) {
   const { user } = useAuth();
   
-  const [inputType, setInputType] = useState<'file' | 'text'>('file');
+  const [inputType, setInputType] = useState<'csv' | 'text'>('csv'); 
   const [textInput, setTextInput] = useState('');
   
   const [data, setData] = useState<ManaboxRow[]>([]);
@@ -72,36 +136,20 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
   const existingMap = useMemo(() => {
     const map = new Map<string, ExistingCard>();
     currentCollection.forEach(card => {
-        const key = card.id; 
-        map.set(key, card);
+        map.set(card.id, { id: card.id, quantity: card.quantity, foil: card.foil });
     });
     return map;
   }, [currentCollection]);
 
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (isOpen && e.key === 'Escape' && step !== 'importing') handleClose();
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, step]);
-
-  const handleClose = () => {
-    if (step === 'importing') return; 
-    onClose();
-    setTimeout(() => {
-      setStep('upload');
-      setData([]);
-      setTextInput('');
-      setProgress(0);
-    }, 300);
-  };
-
-  const handleBackdropClick = (e: React.MouseEvent) => {
-    if (e.target === e.currentTarget && step !== 'importing') handleClose();
-  };
-
-  if (!isOpen) return null;
+    if (isOpen) {
+        setStep('upload');
+        setData([]);
+        setTextInput('');
+        setProgress(0);
+        setInputType('csv');
+    }
+  }, [isOpen]);
 
   const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -126,7 +174,7 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
 
     const rows: ManaboxRow[] = [];
     const lines = textInput.split('\n');
-    const regex = /^(\d+)\s+(.+?)\s+\((\w+)\)\s+(\S+)(?:\s+\*(F)\*)?/;
+    const regex = /^(\d+)\s+(.+?)\s+\((\w+)\)(?:\s+(\S+))?(?:\s+\*(F)\*)?/;
 
     lines.forEach(line => {
         const cleanLine = line.trim();
@@ -134,58 +182,21 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
         const match = cleanLine.match(regex);
         if (match) {
             rows.push({
-                "Quantity": match[1],
-                "Name": match[2],
-                "Set code": match[3].toLowerCase(),
-                "Collector number": match[4],
-                "Foil": match[5] === 'F' ? "true" : "false",
-                "Scryfall ID": "", 
-                "Binder Name": "Import Texte",
-                "Set name": "",
-                "Rarity": "",
-                "ManaBox ID": "",
-                "Purchase price": "0",
-                "Language": "en",
-                "Condition": "Near Mint"
+                "Quantity": match[1], "Name": match[2], "Set code": match[3].toLowerCase(),
+                "Collector number": match[4] || '', "Foil": match[5] === 'F' ? "true" : "false",
+                "Scryfall ID": "", "Binder Name": "Import Texte", "Set name": "", "Rarity": "", 
+                "ManaBox ID": "", "Purchase price": "0", "Language": "en", "Condition": "Near Mint"
             });
         }
     });
 
     if (rows.length === 0) {
-        toast.error("Format non reconnu.");
+        toast.error("Format de texte non reconnu. (Attendu: Qty Nom (Set Code) Num)");
         return;
     }
     setColumns(["Name", "Set code", "Quantity", "Foil", "Collector number"]);
     setData(rows);
     setStep('preview');
-  };
-
-  const chunkArray = <T,>(array: T[], size: number): T[][] => {
-    const chunks = [];
-    for (let i = 0; i < array.length; i += size) {
-      chunks.push(array.slice(i, i + size));
-    }
-    return chunks;
-  };
-
-  const getCardInfo = (scryfallCard: ScryfallCard) => {
-    let name = scryfallCard.name;
-    let imageUrl = scryfallCard.image_uris?.normal;
-    let imageBackUrl = null;
-
-    if (scryfallCard.card_faces && scryfallCard.card_faces.length > 1) {
-      name = scryfallCard.card_faces[0].name;
-      if (!imageUrl && scryfallCard.card_faces[0].image_uris) {
-        imageUrl = scryfallCard.card_faces[0].image_uris.normal;
-      }
-      if (scryfallCard.card_faces[1].image_uris) {
-        imageBackUrl = scryfallCard.card_faces[1].image_uris.normal;
-      }
-    }
-    if (!imageUrl) {
-        imageUrl = "https://cards.scryfall.io/large/front/a/6/a6984342-f723-4e80-8e69-902d287a915f.jpg";
-    }
-    return { name, imageUrl, imageBackUrl };
   };
 
   const startImport = async () => {
@@ -222,28 +233,25 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
     let processedCount = skippedCount; 
     let successCount = 0; 
 
+    // --- MISE À JOUR RAPIDE DES CARTES EXISTANTES ---
     if (rowsToUpdateDirectly.length > 0) {
-        setStatusMsg("Mise à jour rapide...");
+        setStatusMsg("Mise à jour rapide des cartes existantes...");
         const updateChunks = chunkArray(rowsToUpdateDirectly, 400);
 
         for (const chunk of updateChunks) {
             const batch = writeBatch(db);
             chunk.forEach(row => {
-                const cardRef = doc(db, 'users', user.uid, targetCollection, row["Scryfall ID"]);
-                const qtyToAdd = parseInt(row["Quantity"]);
+                if (!row["Scryfall ID"]) return; 
+                
+                const collectionPath = targetCollection === 'wishlist' ? 'wishlist' : 'collection'; 
+                const cardRef = doc(db, 'users', user.uid, collectionPath, row["Scryfall ID"]);
+                const qty = parseInt(row["Quantity"]);
+                const isFoil = row["Foil"] === "true";
                 
                 if (importMode === 'sync') {
-                    batch.update(cardRef, {
-                        quantity: qtyToAdd,
-                        foil: row["Foil"] === "true",
-                        price: parseFloat(row["Purchase price"]) || 0,
-                    });
+                    batch.update(cardRef, { quantity: qty, isFoil: isFoil });
                 } else {
-                    batch.update(cardRef, {
-                        quantity: increment(qtyToAdd),
-                        foil: row["Foil"] === "true",
-                        importedAt: new Date()
-                    });
+                    batch.update(cardRef, { quantity: increment(qty), isFoil: isFoil, importedAt: new Date() });
                 }
                 successCount++;
             });
@@ -253,15 +261,19 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
         }
     }
 
+    // --- IDENTIFICATION ET CRÉATION DES NOUVELLES CARTES ---
     if (rowsToFetch.length > 0) {
-        setStatusMsg("Identification des cartes...");
+        setStatusMsg("Identification des cartes (Scryfall)...");
         const fetchChunks = chunkArray(rowsToFetch, 75);
 
         for (const chunk of fetchChunks) {
             try {
                 const identifiers = chunk.map(row => {
                     if (row["Scryfall ID"]) return { id: row["Scryfall ID"] };
-                    return { name: row["Name"], set: row["Set code"], collector_number: row["Collector number"] };
+                    if (row["Collector number"] && row["Set code"]) {
+                         return { name: row["Name"], set: row["Set code"], collector_number: row["Collector number"] }; 
+                    }
+                    return { name: row["Name"], set: row["Set code"] || 'any' }; 
                 });
                 
                 const response = await fetch('https://api.scryfall.com/cards/collection', {
@@ -271,14 +283,18 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
                 });
 
                 const result = await response.json();
-                const foundCards: ScryfallCard[] = result.data || [];
+                const foundCards: ScryfallCard[] = result.data || []; 
                 const batch = writeBatch(db);
                 let batchHasOps = false;
                 
                 foundCards.forEach(scryfallData => {
+                    const scryfallName = (scryfallData.name as string).split(' // ')[0].trim().toLowerCase();
+                    const scryfallSetCode = scryfallData.set ? (scryfallData.set as string).toLowerCase() : '';
+                    
                     const matchingRow = chunk.find(r => 
                         r["Scryfall ID"] === scryfallData.id || 
-                        (r["Set code"] === scryfallData.set && r["Collector number"] === scryfallData.collector_number)
+                        (r["Name"].split(' // ')[0].trim().toLowerCase() === scryfallName && 
+                         r["Set code"]?.toLowerCase() === scryfallSetCode)
                     );
 
                     if (matchingRow) {
@@ -297,18 +313,21 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
                         }
 
                         if (shouldWrite) {
-                            const { name, imageUrl, imageBackUrl } = getCardInfo(scryfallData);
-                            const cardRef = doc(db, 'users', user.uid, targetCollection, scryfallData.id);
+                            const { name: cardName, imageUrl, imageBackUrl } = getCardInfo(scryfallData);
+                            
+                            const collectionPath = targetCollection === 'wishlist' ? 'wishlist' : 'collection'; 
+                            const cardRef = doc(db, 'users', user.uid, collectionPath, scryfallData.id);
                             
                             const cardData = {
-                                name, imageUrl, imageBackUrl,
-                                setName: scryfallData.set_name, setCode: scryfallData.set,
+                                name: cardName, imageUrl, imageBackUrl,
+                                setName: scryfallData.set_name as string, setCode: scryfallData.set as string,
                                 scryfallId: scryfallData.id,
-                                price: parseFloat(scryfallData.prices?.eur || "0"),
-                                foil: csvFoil,
+                                price: parseFloat((scryfallData.prices as { eur?: string })?.eur || "0"),
+                                isFoil: csvFoil,
                                 importedAt: new Date(),
-                                // --- SAUVEGARDE COMPLÈTE ICI ---
-                                scryfallData: scryfallData
+                                scryfallData: scryfallData,
+                                wishlistId: targetCollection === 'wishlist' ? 'default' : null,
+                                ...(targetCollection === 'collection' && { quantityForTrade: 0 })
                             };
 
                             if (importMode === 'add') {
@@ -336,45 +355,69 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
     }
 
     toast.success(`${successCount} cartes synchronisée(s) !`, { duration: 4000 });
-    handleClose();
+    onCloseAll();
   };
 
+
+  if (!isOpen) return null;
+
+  const targetLabel = targetCollection === 'collection' ? 'Collection' : 'Wishlist';
+
   return (
-    <div 
-      className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 backdrop-blur-sm"
-      onClick={handleBackdropClick}
-    >
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 backdrop-blur-sm" onClick={() => step !== 'importing' && onGoBack()}>
       <div 
-        className="bg-surface rounded-xl p-6 max-w-5xl w-full shadow-2xl border border-border flex flex-col max-h-[90vh]"
+        className="bg-surface rounded-xl p-6 max-w-5xl w-full shadow-2xl border border-border flex flex-col max-h-[90vh] animate-in fade-in duration-200"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex-none flex justify-between items-center mb-4 border-b border-border pb-3">
-          <h2 className="text-xl font-bold text-foreground">
-            Ajouter des cartes
-          </h2>
-          {step !== 'importing' && (
-             <button onClick={handleClose} className="text-muted hover:text-foreground text-lg p-2">✕</button>
-          )}
+            <div className="flex items-center gap-3">
+                {step !== 'importing' && (
+                    <button onClick={onGoBack} className="text-muted hover:text-foreground text-xl p-1 rounded transition">←</button>
+                )}
+                <h2 className="text-xl font-bold text-foreground">
+                    📥 Importer : {targetLabel}
+                </h2>
+            </div>
+            {step !== 'importing' && (
+                <button onClick={onCloseAll} className="text-muted hover:text-danger text-lg p-2">✕</button>
+            )}
         </div>
 
-        <div className="flex-grow overflow-hidden flex flex-col min-h-0">
+        <div className="grow overflow-hidden flex flex-col min-h-0">
             
             {step === 'upload' && (
                 <div className="flex flex-col h-full overflow-hidden">
+                    <p className="text-sm text-muted mb-4 flex-none">
+                        Collez vos données ou importez un fichier CSV (Manabox, Deckbox).
+                    </p>
                     <div className="flex-none flex border-b border-border mb-4">
-                        <button onClick={() => setInputType('file')} className={`px-4 py-2 font-medium text-sm border-b-2 transition-colors ${inputType === 'file' ? 'border-primary text-primary' : 'border-transparent text-muted'}`}>📂 Fichier CSV</button>
-                        <button onClick={() => setInputType('text')} className={`px-4 py-2 font-medium text-sm border-b-2 transition-colors ${inputType === 'text' ? 'border-primary text-primary' : 'border-transparent text-muted'}`}>📝 Copier / Coller</button>
+                        <button onClick={() => setInputType('csv')} className={`px-4 py-2 font-medium text-sm border-b-2 transition-colors ${inputType === 'csv' ? 'border-primary text-primary' : 'border-transparent text-muted'}`}>📄 Fichier CSV</button>
+                        <button onClick={() => setInputType('text')} className={`px-4 py-2 font-medium text-sm border-b-2 transition-colors ${inputType === 'text' ? 'border-primary text-primary' : 'border-transparent text-muted'}`}>📝 Coller Texte</button>
                     </div>
-                    {inputType === 'file' ? (
-                        <div className="flex-grow p-12 border-2 border-dashed border-border rounded-xl text-center hover:bg-secondary transition relative cursor-pointer group flex flex-col items-center justify-center">
+                    
+                    {inputType === 'csv' ? (
+                        <div className="grow p-12 border-2 border-dashed border-border rounded-xl text-center hover:bg-secondary transition relative cursor-pointer group flex flex-col items-center justify-center">
                             <input type="file" accept=".csv" onChange={handleFileUpload} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-50" />
                             <div className="text-6xl mb-4 group-hover:scale-110 transition-transform">📂</div>
-                            <p className="font-bold text-lg text-foreground">Déposer CSV Manabox</p>
+                            <p className="font-bold text-lg text-foreground">Déposer un fichier CSV</p>
                         </div>
                     ) : (
-                        <div className="flex-grow flex flex-col min-h-0">
-                            <textarea value={textInput} onChange={(e) => setTextInput(e.target.value)} rows={15} placeholder="Collez votre liste ici..." className="flex-grow w-full p-4 rounded-lg border border-border bg-background text-foreground font-mono text-xs focus:ring-2 focus:ring-primary outline-none resize-none" />
-                            <button onClick={handleTextParse} disabled={!textInput.trim()} className="flex-none mt-4 bg-primary hover:opacity-90 disabled:opacity-50 text-primary-foreground font-bold py-3 rounded-xl shadow-md transition">Analyser le texte</button>
+                        <div className="grow flex flex-col min-h-0">
+                            <textarea 
+                                value={textInput} 
+                                onChange={(e) => setTextInput(e.target.value)} 
+                                rows={15} 
+                                placeholder="Collez votre liste ici. Format recommandé : Qty Nom (Code Set) Numéro" 
+                                className="grow w-full p-4 rounded-lg border border-border bg-background text-foreground font-mono text-xs focus:ring-2 focus:ring-primary outline-none resize-none" 
+                            />
+                            <p className="text-xs text-muted my-2 text-center">Ex: 4 Sol Ring (CMD) 100</p>
+                            <button 
+                                onClick={handleTextParse} 
+                                disabled={!textInput.trim()} 
+                                className="flex-none mt-4 bg-primary hover:opacity-90 disabled:opacity-50 text-primary-foreground font-bold py-3 rounded-xl shadow-md transition"
+                            >
+                                Analyser le texte
+                            </button>
                         </div>
                     )}
                 </div>
@@ -382,6 +425,9 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
 
             {step === 'preview' && (
                 <div className="flex flex-col h-full overflow-hidden">
+                    <p className="text-sm text-muted mb-4 flex-none">
+                        Vérifiez l&apos;aperçu et choisissez le mode d&apos;importation.
+                    </p>
                     <div className="flex-none grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
                         <div onClick={() => setImportMode('add')} className={`p-3 rounded-xl border-2 cursor-pointer transition flex flex-col gap-1 ${importMode === 'add' ? 'border-primary bg-primary/10' : 'border-border hover:border-primary'}`}>
                             <div className="flex items-center gap-2 font-bold text-primary text-sm">
@@ -396,11 +442,12 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
                             <p className="text-[10px] text-muted ml-6">Remplace (=1) la quantité en base.</p>
                         </div>
                     </div>
+                    
                     <div className="flex-none flex justify-between items-center mb-2 px-1">
                         <span className="text-sm font-semibold text-foreground">{data.length} cartes détectées</span>
                         <button onClick={() => { setData([]); setStep('upload'); }} className="text-danger text-xs hover:underline">Retour</button>
                     </div>
-                    <div className="flex-grow overflow-auto min-h-0 border border-border rounded-lg bg-background">
+                    <div className="grow overflow-auto min-h-0 border border-border rounded-lg bg-background">
                         <table className="w-full text-xs text-left text-muted">
                             <thead className="text-foreground bg-secondary sticky top-0 z-10">
                                 <tr>{columns.slice(0,6).map((col, i) => <th key={i} className="px-4 py-2">{col}</th>)}</tr>

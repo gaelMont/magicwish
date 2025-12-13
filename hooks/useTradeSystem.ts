@@ -26,35 +26,48 @@ export type TradeRequest = {
   createdAt: Timestamp;
 };
 
-// Fonction utilitaire pour convertir les CardType du client vers le format attendu par le serveur
-const mapCardsForServer = (cards: CardType[]) => {
-    return cards.map(c => {
-        const clean = { ...c };
-        
-        // Suppression des objets Firestore Timestamp (non sérialisables par Server Actions)
-        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-        // @ts-expect-error
-        delete clean.addedAt;
-        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-        // @ts-expect-error
-        delete clean.importedAt;
-        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-        // @ts-expect-error
-        delete clean.lastUpdated;
-        
-        // Suppression des champs qui peuvent être ajoutés par l'import/DB mais qui ne sont pas dans le CardSchema Zod
-        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-        // @ts-expect-error 
-        delete clean.condition;
-        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-        // @ts-expect-error 
-        delete clean.language;
+// Interface stricte des données de carte sérialisables pour le serveur (basée sur CardSchema)
+interface ServerCardPayload {
+    id: string;
+    name: string;
+    imageUrl: string;
+    imageBackUrl: string | null;
+    quantity: number;
+    price: number;
+    customPrice?: number;
+    setName: string;
+    setCode: string;
+    isFoil: boolean;
+    isSpecificVersion: boolean;
+    scryfallData: Record<string, unknown> | null;
+    wishlistId: string | null;
+    // Note: quantityForTrade est omis s'il n'est pas requis pour la validation du trade
+}
 
-        return {
-            ...clean,
+// Fonction utilitaire pour convertir les CardType du client vers le format attendu par le serveur (ServerCardPayload)
+const mapCardsForServer = (cards: CardType[]): ServerCardPayload[] => {
+    return cards.map(c => {
+        // Construction d'un objet propre
+        const payload: ServerCardPayload = {
+            id: c.id,
+            name: c.name,
+            imageUrl: c.imageUrl,
             imageBackUrl: c.imageBackUrl || null,
-            scryfallData: (c.scryfallData as Record<string, unknown>) || null
+            quantity: c.quantity,
+            price: c.price ?? 0,
+            customPrice: c.customPrice,
+            setName: c.setName ?? '',
+            setCode: c.setCode ?? '',
+            isFoil: c.isFoil ?? false,
+            isSpecificVersion: c.isSpecificVersion ?? false,
+            scryfallData: (c.scryfallData as Record<string, unknown>) || null,
+            wishlistId: c.wishlistId ?? null,
         };
+        
+        // Nettoyage des champs non définis
+        if (payload.customPrice === undefined) delete payload.customPrice;
+
+        return payload;
     });
 };
 
@@ -65,8 +78,6 @@ export function useTradeSystem() {
   const [outgoingTrades, setOutgoingTrades] = useState<TradeRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
-
-  // NOTE: isProposing est retiré ici car géré localement par useTransition dans les pages
 
   useEffect(() => {
     if (!user) return;
@@ -100,7 +111,6 @@ export function useTradeSystem() {
   const proposeTrade = async (receiverUid: string, receiverName: string, toGive: CardType[], toReceive: CardType[]) => {
     if (!user) return false;
     
-    // L'état de chargement local (isPending) est géré par useTransition
     const toastId = toast.loading("Envoi de la proposition...");
 
     try {
@@ -110,15 +120,16 @@ export function useTradeSystem() {
           senderName: username || user.displayName || 'Inconnu',
           receiverUid,
           receiverName,
+          // Utilisation du mapping strict
           itemsGiven: mapCardsForServer(toGive),
           itemsReceived: mapCardsForServer(toReceive)
       };
 
-      // Appel de la Server Action
+      // Définition stricte de la réponse attendue de proposeTradeAction
       const result = await proposeTradeAction(payload) as { 
           success: boolean; 
           error?: string; 
-          proposalConflict?: boolean; // <--- Réponse de conflit
+          proposalConflict?: boolean;
           existingTradeId?: string; 
       }; 
 
@@ -127,16 +138,14 @@ export function useTradeSystem() {
           return true;
       } 
       else if (result.proposalConflict) {
-          // GESTION DU CONFLIT DE PROPOSITION
           const friendName = receiverName || "cet ami";
           
           toast.error(`Vous avez déjà une proposition en attente avec ${friendName} pour ces cartes.`, { 
               id: toastId, 
               duration: 5000 
           });
-          // Option future : ajouter ici un lien ou une modale pour éditer la proposition existante (ID: result.existingTradeId)
           
-          return false; // Échec de la création, mais l'UI est informée
+          return false;
       }
       else {
           throw new Error(result.error);
@@ -158,13 +167,19 @@ export function useTradeSystem() {
     const toastId = toast.loading("Validation sécurisée en cours...");
 
     try {
+        // Les données de l'objet trade sont déjà des tableaux de CardType, mais pour l'appel Server Action, 
+        // on doit les assurer qu'elles sont sérialisables. On utilise le mapping ici.
+        const cleanGiven = mapCardsForServer(trade.itemsGiven);
+        const cleanReceived = mapCardsForServer(trade.itemsReceived);
+        
+        // Définition stricte de la réponse attendue de executeServerTrade
         const result = await executeServerTrade(
             trade.id, 
             trade.senderUid,
             user.uid, 
-            trade.itemsGiven,
-            trade.itemsReceived
-        );
+            cleanGiven, // Passage des données propres
+            cleanReceived // Passage des données propres
+        ) as { success: boolean; error?: string; };
 
         if (result.success) {
             toast.success("Échange terminé avec succès !", { id: toastId });

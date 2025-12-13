@@ -1,10 +1,15 @@
+// app/wishlist/page.tsx
 'use client';
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useAuth } from '@/lib/AuthContext';
 import { useWishlists } from '@/hooks/useWishlists';
 import SingleWishlistView from '@/components/wishlist/SingleWishlistView';
 import GlobalWishlistView from '@/components/wishlist/GlobalWishlistView';
+import DataTransferHubModal from '@/components/DataTransferHubModal'; 
+import ImportModal from '@/components/ImportModal';
+import ExportModal from '@/components/ExportModal';
+import { useCardCollection } from '@/hooks/useCardCollection'; 
 
 export default function WishlistPage() {
   const { user } = useAuth();
@@ -12,6 +17,15 @@ export default function WishlistPage() {
   
   const [selectedListId, setSelectedListId] = useState<string>('default');
   const [newListName, setNewListName] = useState('');
+
+  // États pour les modales
+  const [isHubOpen, setIsHubOpen] = useState(false);
+  const [isImportOpen, setIsImportOpen] = useState(false);
+  const [isExportOpen, setIsExportOpen] = useState(false);
+
+  // Charger les cartes de la liste actuellement sélectionnée pour l'Export/Import
+  // NOTE: On utilise selectedListId pour cibler la liste pour l'export/import.
+  const { cards: selectedListCards } = useCardCollection('wishlist', selectedListId);
 
   if (!user) return <p className="p-10 text-center text-muted">Veuillez vous connecter.</p>;
 
@@ -22,6 +36,36 @@ export default function WishlistPage() {
         setNewListName('');
     }
   };
+
+  // --- Fonctions de navigation modale ---
+  const closeAllModals = () => {
+    setIsHubOpen(false);
+    setIsImportOpen(false);
+    setIsExportOpen(false);
+  }
+  
+  const openHub = () => {
+    setIsImportOpen(false);
+    setIsExportOpen(false);
+    setIsHubOpen(true);
+  }
+  
+  const handleSelectImport = () => {
+    setIsHubOpen(false);
+    setIsImportOpen(true);
+  }
+  
+  const handleSelectExport = () => {
+    setIsHubOpen(false);
+    setIsExportOpen(true);
+  }
+
+  // Trouve le nom de la liste pour l'export
+  // eslint-disable-next-line react-hooks/rules-of-hooks
+  const currentListName = useMemo(() => {
+    return lists.find(l => l.id === selectedListId)?.name || 'Liste principale';
+  }, [lists, selectedListId]);
+
 
   return (
     <main className="container mx-auto p-4 flex flex-col md:flex-row gap-8 min-h-[85vh]">
@@ -38,7 +82,15 @@ export default function WishlistPage() {
             ) : (
                 <div className="flex flex-col gap-1 max-h-[60vh] overflow-y-auto pr-1 custom-scrollbar">
                     
-                    {/* BOUTON VUE GLOBALE CORRIGÉ */}
+                    {/* BOUTON IMPORTER/EXPORTER UNIFIÉ */}
+                    <button 
+                        onClick={() => setIsHubOpen(true)}
+                        className="btn-primary text-sm whitespace-nowrap mb-3 w-full"
+                    >
+                        Importer/Exporter
+                    </button>
+                    
+                    {/* BOUTON VUE GLOBALE */}
                     <button
                         onClick={() => setSelectedListId('GLOBAL_VIEW')}
                         className={`text-left px-3 py-2.5 rounded-lg text-sm transition-all duration-200 flex items-center gap-2 mb-2 ${
@@ -119,6 +171,35 @@ export default function WishlistPage() {
               />
           )}
       </section>
+      
+      {/* --- MODALES --- */}
+      
+      <DataTransferHubModal 
+        isOpen={isHubOpen}
+        onClose={closeAllModals}
+        onSelectImport={handleSelectImport}
+        onSelectExport={handleSelectExport}
+        targetLabel="Wishlist"
+      />
+      
+      <ImportModal 
+          isOpen={isImportOpen} 
+          onClose={closeAllModals} 
+          onGoBack={openHub}       
+          onCloseAll={closeAllModals}
+          targetCollection="wishlist" 
+          currentCollection={selectedListCards.map(c => ({ id: c.id, quantity: c.quantity, foil: c.isFoil }))} 
+      />
+      
+      <ExportModal
+        isOpen={isExportOpen}
+        onClose={closeAllModals}
+        onGoBack={openHub}
+        onCloseAll={closeAllModals}
+        cards={selectedListCards}
+        listName={currentListName}
+        targetType="wishlist"
+      />
 
     </main>
   );

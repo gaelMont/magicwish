@@ -7,41 +7,56 @@ service cloud.firestore {
     function isAuthenticated() {
       return request.auth != null;
     }
+    
+    function isAdmin() {
+      return isAuthenticated() && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
 
     function isOwner(userId) {
       return isAuthenticated() && request.auth.uid == userId;
     }
 
-    // Coût : 1 lecture
     function isFriend(userId) {
       return exists(/databases/$(database)/documents/users/$(userId)/friends/$(request.auth.uid));
     }
 
-    // --- NOUVEAU : CORRECTION POUR LA RECHERCHE ---
-    // Cette règle globale est indispensable pour "searchUsers" (collectionGroup)
+    // --- RÈGLES DE COLLECTION ---
+
+    // 1. COLLECTION ADMINS
+    match /admins/{userId} {
+      allow read: if isAuthenticated();
+      allow write: if false; 
+    }
+
+    // 2. FEEDBACK (CORRIGÉ)
+    // ✅ Admin : Peut tout faire (changer statut, supprimer)
+    // 👤 User : Peut seulement créer
+    match /app_feedback/{feedbackId} {
+      allow read, update, delete: if isAdmin();
+      allow create: if isAuthenticated() && request.resource.data.uid == request.auth.uid;
+    }
+
+    // 3. PROFILS PUBLICS
     match /{path=**}/public_profile/{docId} {
       allow read: if isAuthenticated();
     }
 
-    // --- RÈGLES PAR COLLECTION ---
-
-    // 1. PSEUDOS
+    // 4. PSEUDOS
     match /usernames/{username} {
       allow read: if isAuthenticated();
-      allow create: if isAuthenticated() && request.resource.data.uid == request.auth.uid;
+      allow create: if isAuthenticated() 
+                    && request.resource.data.uid == request.auth.uid
+                    && !exists(/databases/$(database)/documents/usernames/$(username));
       allow update, delete: if false;
     }
 
-    // 2. DONNÉES UTILISATEUR
+    // 5. DONNÉES UTILISATEUR
     match /users/{userId} {
-
-      // A. Profil Public
       match /public_profile/info {
         allow read: if isAuthenticated();
         allow write: if isOwner(userId);
       }
 
-      // B. Collection & Wishlist
       match /collection/{cardId} {
         allow read: if isOwner(userId) || isFriend(userId);
         allow write: if isOwner(userId);
@@ -52,52 +67,44 @@ service cloud.firestore {
         allow write: if isOwner(userId);
       }
 
-      // C. Wishlists Multiples
       match /wishlists_meta/{listId} {
         allow read: if isOwner(userId) || isFriend(userId);
         allow write: if isOwner(userId);
       }
+      
       match /wishlists_data/{listId}/cards/{cardId} {
         allow read: if isOwner(userId) || isFriend(userId);
         allow write: if isOwner(userId);
       }
 
-      // D. Amis
-      // CORRECTION : On autorise le delete si c'est MOI ou si c'est L'AMI en question (pour le nettoyage réciproque)
       match /friends/{friendId} {
         allow read, write: if isOwner(userId);
         allow delete: if isOwner(userId) || request.auth.uid == friendId;
       }
 
-      // E. Demandes d'amis Reçues
-      // CORRECTION : On remplace 'create' par 'write' pour gérer le cas où le document existe déjà (demande renvoyée)
       match /friend_requests_received/{senderId} {
         allow read: if isOwner(userId);
-        
-        allow write: if isAuthenticated() 
-                     && request.resource.data.uid == request.auth.uid
-                     && request.auth.uid == senderId; // Sécurité : seul l'expéditeur peut écrire sa propre demande
-                     
+        allow write: if isAuthenticated() && request.resource.data.uid == request.auth.uid && request.auth.uid == senderId;
         allow delete: if isOwner(userId) || request.auth.uid == senderId;
       }
     }
 
-    // 3. PROPOSITIONS D'ÉCHANGE
+    // 6. PROPOSITIONS D'ÉCHANGE
     match /trades/{tradeId} {
-      // Lecture : Participants uniquement
-      allow read: if isAuthenticated() && (
-        resource.data.senderUid == request.auth.uid || 
-        resource.data.receiverUid == request.auth.uid
-      );
-
-      // Création : Je dois être l'expéditeur
+      allow read: if isAdmin() || (isAuthenticated() && (resource.data.senderUid == request.auth.uid || resource.data.receiverUid == request.auth.uid));
+      
       allow create: if isAuthenticated() && request.resource.data.senderUid == request.auth.uid;
-
-      // Mise à jour : Status uniquement (cancelled/rejected) par le client
-      allow update: if isAuthenticated() 
-        && (resource.data.senderUid == request.auth.uid || resource.data.receiverUid == request.auth.uid)
+      
+      allow delete: if isAdmin(); 
+      
+      allow update: if isAdmin() || (
+        isAuthenticated() 
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status'])
-        && request.resource.data.status in ['cancelled', 'rejected'];
+        && (
+          (resource.data.senderUid == request.auth.uid && request.resource.data.status == 'cancelled') ||
+          (resource.data.receiverUid == request.auth.uid && request.resource.data.status in ['rejected', 'accepted'])
+        )
+      );
     }
   }
 }

@@ -2,7 +2,7 @@
 'use client';
 
 import { useState, useEffect, memo } from 'react';
-import { useRouter } from 'next/navigation'; // <--- IMPORT
+import { useRouter } from 'next/navigation';
 
 type MagicCardProps = {
   id?: string;
@@ -20,7 +20,11 @@ type MagicCardProps = {
   onDecrement?: () => void;
   onMove?: () => void;
   onEditPrice?: (newPrice: number) => void;
-  onToggleAttribute?: (field: 'isFoil' | 'isSpecificVersion', currentValue: boolean) => void; 
+  onToggleAttribute?: (field: 'isFoil' | 'isSpecificVersion', currentValue: boolean) => void;
+  // NOUVELLES PROPS
+  onIncrementTrade?: () => void; 
+  onDecrementTrade?: () => void;
+  
   isWishlist?: boolean;
   readOnly?: boolean;
   isTradeView?: boolean;
@@ -28,13 +32,13 @@ type MagicCardProps = {
   isSelectMode?: boolean;
   isSelected?: boolean;
   onSelect?: () => void;
-  returnTo?: string; // <--- NOUVELLE PROP POUR LE RETOUR
+  returnTo?: string;
 };
 
 const CARD_BACK_URL = "https://cards.scryfall.io/large/front/a/6/a6984342-f723-4e80-8e69-902d287a915f.jpg";
 
 function MagicCard(props: MagicCardProps) {
-  const router = useRouter(); // <--- ROUTER
+  const router = useRouter();
   const { 
       name, imageUrl, imageBackUrl, quantity = 1, 
       price, customPrice, setName, 
@@ -43,8 +47,9 @@ function MagicCard(props: MagicCardProps) {
       onEditPrice, onToggleAttribute, 
       readOnly, isWishlist,
       onIncrement, onDecrement, onMove,
+      onIncrementTrade, onDecrementTrade, // <--- NOUVELLES PROPS
       isSelectMode, isSelected, onSelect,
-      returnTo // <--- Destructuring
+      returnTo
   } = props;
   
   const [isFlipped, setIsFlipped] = useState(false);
@@ -54,12 +59,14 @@ function MagicCard(props: MagicCardProps) {
   useEffect(() => {
     if (!isEditingPrice) {
         const newVal = customPrice?.toString() || price?.toString() || "0";
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         setTempPrice(prev => (prev !== newVal ? newVal : prev));
     }
   }, [customPrice, price, isEditingPrice]);
 
   const effectivePrice = customPrice !== undefined ? customPrice : (price || 0);
-  const isTradeable = (quantityForTrade ?? 0) > 0;
+  const tradeQty = quantityForTrade ?? 0;
+  const isTradeable = tradeQty > 0;
 
   const handleSavePrice = () => {
       if (onEditPrice) {
@@ -82,7 +89,6 @@ function MagicCard(props: MagicCardProps) {
       }
       
       if (props.id) {
-          // GESTION DU RETOUR DYNAMIQUE
           const url = returnTo 
             ? `/card/${props.id}?returnTo=${encodeURIComponent(returnTo)}`
             : `/card/${props.id}`;
@@ -96,15 +102,14 @@ function MagicCard(props: MagicCardProps) {
       }
   };
 
-  // ... (Le reste du rendu VUE LISTE et VUE GRILLE reste inchangé, je conserve le code existant pour la brièveté, assurez-vous de garder tout le JSX du composant précédent) ...
   // --- VUE LISTE (TradeView) ---
   if (isTradeView) {
       return (
         <div className="flex items-center gap-3 bg-surface p-2 rounded-lg border border-border content-visibility-auto transition-colors">
-            <div className="w-10 h-14 bg-secondary rounded overflow-hidden flex-shrink-0 relative group cursor-pointer" onClick={() => setIsFlipped(!isFlipped)}>
+            <div className="w-10 h-14 bg-secondary rounded overflow-hidden shrink-0 relative group cursor-pointer" onClick={() => setIsFlipped(!isFlipped)}>
                  <img src={currentImage} className="w-full h-full object-cover" alt={name} loading="lazy" />
             </div>
-            <div className="flex-grow min-w-0">
+            <div className="grow min-w-0">
                 <div className="flex items-center gap-2">
                     <p className="font-semibold text-sm truncate text-foreground" title={name}>{name}</p>
                     {isFoil && <span className="text-[10px] font-bold text-amber-600 bg-amber-50 px-1 rounded">FOIL</span>}
@@ -166,11 +171,13 @@ function MagicCard(props: MagicCardProps) {
       
       <div className="flex-1 flex flex-col min-w-0 pt-1">
         <div className="flex justify-between items-start mb-0.5">
-            <h3 className="font-semibold text-sm leading-tight text-foreground truncate flex-grow" title={name}>{name}</h3>
+            <h3 className="font-semibold text-sm leading-tight text-foreground truncate grow" title={name}>{name}</h3>
         </div>
         <p className="text-[11px] text-muted truncate mb-2">{setName}</p>
 
         <div className={`flex flex-wrap gap-1 mb-2 ${isSelectMode ? 'pointer-events-none opacity-50' : ''}`}>
+            
+            {/* BOUTON FOIL/NORMAL */}
             {onToggleAttribute ? (
                 <button 
                     onClick={(e) => { e.stopPropagation(); onToggleAttribute('isFoil', !!isFoil); }}
@@ -182,19 +189,19 @@ function MagicCard(props: MagicCardProps) {
                 </button>
             ) : null}
 
-            {isWishlist ? (
-                onToggleAttribute && (
-                    <button 
-                        onClick={(e) => { e.stopPropagation(); onToggleAttribute('isSpecificVersion', !!isSpecificVersion); }}
-                        className={`text-[10px] px-2 py-1 rounded border transition-colors font-medium flex-1 text-center ${
-                            isSpecificVersion ? 'bg-primary/10 text-primary border-primary/30' : 'bg-secondary text-muted border-transparent'
-                        }`}
-                    >
-                        {isSpecificVersion ? 'Exact' : 'Auto'}
-                    </button>
-                )
-            ) : null}
+            {/* BOUTON EXACT/AUTO (Wishlist) */}
+            {isWishlist && onToggleAttribute && (
+                <button 
+                    onClick={(e) => { e.stopPropagation(); onToggleAttribute('isSpecificVersion', !!isSpecificVersion); }}
+                    className={`text-[10px] px-2 py-1 rounded border transition-colors font-medium flex-1 text-center ${
+                        isSpecificVersion ? 'bg-primary/10 text-primary border-primary/30' : 'bg-secondary text-muted border-transparent'
+                    }`}
+                >
+                    {isSpecificVersion ? 'Exact' : 'Auto'}
+                </button>
+            )}
             
+            {/* BOUTON ACHETÉ (Wishlist) */}
             {isWishlist && !readOnly && !isSelectMode && onMove && (
                 <button 
                     onClick={(e) => { e.stopPropagation(); onMove(); }}
@@ -207,21 +214,43 @@ function MagicCard(props: MagicCardProps) {
         </div>
         
         <div className={`mt-auto flex justify-between items-center border-t border-border pt-2 ${isSelectMode ? 'pointer-events-none opacity-50' : ''}`}>
-          <div className="flex items-center gap-1">
-            {!readOnly && <button onClick={(e) => {e.stopPropagation(); onDecrement?.()}} className="w-5 h-5 rounded bg-secondary hover:bg-border text-muted hover:text-foreground flex items-center justify-center text-xs font-bold transition">-</button>}
-            <span className={`text-sm ${readOnly ? 'font-bold text-foreground' : 'w-4 text-center text-foreground'}`}>{quantity}</span>
-            {!readOnly && <button onClick={(e) => {e.stopPropagation(); onIncrement?.()}} className="w-5 h-5 rounded bg-primary/10 hover:bg-primary/20 text-primary border border-primary/30 flex items-center justify-center text-xs font-bold transition">+</button>}
-          </div>
+            
+            {/* GESTION DE LA QUANTITÉ TOTALE */}
+            <div className="flex items-center gap-1">
+                {!readOnly && <button onClick={(e) => {e.stopPropagation(); onDecrement?.()}} className="w-5 h-5 rounded bg-secondary hover:bg-border text-muted hover:text-foreground flex items-center justify-center text-xs font-bold transition" title="Diminuer stock">-</button>}
+                <span className={`text-sm ${readOnly ? 'font-bold text-foreground' : 'w-4 text-center text-foreground'}`}>{quantity}</span>
+                {!readOnly && <button onClick={(e) => {e.stopPropagation(); onIncrement?.()}} className="w-5 h-5 rounded bg-primary/10 hover:bg-primary/20 text-primary border border-primary/30 flex items-center justify-center text-xs font-bold transition" title="Augmenter stock">+</button>}
+            </div>
 
-          {isTradeable && !isWishlist && !isSelectMode && (
-               <div className="flex-grow text-center min-w-fit mx-1">
-                   <span className="text-xs font-bold text-success bg-success/10 px-2 py-0.5 rounded-full" title={`${quantityForTrade} exemplaire(s) disponible(s) pour l'échange.`}>
-                       {quantityForTrade} / {quantity} 🤝
-                   </span>
-               </div>
-          )}
+            {/* GESTION DU TRADE (Collection seulement) */}
+            {!isWishlist && !readOnly && !isSelectMode && (
+                <div className="flex items-center gap-1 mx-1 grow justify-center">
+                    <button 
+                        onClick={(e) => {e.stopPropagation(); onDecrementTrade?.()}} 
+                        disabled={tradeQty <= 0}
+                        className="w-5 h-5 rounded bg-danger/10 hover:bg-danger/20 text-danger/80 flex items-center justify-center text-xs font-bold transition disabled:opacity-30" 
+                        title="Diminuer stock échange"
+                    >
+                        -
+                    </button>
+                    <span 
+                        className="text-xs font-bold text-success bg-success/10 px-2 py-0.5 rounded-full" 
+                        title={`${tradeQty} exemplaire(s) disponible(s) pour l'échange.`}
+                    >
+                        {tradeQty} / {quantity} 🤝
+                    </span>
+                    <button 
+                        onClick={(e) => {e.stopPropagation(); onIncrementTrade?.()}} 
+                        disabled={tradeQty >= quantity}
+                        className="w-5 h-5 rounded bg-success/10 hover:bg-success/20 text-success/80 flex items-center justify-center text-xs font-bold transition disabled:opacity-30" 
+                        title="Augmenter stock échange"
+                    >
+                        +
+                    </button>
+                </div>
+            )}
           
-          <div className="text-right leading-none">
+          <div className="text-right leading-none shrink-0">
              <p className={`font-bold text-sm ${customPrice ? 'text-orange-600' : 'text-foreground'}`}>
                  {(effectivePrice * quantity).toFixed(2)} €
              </p>

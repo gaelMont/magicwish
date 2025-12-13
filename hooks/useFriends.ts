@@ -6,7 +6,7 @@ import {
   doc, setDoc, deleteDoc, 
   collection, onSnapshot, serverTimestamp, 
   query, collectionGroup, where, getDocs, limit,
-  writeBatch // <--- C'était l'import manquant
+  writeBatch 
 } from 'firebase/firestore';
 import { acceptFriendRequestAction } from '@/app/actions/friends';
 import toast from 'react-hot-toast';
@@ -34,25 +34,34 @@ export function useFriends() {
 
   useEffect(() => {
     if (!user) {
-      setFriends(prev => prev.length > 0 ? [] : prev);
-      setRequestsReceived(prev => prev.length > 0 ? [] : prev);
-      setLoading(prev => prev ? false : prev);
+      setFriends([]);
+      setRequestsReceived([]);
+      setLoading(false);
       return;
     }
 
+    setLoading(true);
+
+    // 1. Écoute Mes Amis
     const friendsRef = collection(db, 'users', user.uid, 'friends');
     const unsubFriends = onSnapshot(friendsRef, (snap) => {
       const list = snap.docs.map(d => d.data() as FriendProfile);
       setFriends(list);
+      setLoading(false); // On considère que le chargement est OK après la première réponse
+    }, (error) => {
+        console.error("useFriends: Erreur écoute Amis:", error);
+        setLoading(false); // Arrête le chargement même en cas d'erreur
     });
 
+    // 2. Écoute Demandes Reçues
     const reqRef = collection(db, 'users', user.uid, 'friend_requests_received');
     const unsubReq = onSnapshot(reqRef, (snap) => {
       const list = snap.docs.map(d => ({ uid: d.id, ...d.data() } as FriendProfile));
       setRequestsReceived(list);
+    }, (error) => {
+        console.error("useFriends: Erreur écoute Demandes:", error);
+        // Ne modifie pas le loading général ici, car il est géré par l'écouteur des amis.
     });
-
-    setLoading(false);
 
     return () => {
       unsubFriends();
@@ -123,11 +132,13 @@ export function useFriends() {
     const toastId = toast.loading("Acceptation...");
 
     try {
-        const cleanSender = {
+        // Le type 'FriendProfile' est utilisé ici, pas besoin de 'cleanSender' car les types sont déjà stricts.
+        const cleanSender: FriendProfile = {
             ...sender,
-            photoURL: sender.photoURL || null
+            photoURL: sender.photoURL || null // S'assure que photoURL est 'string | null'
         };
 
+        // L'action serveur gère la transaction
         const result = await acceptFriendRequestAction(user.uid, cleanSender);
 
         if (result.success) {
@@ -154,7 +165,6 @@ export function useFriends() {
     }
   };
   
-  // Suppression avec nettoyage complet (nécessite writeBatch)
   const removeFriend = async (friendUid: string) => {
       if(!user) return;
       if(!confirm("Retirer cet ami définitivement ?")) return;
@@ -162,11 +172,7 @@ export function useFriends() {
       try {
         const batch = writeBatch(db);
         
-        // 1. Supprimer de MA liste
         batch.delete(doc(db, 'users', user.uid, 'friends', friendUid));
-        
-        // 2. Me supprimer de SA liste (Le "Unfriend" réciproque)
-        // La règle de sécurité 'allow delete' doit être déployée pour que cela fonctionne
         batch.delete(doc(db, 'users', friendUid, 'friends', user.uid));
 
         await batch.commit();

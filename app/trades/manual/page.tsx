@@ -9,19 +9,45 @@ import toast from 'react-hot-toast';
 import CardVersionPickerModal from '@/components/CardVersionPickerModal';
 import { ScryfallRawData } from '@/lib/cardUtils';
 
-// Helper pour sérialiser/nettoyer les cartes
-const mapCardsForServer = (cards: CardType[]) => {
+// Interface stricte des données de carte sérialisables pour le serveur (basée sur CardSchema)
+interface ServerCardPayload {
+    id: string;
+    name: string;
+    imageUrl: string;
+    imageBackUrl: string | null;
+    quantity: number;
+    price: number;
+    customPrice?: number;
+    setName: string;
+    setCode: string;
+    isFoil: boolean;
+    isSpecificVersion: boolean;
+    scryfallData: Record<string, unknown> | null;
+    wishlistId: string | null;
+}
+
+// Fonction utilitaire pour convertir les CardType du client vers le format attendu par le serveur
+const mapCardsForServer = (cards: CardType[]): ServerCardPayload[] => {
     return cards.map(c => {
-        const clean = { ...c };
+        const payload: ServerCardPayload = {
+            id: c.id,
+            name: c.name,
+            imageUrl: c.imageUrl,
+            imageBackUrl: c.imageBackUrl || null,
+            quantity: c.quantity,
+            price: c.price ?? 0,
+            customPrice: c.customPrice,
+            setName: c.setName ?? '',
+            setCode: c.setCode ?? '',
+            isFoil: c.isFoil ?? false,
+            isSpecificVersion: c.isSpecificVersion ?? false,
+            scryfallData: (c.scryfallData as Record<string, unknown>) || null,
+            wishlistId: c.wishlistId ?? null,
+        };
         
-        // Supprimez les propriétés qui sont des objets Date/Timestamp
-        // C'est cette étape qui résout l'erreur "Objects with toJSON methods are not supported"
-        if ('importedAt' in clean) delete (clean as Partial<CardType> & { importedAt?: unknown }).importedAt;
-        if ('lastUpdated' in clean) delete (clean as Partial<CardType> & { lastUpdated?: unknown }).lastUpdated;
-        if ('addedAt' in clean) delete (clean as Partial<CardType> & { addedAt?: unknown }).addedAt;
-        if ('lastPriceUpdate' in clean) delete (clean as Partial<CardType> & { lastPriceUpdate?: unknown }).lastPriceUpdate;
-        
-        return clean;
+        if (payload.customPrice === undefined) delete payload.customPrice;
+
+        return payload;
     });
 };
 
@@ -66,6 +92,7 @@ export default function ManualTradePage() {
           const res = await fetch(`/api/search?q=${remoteSearch}`); 
           const data = await res.json();
           setSearchResults(data.data || []);
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
       } catch (e) { toast.error("Erreur recherche"); }
       finally { setIsSearching(false); }
   };
@@ -75,6 +102,7 @@ export default function ManualTradePage() {
   };
 
   const handleConfirmReceive = (card: CardType) => {
+      // Pour l'ajout libre, l'ID peut ne pas être la version exacte, on ajoute simplement la quantité.
       const existing = toReceive.find(c => c.id === card.id && c.isFoil === card.isFoil); 
       
       if (existing) {
@@ -92,7 +120,7 @@ export default function ManualTradePage() {
       toast.success(`Ajouté : ${card.name}`);
   };
 
-  // --- LOGIQUE DE VALIDATION SÉCURISÉE (Utilise mapCardsForServer) ---
+  // --- LOGIQUE DE VALIDATION SÉCURISÉE ---
   const handleValidate = async () => {
       if (!user) return;
       if (toGive.length === 0 && toReceive.length === 0) return;
@@ -101,12 +129,15 @@ export default function ManualTradePage() {
       const toastId = toast.loading("Validation sécurisée...");
 
       startTransition(async () => {
-        // CORRECTION : Nettoyer les cartes ici avant de les envoyer au serveur
+        // Nettoyer les cartes ici avant de les envoyer au serveur
         const cleanToGive = mapCardsForServer(toGive);
         const cleanToReceive = mapCardsForServer(toReceive);
 
-        // Appel du serveur
-        const result = await executeManualTrade(user.uid, cleanToGive, cleanToReceive);
+        // Appel du serveur, la réponse est typée (success: boolean, error?: string)
+        const result = await executeManualTrade(user.uid, cleanToGive, cleanToReceive) as { 
+            success: boolean; 
+            error?: string; 
+        };
         
         if (result.success) {
             toast.success("Echange validé !", { id: toastId });

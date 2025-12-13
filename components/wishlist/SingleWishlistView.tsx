@@ -1,13 +1,13 @@
 // components/wishlist/SingleWishlistView.tsx
 'use client';
 
-import { useState } from 'react'; // <--- IMPORT useState
+import { useState } from 'react';
 import { useAuth } from '@/lib/AuthContext';
 import { useCardCollection, CardType } from '@/hooks/useCardCollection';
 import MagicCard from '@/components/MagicCard';
 import toast from 'react-hot-toast';
 import { moveCardFromWishlistToCollection } from '@/lib/services/collectionService'; 
-import ColumnSlider from '@/components/ColumnSlider'; // <--- IMPORT
+import ColumnSlider from '@/components/ColumnSlider';
 
 type Props = {
     listId: string;
@@ -18,7 +18,7 @@ export default function SingleWishlistView({ listId, listName }: Props) {
     const { cards, loading, updateQuantity, removeCard, toggleAttribute, totalPrice } = useCardCollection('wishlist', listId);
     const { user } = useAuth();
     
-    const [columns, setColumns] = useState(5); // <--- ÉTAT LOCAL
+    const [columns, setColumns] = useState(5);
 
     const moveToCollection = async (card: CardType) => {
         if (!user) return;
@@ -41,7 +41,7 @@ export default function SingleWishlistView({ listId, listName }: Props) {
                 <h2 className="text-2xl font-bold text-foreground">{listName}</h2>
                 
                 <div className="flex items-center gap-4">
-                    {/* SLIDER AJOUTÉ ICI */}
+                    
                     <ColumnSlider columns={columns} setColumns={setColumns} />
 
                     <div className="text-right">
