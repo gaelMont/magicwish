@@ -66,7 +66,6 @@ function MagicCard(props: MagicCardProps) {
 
   const effectivePrice = customPrice !== undefined ? customPrice : (price || 0);
   const tradeQty = quantityForTrade ?? 0;
-  const isTradeable = tradeQty > 0;
 
   const handleSavePrice = () => {
       if (onEditPrice) {

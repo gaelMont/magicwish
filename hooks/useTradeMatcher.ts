@@ -2,7 +2,7 @@
 import { useState } from 'react';
 import { useAuth } from '@/lib/AuthContext';
 import { db } from '@/lib/firebase';
-import { collection, getDocs, doc, writeBatch, query, where } from 'firebase/firestore'; 
+import { collection, getDocs, doc, writeBatch } from 'firebase/firestore'; 
 import { useWishlists, WishlistMeta } from './useWishlists'; 
 import { useFriends, FriendProfile } from './useFriends';
 import { CardType } from './useCardCollection';

@@ -143,6 +143,7 @@ export function useCardCollection(
     try {
       await updateDoc(ref, { quantity: increment(amount) });
       return 'updated';
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     } catch (err) { return 'error'; }
   };
 

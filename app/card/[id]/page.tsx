@@ -9,7 +9,7 @@ import { useCardCollection, CardType } from '@/hooks/useCardCollection';
 import { normalizeCardData, ScryfallRawData } from '@/lib/cardUtils'; 
 import Link from 'next/link';
 import toast from 'react-hot-toast';
-import { useSearchParams } from 'next/navigation'; // <--- IMPORT
+import { useSearchParams } from 'next/navigation';
 
 // Imports des composants séparés
 import CardMainDetails from '@/components/card-page/CardMainDetails';
@@ -21,13 +21,18 @@ type CardDetailPageProps = {
 
 // Composant local simple pour la gestion du stock
 const QuantityManager = ({ card }: { card: CardType }) => {
+    // On utilise le hook ici pour avoir accès aux fonctions d'update
     const { updateQuantity, removeCard, setTradeQuantity } = useCardCollection('collection'); 
+    
     const maxStock = card.quantity;
     const [tradeQtyInput, setTradeQtyInput] = useState(card.quantityForTrade ?? 0);
     const [isUpdatingTrade, setIsUpdatingTrade] = useState(false);
 
+    // Synchronisation locale si la prop change (ex: après un update DB)
     // eslint-disable-next-line react-hooks/set-state-in-effect
     useEffect(() => setTradeQtyInput(card.quantityForTrade ?? 0), [card.quantityForTrade]);
+    
+    // Sécurité : ne jamais dépasser le stock max
     // eslint-disable-next-line react-hooks/set-state-in-effect
     useEffect(() => { if (tradeQtyInput > maxStock) setTradeQtyInput(maxStock); }, [maxStock, tradeQtyInput]);
 
@@ -81,8 +86,10 @@ export default function CardDetailPage({ params }: CardDetailPageProps) {
     const backLink = returnTo ? decodeURIComponent(returnTo) : '/collection';
     const backLabel = returnTo ? (returnTo.includes('user') ? 'Retour au profil' : 'Retour') : 'Retour à la collection';
 
-    const { cards: collectionCards } = useCardCollection('collection'); 
+    // 1. CHARGEMENT TEMPS RÉEL (C'est la clé de la correction)
+    const { cards: collectionCards, loading: collectionLoading } = useCardCollection('collection'); 
     
+    // On prépare une Map pour le composant VersionGrid (optimisation)
     const collectionMap = useMemo(() => {
         const map = new Map<string, CardType>();
         collectionCards.forEach(c => map.set(c.id, c));
@@ -94,37 +101,48 @@ export default function CardDetailPage({ params }: CardDetailPageProps) {
     const [isFlipped, setIsFlipped] = useState(false); 
     const [showAllVersions, setShowAllVersions] = useState(false);
 
+    // 2. USE EFFECT CORRIGÉ : Priorité aux données Live
     useEffect(() => {
-        const fetchCard = async () => {
-            if (!user) { setLoading(false); return; }
-            setLoading(true);
-            try {
-                let cardRef = doc(db, 'users', user.uid, 'collection', cardId);
-                let snap = await getDoc(cardRef);
-                if (!snap.exists()) {
-                    cardRef = doc(db, 'users', user.uid, 'wishlist', cardId);
-                    snap = await getDoc(cardRef);
-                }
+        if (!user) { setLoading(false); return; }
 
-                if (snap.exists()) {
-                    setCard({ id: snap.id, ...snap.data(), uid: user.uid } as CardType); 
-                } else {
-                    try {
-                        const scryRes = await fetch(`https://api.scryfall.com/cards/${cardId}`);
-                        if (scryRes.ok) {
-                            const scryData = await scryRes.json();
-                            const normalized = normalizeCardData(scryData);
-                            setCard({ ...normalized, quantity: 0, uid: '', wishlistId: undefined, isFoil: false, isSpecificVersion: false, quantityForTrade: 0 } as CardType);
-                        } else {
-                            console.error("Carte introuvable sur Scryfall");
-                        }
-                    } catch (errScry) { console.error("Erreur Scryfall fallback", errScry); }
-                }
-            } catch (e) { console.error("Erreur chargement carte", e); } 
-            finally { setLoading(false); }
-        };
-        fetchCard();
-    }, [user, cardId]);
+        // A. Est-ce que la carte est dans ma collection Live ?
+        const liveCard = collectionCards.find(c => c.id === cardId);
+
+        if (liveCard) {
+            // OUI : On utilise la donnée live (qui contient la quantité à jour)
+            setCard(liveCard);
+            setLoading(false);
+        } else if (!collectionLoading) {
+            // NON : Si le chargement de la collection est fini et qu'elle n'y est pas,
+            // on cherche ailleurs (Wishlist ou API) juste pour l'affichage.
+            const fetchFallback = async () => {
+                setLoading(true);
+                try {
+                    // Vérif Wishlist (One-shot fetch)
+                    const snap = await getDoc(doc(db, 'users', user.uid, 'wishlist', cardId));
+                    
+                    if (snap.exists()) {
+                        setCard({ id: snap.id, ...snap.data(), uid: user.uid } as CardType); 
+                    } else {
+                        // Fallback Scryfall (API) si pas dans la DB
+                        try {
+                            const scryRes = await fetch(`https://api.scryfall.com/cards/${cardId}`);
+                            if (scryRes.ok) {
+                                const scryData = await scryRes.json();
+                                const normalized = normalizeCardData(scryData);
+                                // On crée un objet "virtuel" pour l'affichage
+                                setCard({ ...normalized, quantity: 0, uid: '', wishlistId: undefined, isFoil: false, isSpecificVersion: false, quantityForTrade: 0 } as CardType);
+                            } else {
+                                console.error("Carte introuvable sur Scryfall");
+                            }
+                        } catch (errScry) { console.error("Erreur Scryfall fallback", errScry); }
+                    }
+                } catch (e) { console.error("Erreur chargement carte fallback", e); } 
+                finally { setLoading(false); }
+            };
+            fetchFallback();
+        }
+    }, [user, cardId, collectionCards, collectionLoading]);
 
     const handleVersionSelect = (rawCard: ScryfallRawData) => {
         const normalized = normalizeCardData(rawCard);
@@ -153,7 +171,9 @@ export default function CardDetailPage({ params }: CardDetailPageProps) {
     const isDoubleSided = !!imageBackUrl;
     const oracleId = (card.scryfallData as ScryfallRawData)?.oracle_id as string | undefined;
     const displayImage = isFlipped && imageBackUrl ? imageBackUrl : imageUrl;
-    const isOwner = !!card.uid && user.uid === card.uid; 
+    
+    // On vérifie si l'utilisateur est propriétaire via l'UID du contexte ou si la carte vient de la collection live
+    const isOwner = (!!card.uid && user.uid === card.uid) || collectionMap.has(card.id); 
     
     return (
         <main className="container mx-auto p-4 max-w-6xl min-h-[80vh]">
@@ -180,6 +200,7 @@ export default function CardDetailPage({ params }: CardDetailPageProps) {
                 />
             ) : (
                 <div className="grid md:grid-cols-3 gap-8">
+                    {/* GAUCHE : IMAGE */}
                     <div className="md:col-span-1 flex flex-col items-center">
                         <div 
                             className="w-full max-w-sm aspect-[2.5/3.5] rounded-xl overflow-hidden shadow-2xl ring-4 ring-primary/20 cursor-pointer"
@@ -201,6 +222,8 @@ export default function CardDetailPage({ params }: CardDetailPageProps) {
                             )}
                         </div>
                     </div>
+
+                    {/* DROITE : DÉTAILS & ACTIONS */}
                     <div className="md:col-span-2 space-y-6">
                         {isOwner && <QuantityManager card={card} />}
                         <CardMainDetails cardData={card} />

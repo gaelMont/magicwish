@@ -1,4 +1,3 @@
-// app/trades/manual/page.tsx
 'use client';
 
 import { useState, useMemo, useTransition } from 'react';
@@ -9,7 +8,6 @@ import toast from 'react-hot-toast';
 import CardVersionPickerModal from '@/components/CardVersionPickerModal';
 import { ScryfallRawData } from '@/lib/cardUtils';
 
-// Interface stricte des données de carte sérialisables pour le serveur (basée sur CardSchema)
 interface ServerCardPayload {
     id: string;
     name: string;
@@ -26,7 +24,6 @@ interface ServerCardPayload {
     wishlistId: string | null;
 }
 
-// Fonction utilitaire pour convertir les CardType du client vers le format attendu par le serveur
 const mapCardsForServer = (cards: CardType[]): ServerCardPayload[] => {
     return cards.map(c => {
         const payload: ServerCardPayload = {
@@ -44,11 +41,139 @@ const mapCardsForServer = (cards: CardType[]): ServerCardPayload[] => {
             scryfallData: (c.scryfallData as Record<string, unknown>) || null,
             wishlistId: c.wishlistId ?? null,
         };
-        
         if (payload.customPrice === undefined) delete payload.customPrice;
-
         return payload;
     });
+};
+
+// --- TYPE GUARD (La clé pour corriger les erreurs TS) ---
+function isCollectionCard(item: CardType | ScryfallRawData): item is CardType {
+    return (item as CardType).quantity !== undefined;
+}
+
+// --- TABLEAU DE SÉLECTION (PANIER) ---
+const TradeSelectionTable = ({ 
+    cards, 
+    onRemove, 
+    colorClass, 
+    emptyLabel 
+}: { 
+    cards: CardType[], 
+    onRemove: (id: string) => void, 
+    colorClass: 'text-danger' | 'text-success',
+    emptyLabel: string
+}) => {
+    if (cards.length === 0) {
+        return <div className="flex-1 flex items-center justify-center border-b border-border bg-secondary/10 text-muted text-sm italic p-8">{emptyLabel}</div>;
+    }
+
+    return (
+        <div className="flex-1 overflow-hidden flex flex-col bg-surface border-b border-border shadow-sm">
+            <div className="overflow-y-auto custom-scrollbar flex-1">
+                <table className="w-full text-xs text-left border-collapse">
+                    <thead className="bg-secondary text-muted sticky top-0 z-10 font-semibold uppercase">
+                        <tr>
+                            <th className="px-2 py-2 text-center w-10">Qté</th>
+                            <th className="px-2 py-2">Nom</th>
+                            <th className="px-2 py-2 w-12 text-center">Set</th>
+                            <th className="px-2 py-2 w-10 text-center">N°</th>
+                            <th className="px-2 py-2 w-10 text-center">Foil</th>
+                            <th className="px-2 py-2 text-right w-16">Prix</th>
+                            <th className="px-2 py-2 w-8"></th>
+                        </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border">
+                        {cards.map((card, i) => {
+                            const scryData = card.scryfallData as ScryfallRawData | undefined;
+                            const collectorNum = scryData?.collector_number || '?';
+                            return (
+                                <tr key={`${card.id}-${i}`} className="hover:bg-secondary/50 transition-colors text-foreground">
+                                    <td className={`px-2 py-1.5 text-center font-bold ${colorClass} bg-opacity-10`}>{card.quantity}</td>
+                                    <td className="px-2 py-1.5 font-medium truncate max-w-[120px]" title={card.name}>{card.name}</td>
+                                    <td className="px-2 py-1.5 text-center"><span className="text-[9px] font-mono bg-secondary text-muted px-1 rounded border border-border">{card.setCode?.toUpperCase()}</span></td>
+                                    <td className="px-2 py-1.5 text-center text-muted font-mono text-[10px]">{collectorNum}</td>
+                                    <td className="px-2 py-1.5 text-center">{card.isFoil && <span className="text-[9px] font-bold text-amber-600 bg-amber-100 px-1 rounded">Foil</span>}</td>
+                                    <td className="px-2 py-1.5 text-right text-muted tabular-nums">{(card.customPrice ?? card.price ?? 0).toFixed(2)}€</td>
+                                    <td className="px-2 py-1.5 text-center"><button onClick={() => onRemove(card.id)} className="text-muted hover:text-danger transition px-1 font-bold">✕</button></td>
+                                </tr>
+                            );
+                        })}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    );
+};
+
+// --- TABLEAU DU BAS (SOURCE / RÉSULTATS) ---
+const TradeSourceTable = ({ 
+    cards, 
+    onAdd, 
+    buttonColorClass,
+    loading 
+}: { 
+    cards: (CardType | ScryfallRawData)[], 
+    onAdd: (c: CardType | ScryfallRawData) => void, // Plus de 'any' ici
+    buttonColorClass: 'text-danger' | 'text-success',
+    loading?: boolean
+}) => {
+    if (loading) return <p className="text-xs text-muted text-center py-4">Chargement...</p>;
+    if (cards.length === 0) return <p className="text-xs text-muted text-center py-4">Aucun résultat.</p>;
+
+    return (
+        <div className="overflow-y-auto custom-scrollbar flex-1 bg-surface">
+            <table className="w-full text-xs text-left border-collapse">
+                <thead className="bg-background text-muted sticky top-0 z-10 font-semibold uppercase">
+                    <tr>
+                        <th className="px-2 py-2 text-center w-10">Stock</th>
+                        <th className="px-2 py-2">Nom</th>
+                        <th className="px-2 py-2 w-12 text-center">Set</th>
+                        <th className="px-2 py-2 w-10 text-center">N°</th>
+                        <th className="px-2 py-2 w-10 text-center">Foil</th>
+                        <th className="px-2 py-2 w-8"></th>
+                    </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                    {cards.map((item, i) => {
+                        // Utilisation du Type Guard pour extraire les données proprement
+                        let name: string;
+                        let setCode: string;
+                        let collectorNum: string;
+                        let isFoil: boolean;
+                        let quantityDisplay: string | number;
+
+                        if (isCollectionCard(item)) {
+                            name = item.name;
+                            setCode = item.setCode || '';
+                            const scryData = item.scryfallData as ScryfallRawData | undefined;
+                            collectorNum = scryData?.collector_number || '?';
+                            isFoil = !!item.isFoil;
+                            quantityDisplay = item.quantity;
+                        } else {
+                            name = item.name;
+                            setCode = item.set || '';
+                            collectorNum = item.collector_number || '?';
+                            isFoil = false; // Par défaut pour recherche Scryfall
+                            quantityDisplay = '-';
+                        }
+
+                        return (
+                            <tr key={`${item.id}-${i}`} className="hover:bg-secondary/50 transition-colors text-foreground cursor-pointer group" onClick={() => onAdd(item)}>
+                                <td className="px-2 py-1.5 text-center text-muted font-mono">{quantityDisplay}</td>
+                                <td className="px-2 py-1.5 font-medium truncate max-w-[120px]" title={name}>{name}</td>
+                                <td className="px-2 py-1.5 text-center"><span className="text-[9px] font-mono bg-secondary text-muted px-1 rounded border border-border">{setCode.toUpperCase()}</span></td>
+                                <td className="px-2 py-1.5 text-center text-muted font-mono text-[10px]">{collectorNum}</td>
+                                <td className="px-2 py-1.5 text-center">{isFoil && <span className="text-[9px] font-bold text-amber-600 bg-amber-100 px-1 rounded">Foil</span>}</td>
+                                <td className="px-2 py-1.5 text-center">
+                                    <button className={`${buttonColorClass} font-bold hover:scale-125 transition-transform`}>+</button>
+                                </td>
+                            </tr>
+                        );
+                    })}
+                </tbody>
+            </table>
+        </div>
+    );
 };
 
 export default function ManualTradePage() {
@@ -61,14 +186,20 @@ export default function ManualTradePage() {
   const [toReceive, setToReceive] = useState<CardType[]>([]);
   
   const [localSearch, setLocalSearch] = useState('');
-  
   const [remoteSearch, setRemoteSearch] = useState('');
   const [searchResults, setSearchResults] = useState<ScryfallRawData[]>([]);
   const [isSearching, setIsSearching] = useState(false);
 
   const [cardToPick, setCardToPick] = useState<ScryfallRawData | null>(null);
 
-  const handleAddToGive = (card: CardType) => {
+  // --- ACTIONS ---
+
+  const handleAddToGive = (item: CardType | ScryfallRawData) => {
+      // Pour "Je donne", l'item vient forcément de la collection (donc CardType)
+      // Mais le composant générique envoie l'union. On sécurise.
+      if (!isCollectionCard(item)) return;
+      const card = item;
+
       const existing = toGive.find(c => c.id === card.id);
       const maxStock = card.quantity;
       const currentSelected = existing ? existing.quantity : 0;
@@ -97,30 +228,18 @@ export default function ManualTradePage() {
       finally { setIsSearching(false); }
   };
 
-  const handleSearchResultClick = (scryfallCard: ScryfallRawData) => {
-    setCardToPick(scryfallCard);
-  };
-
   const handleConfirmReceive = (card: CardType) => {
-      // Pour l'ajout libre, l'ID peut ne pas être la version exacte, on ajoute simplement la quantité.
       const existing = toReceive.find(c => c.id === card.id && c.isFoil === card.isFoil); 
-      
       if (existing) {
-          setToReceive(prev => prev.map(c => 
-              (c.id === card.id && c.isFoil === card.isFoil) 
-              ? { ...c, quantity: c.quantity + card.quantity } 
-              : c
-          ));
+          setToReceive(prev => prev.map(c => (c.id === card.id && c.isFoil === card.isFoil) ? { ...c, quantity: c.quantity + card.quantity } : c));
       } else {
           setToReceive(prev => [...prev, card]);
       }
-      
       setSearchResults([]); 
       setRemoteSearch("");
       toast.success(`Ajouté : ${card.name}`);
   };
 
-  // --- LOGIQUE DE VALIDATION SÉCURISÉE ---
   const handleValidate = async () => {
       if (!user) return;
       if (toGive.length === 0 && toReceive.length === 0) return;
@@ -129,21 +248,13 @@ export default function ManualTradePage() {
       const toastId = toast.loading("Validation sécurisée...");
 
       startTransition(async () => {
-        // Nettoyer les cartes ici avant de les envoyer au serveur
         const cleanToGive = mapCardsForServer(toGive);
         const cleanToReceive = mapCardsForServer(toReceive);
-
-        // Appel du serveur, la réponse est typée (success: boolean, error?: string)
-        const result = await executeManualTrade(user.uid, cleanToGive, cleanToReceive) as { 
-            success: boolean; 
-            error?: string; 
-        };
+        const result = await executeManualTrade(user.uid, cleanToGive, cleanToReceive) as { success: boolean; error?: string; };
         
         if (result.success) {
             toast.success("Echange validé !", { id: toastId });
-            setToGive([]);
-            setToReceive([]);
-            setLocalSearch("");
+            setToGive([]); setToReceive([]); setLocalSearch("");
         } else {
             toast.error(result.error || "Erreur lors de l'échange", { id: toastId });
         }
@@ -153,11 +264,14 @@ export default function ManualTradePage() {
   const valGive = toGive.reduce((acc, c) => acc + (c.customPrice ?? c.price ?? 0) * c.quantity, 0);
   const valReceive = toReceive.reduce((acc, c) => acc + (c.price || 0) * c.quantity, 0);
 
+  const filteredCollection = useMemo(() => {
+      return myCollection.filter(c => c.name.toLowerCase().includes(localSearch.toLowerCase())).slice(0, 50);
+  }, [myCollection, localSearch]);
+
   const uniqueSearchResults = useMemo(() => {
     const seen = new Set();
     return searchResults.filter(card => {
-      const rawName = card.name || "";
-      const name = rawName.split(' // ')[0];
+      const name = card.name.split(' // ')[0];
       if (seen.has(name)) return false;
       seen.add(name);
       return true;
@@ -168,166 +282,91 @@ export default function ManualTradePage() {
 
   return (
     <div className="container mx-auto p-4 h-[calc(100vh-64px)] flex flex-col">
-        
-        <h1 className="text-2xl font-bold mb-4 flex-none flex items-center gap-2 text-foreground">
-            Échange Manuel / Externe
-        </h1>
+        <h1 className="text-2xl font-bold mb-4 flex-none text-foreground">Échange Manuel</h1>
 
-        <div className="grid lg:grid-cols-2 gap-6 grow overflow-hidden pb-24">
+        <div className="grid lg:grid-cols-2 gap-4 grow overflow-hidden pb-24">
             
-            {/* COLONNE GAUCHE : JE DONNE */}
+            {/* GAUCHE : JE DONNE */}
             <div className="flex flex-col h-full bg-danger/5 rounded-xl border border-danger/20 overflow-hidden relative shadow-sm">
-                <div className="p-4 pb-0 flex-none">
-                    <h2 className="font-bold text-danger mb-2">Je donne (De ma collection)</h2>
-                    <input 
-                        type="text" 
-                        placeholder="Chercher dans ma collection..." 
-                        className="w-full p-2 mb-2 rounded border border-border bg-surface text-foreground text-sm focus:ring-2 focus:ring-danger outline-none"
-                        value={localSearch}
-                        onChange={e => setLocalSearch(e.target.value)}
-                    />
+                
+                {/* 1. Sélection (Top) */}
+                <div className="flex-2 flex flex-col min-h-0 bg-surface">
+                    <div className="flex justify-between items-center p-2 bg-danger/10 border-b border-danger/20">
+                        <span className="text-xs font-bold text-danger uppercase">À DONNER ({toGive.reduce((a,c)=>a+c.quantity,0)})</span>
+                        <span className="text-sm font-bold text-danger">{valGive.toFixed(2)} €</span>
+                    </div>
+                    <TradeSelectionTable cards={toGive} onRemove={(id) => setToGive(p => p.filter(c => c.id !== id))} colorClass="text-danger" emptyLabel="Sélectionnez vos cartes en bas..." />
+                </div>
+
+                {/* 2. Recherche (Middle) */}
+                <div className="p-3 flex-none border-t border-border bg-surface border-b">
+                    <div className="flex justify-between items-center mb-2">
+                        <h2 className="font-bold text-muted text-xs uppercase tracking-wide">Chercher dans ma Collection</h2>
+                        <span className="text-[10px] bg-secondary text-muted px-2 py-0.5 rounded-full">{myCollection.length} cartes</span>
+                    </div>
+                    <input type="text" placeholder="Filtrer par nom..." className="w-full p-2 rounded-lg border border-border bg-background text-foreground text-sm focus:ring-2 focus:ring-danger outline-none" value={localSearch} onChange={e => setLocalSearch(e.target.value)} />
                 </div>
                 
-                 <div className="grow overflow-y-auto custom-scrollbar p-4 pt-0 space-y-4">
-                    {/* Liste des cartes sélectionnées */}
-                    {toGive.length > 0 && (
-                        <div className="bg-surface rounded-lg border border-danger/30 overflow-hidden">
-                            <div className="bg-danger/10 px-3 py-1 text-xs font-bold text-danger">
-                                SÉLECTION ({toGive.reduce((a,c)=>a+c.quantity,0)})
-                            </div>
-                            {toGive.map(card => (
-                                <div key={card.id} className="flex justify-between items-center text-sm p-2 border-b border-border last:border-0 hover:bg-secondary/50">
-                                    <span className="truncate text-foreground">{card.quantity}x {card.name}</span>
-                                    <button onClick={() => setToGive(p => p.filter(c => c.id !== card.id))} className="text-danger hover:bg-danger/10 rounded px-1">X</button>
-                                </div>
-                            ))}
-                        </div>
-                    )}
-
-                    {/* Liste de la collection */}
-                    <div className="space-y-1">
-                        <p className="text-xs font-bold text-muted uppercase tracking-wider mb-2">Ma Collection</p>
-                        {loading ? <p className="text-sm text-muted">Chargement...</p> : 
-                            myCollection
-                                .filter(c => c.name.toLowerCase().includes(localSearch.toLowerCase()))
-                                .slice(0, 50)
-                                .map(card => (
-                                    <div key={card.id} onClick={() => handleAddToGive(card)} className="cursor-pointer bg-surface hover:bg-danger/10 p-2 rounded flex items-center gap-2 border border-transparent hover:border-danger/30 transition shadow-sm group">
-                                        <div className="w-8 h-11 bg-secondary rounded shrink-0 overflow-hidden">
-                                            <img src={card.imageUrl} className="w-full h-full object-cover" alt="" />
-                                        </div>
-                                        <div className="grow min-w-0">
-                                            <p className="font-bold text-xs truncate text-foreground">{card.name}</p>
-                                            <p className="text-[10px] text-muted">{card.setName} - Stock: {card.quantity}</p>
-                                        </div>
-                                        <span className="text-xs font-bold text-muted group-hover:text-danger shrink-0">+</span>
-                                    </div>
-                                ))
-                        }
-                    </div>
-                </div>
-
-                <div className="flex-none bg-danger/10 p-3 border-t border-danger/20 text-center">
-                    <span className="text-xs text-danger font-bold uppercase">Total Donné</span>
-                    <div className="text-xl font-bold text-danger">{valGive.toFixed(2)} EUR</div>
-                </div>
+                {/* 3. Résultats (Bottom) */}
+                <TradeSourceTable 
+                    cards={filteredCollection} 
+                    onAdd={handleAddToGive} 
+                    buttonColorClass="text-danger" 
+                    loading={loading}
+                />
             </div>
 
-            {/* COLONNE DROITE : JE REÇOIS */}
+            {/* DROITE : JE REÇOIS */}
             <div className="flex flex-col h-full bg-success/5 rounded-xl border border-success/20 overflow-hidden relative shadow-sm">
-                <div className="p-4 pb-0 flex-none">
-                    <h2 className="font-bold text-success mb-2">Je reçois (Ajout libre)</h2>
-                    <form onSubmit={handleSearchScryfall} className="flex gap-2 mb-2">
-                        <input 
-                            type="text" 
-                            placeholder="Rechercher carte à recevoir..." 
-                            className="grow p-2 rounded border border-border bg-surface text-foreground text-sm focus:ring-2 focus:ring-success outline-none"
-                            value={remoteSearch}
-                            onChange={e => setRemoteSearch(e.target.value)}
-                        />
-                        <button type="submit" className="bg-success hover:bg-green-600 text-white px-3 rounded shadow-sm">V</button>
+                
+                {/* 1. Sélection (Top) */}
+                <div className="flex-2 flex flex-col min-h-0 bg-surface">
+                    <div className="flex justify-between items-center p-2 bg-success/10 border-b border-success/20">
+                        <span className="text-xs font-bold text-success uppercase">À RECEVOIR ({toReceive.reduce((a,c)=>a+c.quantity,0)})</span>
+                        <span className="text-sm font-bold text-success">{valReceive.toFixed(2)} €</span>
+                    </div>
+                    <TradeSelectionTable cards={toReceive} onRemove={(id) => setToReceive(p => p.filter((_, idx) => p[idx].id !== id || idx !== p.findIndex(x => x.id === id)))} colorClass="text-success" emptyLabel="Recherchez des cartes en bas..." />
+                </div>
+
+                {/* 2. Recherche (Middle) */}
+                <div className="p-3 flex-none border-t border-border bg-surface border-b">
+                    <h2 className="font-bold text-muted text-xs uppercase tracking-wide mb-2">Recherche Scryfall</h2>
+                    <form onSubmit={handleSearchScryfall} className="flex gap-2">
+                        <input type="text" placeholder="Carte à recevoir..." className="grow p-2 rounded-lg border border-border bg-background text-foreground text-sm focus:ring-2 focus:ring-success outline-none" value={remoteSearch} onChange={e => setRemoteSearch(e.target.value)} />
+                        <button type="submit" className="bg-success hover:opacity-90 text-primary-foreground px-3 rounded-lg shadow-sm font-bold text-xs">GO</button>
                     </form>
                 </div>
 
-                 <div className="grow overflow-y-auto custom-scrollbar p-4 pt-0 space-y-4">
-                    
-                    {toReceive.length > 0 && (
-                        <div className="bg-surface rounded-lg border border-success/30 overflow-hidden">
-                            <div className="bg-success/10 px-3 py-1 text-xs font-bold text-success">
-                                SÉLECTION ({toReceive.reduce((a,c)=>a+c.quantity,0)})
-                            </div>
-                            {toReceive.map((card, idx) => (
-                                <div key={`${card.id}-${idx}`} className="flex justify-between items-center text-sm p-2 border-b border-border last:border-0 hover:bg-secondary/50">
-                                    <div className="flex items-center gap-2 overflow-hidden">
-                                        <span className="font-bold shrink-0 text-foreground">{card.quantity}x</span>
-                                        <div className="flex flex-col truncate">
-                                            <span className="text-foreground truncate">{card.name}</span>
-                                            <span className="text-[10px] text-muted truncate">
-                                                {card.setName} {card.isFoil && 'Foil'}
-                                            </span>
-                                        </div>
-                                    </div>
-                                    <button onClick={() => setToReceive(p => p.filter((_, i) => i !== idx))} className="text-danger hover:bg-danger/10 rounded px-1 ml-2">X</button>
-                                </div>
-                            ))}
-                        </div>
-                    )}
-
-                     <div className="space-y-1">
-                        <p className="text-xs font-bold text-muted uppercase tracking-wider mb-2">Résultats Scryfall</p>
-                        {isSearching && <p className="text-xs text-center py-4 text-muted">Recherche...</p>}
-                        
-                        {uniqueSearchResults.map(card => (
-                            <div key={card.id} onClick={() => handleSearchResultClick(card)} className="cursor-pointer bg-surface hover:bg-success/10 p-2 rounded flex items-center gap-2 border border-transparent hover:border-success/30 transition shadow-sm group">
-                                 <div className="w-8 h-11 bg-secondary rounded overflow-hidden shrink-0">
-                                    {card.image_uris?.small && <img src={card.image_uris.small} className="w-full h-full object-cover" alt="" />}
-                                 </div>
-                                 <div className="grow min-w-0">
-                                    <p className="font-bold text-xs truncate text-foreground">{card.name}</p>
-                                    <p className="text-[10px] text-muted italic">Sélectionner version...</p>
-                                 </div>
-                                 <span className="text-xs font-bold text-muted group-hover:text-success shrink-0">Choisir</span>
-                            </div>
-                        ))}
-                    </div>
-                </div>
-
-                <div className="flex-none bg-success/10 p-3 border-t border-success/20 text-center">
-                    <span className="text-xs text-success font-bold uppercase">Total Reçu</span>
-                    <div className="text-xl font-bold text-success">{valReceive.toFixed(2)} EUR</div>
-                </div>
+                {/* 3. Résultats (Bottom) */}
+                <TradeSourceTable 
+                    cards={uniqueSearchResults} 
+                    onAdd={(item) => { 
+                        // Ici c'est ScryfallRawData, donc on ouvre la modale
+                        if (!isCollectionCard(item)) setCardToPick(item); 
+                    }} 
+                    buttonColorClass="text-success" 
+                    loading={isSearching}
+                />
             </div>
         </div>
 
-        <div className="fixed bottom-0 left-0 right-0 h-20 bg-surface border-t border-border flex justify-between items-center px-6 z-40 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)]">
-            
-            <div className="flex-1"></div>
-
+        {/* FOOTER */}
+        <div className="fixed bottom-0 left-0 right-0 h-20 bg-surface border-t border-border flex justify-between items-center px-6 z-40 shadow-sm">
+            <div className="hidden sm:block flex-1"></div>
             <div className="flex-1 flex flex-col items-center justify-center">
-                <span className="text-xs text-muted font-bold uppercase tracking-widest">Balance</span>
+                <span className="text-[10px] text-muted font-bold uppercase tracking-widest">Balance Estimée</span>
                 <div className={`text-2xl font-black ${valGive - valReceive >= 0 ? 'text-success' : 'text-danger'}`}>
-                    {valGive - valReceive > 0 ? '+' : ''}{(valGive - valReceive).toFixed(2)} EUR
+                    {valGive - valReceive > 0 ? '+' : ''}{(valGive - valReceive).toFixed(2)} €
                 </div>
             </div>
-
             <div className="flex-1 flex justify-end">
-                <button 
-                    onClick={handleValidate}
-                    disabled={isPending || (toGive.length === 0 && toReceive.length === 0)}
-                    className="bg-primary hover:opacity-90 text-primary-foreground px-8 py-3 rounded-xl font-bold disabled:opacity-50 transition shadow-lg transform active:scale-95"
-                >
+                <button onClick={handleValidate} disabled={isPending || (toGive.length === 0 && toReceive.length === 0)} className="btn-primary px-6 py-3 disabled:opacity-50 text-sm">
                     {isPending ? 'Validation...' : 'Valider l\'échange'}
                 </button>
             </div>
         </div>
 
-        <CardVersionPickerModal 
-            isOpen={!!cardToPick}
-            baseCard={cardToPick}
-            onClose={() => setCardToPick(null)}
-            onConfirm={handleConfirmReceive}
-        />
-
+        <CardVersionPickerModal isOpen={!!cardToPick} baseCard={cardToPick} onClose={() => setCardToPick(null)} onConfirm={handleConfirmReceive} />
     </div>
   );
 }

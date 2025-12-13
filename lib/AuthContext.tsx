@@ -12,7 +12,7 @@ import {
   User,
   Unsubscribe
 } from 'firebase/auth';
-import { doc, onSnapshot, collection, getDoc } from 'firebase/firestore'; 
+import { doc, onSnapshot, collection } from 'firebase/firestore'; 
 import { auth, db } from './firebase'; 
 import toast from 'react-hot-toast';
 

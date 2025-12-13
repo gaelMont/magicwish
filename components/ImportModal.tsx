@@ -114,7 +114,6 @@ const getCardInfo = (scryfallCard: ScryfallCard) => {
 
 export default function ImportModal({ 
     isOpen, 
-    onClose, 
     targetCollection = 'collection', 
     currentCollection = [],
     onGoBack,
