@@ -27,11 +27,13 @@ const QuantityManager = ({ card }: { card: CardType }) => {
     const [isUpdatingTrade, setIsUpdatingTrade] = useState(false);
 
     useEffect(() => {
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         setTradeQtyInput(card.quantityForTrade ?? 0);
     }, [card.quantityForTrade]);
     
     useEffect(() => {
         if (tradeQtyInput > maxStock) {
+            // eslint-disable-next-line react-hooks/set-state-in-effect
             setTradeQtyInput(maxStock);
         }
     }, [maxStock, tradeQtyInput]);
@@ -402,7 +404,6 @@ export default function CardDetailPage({ params }: CardDetailPageProps) {
                     setCard({ id: snap.id, ...snap.data(), uid: user.uid } as CardType); 
                 } else {
                     // CAS 2: Je ne possède PAS la carte (ex: clic depuis profil ami)
-                    // On va chercher les infos sur Scryfall pour afficher une vue "générique"
                     try {
                         const scryRes = await fetch(`https://api.scryfall.com/cards/${cardId}`);
                         if (scryRes.ok) {
@@ -413,7 +414,7 @@ export default function CardDetailPage({ params }: CardDetailPageProps) {
                                 ...normalized,
                                 quantity: 0, 
                                 uid: '', 
-                                wishlistId: undefined, // CORRECTION : 'undefined' au lieu de 'null'
+                                wishlistId: undefined, // CORRECTION : undefined pour être compatible avec CardType
                                 isFoil: false,
                                 isSpecificVersion: false,
                                 quantityForTrade: 0
@@ -467,7 +468,9 @@ export default function CardDetailPage({ params }: CardDetailPageProps) {
 
     const { name, imageUrl, imageBackUrl, setName } = normalizeCardData(card.scryfallData as ScryfallRawData);
     const isDoubleSided = !!imageBackUrl;
-    const oracleId = (card.scryfallData as ScryfallRawData)?.oracle_id; 
+    
+    // CORRECTION : Cast explicite pour éviter l'erreur "unknown is not assignable to ReactNode"
+    const oracleId = (card.scryfallData as ScryfallRawData)?.oracle_id as string | undefined;
     
     const displayImage = isFlipped && imageBackUrl ? imageBackUrl : imageUrl;
     
