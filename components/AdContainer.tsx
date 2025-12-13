@@ -2,7 +2,7 @@
 'use client';
 import { usePremium } from '@/hooks/usePremium';
 import Link from 'next/link';
-import { useEffect } from 'react'; // <-- Doit être importé
+import { useEffect } from 'react'; // <-- Correctement importé
 
 // Type pour les paramètres passés aux endroits où la pub s'affiche
 type Props = {
@@ -15,10 +15,12 @@ export default function AdContainer({ message = "Publicité", adSlotId = "YOUR_A
 
   // Déclencher le rafraîchissement AdSense après le rendu
   useEffect(() => {
-    // Vérifie si l'API AdSense est disponible (doit passer si lib/globals.d.ts est bien inclus)
-    if (window.adsbygoogle && !isPremium) {
+
+    const win = window as typeof window & { adsbygoogle?: unknown[] };
+
+    if (!isPremium && win.adsbygoogle && Array.isArray(win.adsbygoogle)) {
       try {
-        window.adsbygoogle.push({}); 
+        win.adsbygoogle.push({}); 
       } catch (e) {
         console.warn("Erreur chargement AdSense", e);
       }
