@@ -3,7 +3,7 @@ import type { Metadata } from 'next';
 import { Inter } from 'next/font/google';
 import './globals.css';
 import { AuthProvider } from '@/lib/AuthContext';
-import { ThemeProvider } from '@/components/ThemeProvider'; // <-- IMPORT
+import { ThemeProvider } from '@/components/ThemeProvider';
 import Header from '@/components/Header'; 
 import { Toaster } from 'react-hot-toast';
 import UsernameSetupModal from '@/components/UsernameSetupModal'; 
@@ -22,11 +22,14 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    // Ajout de suppressHydrationWarning pour éviter les warnings liés au thème
     <html lang="fr" suppressHydrationWarning>
       <body className={inter.className}>
-        {/* On enveloppe tout avec le ThemeProvider */}
-        <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
+        <ThemeProvider 
+            attribute="class" 
+            defaultTheme="light"      // Force le mode clair
+            enableSystem={false}      // Ignore les préférences de l'ordinateur
+            disableTransitionOnChange // Évite les flashs de couleur au chargement
+        >
           <AuthProvider>
             <Header />
             {children}

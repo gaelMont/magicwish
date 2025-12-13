@@ -31,7 +31,7 @@ export default function CollectionPage() {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   
   const [visibleCount, setVisibleCount] = useState(ITEMS_PER_PAGE);
-  const [showFilters, setShowFilters] = useState(false); // Pour plier/déplier sur mobile
+  const [showFilters, setShowFilters] = useState(false);
 
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<SortOption>('date');
@@ -109,7 +109,7 @@ export default function CollectionPage() {
   };
 
   const handleBulkDelete = async () => {
-      if (!confirm(`Supprimer ces ${selectedIds.length} cartes definitivement ?`)) return;
+      if (!confirm(`Supprimer ces ${selectedIds.length} cartes définitivement ?`)) return;
       await bulkRemoveCards(selectedIds);
       setSelectedIds([]);
       setIsSelectMode(false);
@@ -121,46 +121,43 @@ export default function CollectionPage() {
       setIsSelectMode(false);
   };
 
-  if (loading) return <div className="flex h-screen items-center justify-center text-gray-500 animate-pulse">Chargement de votre collection...</div>;
-  if (!user) return <p className="text-center p-10">Veuillez vous connecter.</p>;
+  if (loading) return <div className="flex h-screen items-center justify-center text-muted animate-pulse">Chargement de votre collection...</div>;
+  if (!user) return <p className="text-center p-10 text-muted">Veuillez vous connecter.</p>;
 
   return (
     <main className="container mx-auto p-4 pb-24 relative">
       
-      {/* HEADER AMÉLIORÉ POUR MOBILE */}
       <div className="flex flex-col gap-4 mb-6">
         
-        {/* Ligne 1 : Titre + Valeur (Layout Mobile Friendly) */}
+        {/* TITRE + TOTAL */}
         <div className="flex justify-between items-center">
-            <h1 className="text-2xl md:text-3xl font-bold text-blue-700 dark:text-blue-400 truncate">
+            <h1 className="text-2xl md:text-3xl font-bold text-primary truncate">
                 Ma Collection 
-                <span className="ml-2 text-base font-normal text-gray-500">
+                <span className="ml-2 text-base font-normal text-muted">
                     ({filteredAndSortedCards.length})
                 </span>
             </h1>
-            <div className="shrink-0 bg-blue-50 dark:bg-blue-900/30 text-blue-800 dark:text-blue-100 px-3 py-1.5 rounded-lg border border-blue-200 dark:border-blue-700 text-right">
-                <span className="text-[10px] uppercase tracking-wide opacity-70 block">Total</span>
-                <span className="font-bold whitespace-nowrap">{totalPrice.toFixed(2)} EUR</span>
+            <div className="shrink-0 bg-primary text-primary-foreground px-3 py-1.5 rounded-lg shadow-sm text-right">
+                <span className="text-[10px] uppercase tracking-wide opacity-80 block">Total</span>
+                <span className="font-bold whitespace-nowrap">{totalPrice.toFixed(2)} €</span>
             </div>
         </div>
         
-        {/* Ligne 2 : Actions (Scrollable horizontalement sur mobile pour ne pas écraser les boutons) */}
-        {/* 'overflow-x-auto' permet de scroller si ça dépasse */}
         <div className="flex items-center gap-2 overflow-x-auto pb-2 -mx-4 px-4 md:mx-0 md:px-0 no-scrollbar">
            <button 
              onClick={() => { setIsSelectMode(!isSelectMode); setSelectedIds([]); }}
-             className={`shrink-0 px-3 py-2 rounded-lg text-sm font-medium transition shadow-sm border flex items-center gap-2 whitespace-nowrap ${isSelectMode ? 'bg-blue-600 text-white border-blue-600' : 'bg-white hover:bg-gray-100 text-gray-700 border-gray-300 dark:bg-gray-800 dark:border-gray-600 dark:text-gray-200'}`}
+             className={`shrink-0 px-3 py-2 rounded-lg text-sm font-medium transition shadow-sm border flex items-center gap-2 whitespace-nowrap ${isSelectMode ? 'bg-primary text-primary-foreground border-primary' : 'bg-surface hover:bg-secondary text-foreground border-border'}`}
            >
-             {isSelectMode ? 'Annuler' : 'Selectionner'}
+             {isSelectMode ? 'Annuler' : 'Sélectionner'}
            </button>
 
            {!isSelectMode && (
                <>
                 <button 
                     onClick={() => setIsToolsOpen(true)}
-                    className="shrink-0 bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200 px-3 py-2 rounded-lg text-sm font-medium transition shadow-sm border border-gray-200 dark:border-gray-600 flex items-center gap-2 whitespace-nowrap"
+                    className="shrink-0 bg-surface hover:bg-secondary text-foreground px-3 py-2 rounded-lg text-sm font-medium transition shadow-sm border border-border flex items-center gap-2 whitespace-nowrap"
                 >
-                    Gerer
+                    Gérer
                 </button>
 
                 <div className="shrink-0">
@@ -169,7 +166,7 @@ export default function CollectionPage() {
                 
                 <button 
                     onClick={() => setIsImportOpen(true)} 
-                    className="shrink-0 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition shadow-sm whitespace-nowrap"
+                    className="btn-primary text-sm whitespace-nowrap"
                 >
                     Importer CSV
                 </button>
@@ -178,8 +175,8 @@ export default function CollectionPage() {
         </div>
       </div>
 
-      {/* FILTRES COMPACTS */}
-      <div className="bg-white dark:bg-gray-800 p-4 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm mb-6">
+      {/* FILTRES (Remplacé bg-white par bg-surface) */}
+      <div className="bg-surface p-4 rounded-xl border border-border shadow-sm mb-6">
           <div className="flex gap-2 items-center">
               <div className="grow">
                   <input 
@@ -187,66 +184,64 @@ export default function CollectionPage() {
                       placeholder="Rechercher une carte..." 
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
-                      className="w-full p-2.5 rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-900 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                      className="w-full p-2.5 rounded-lg border border-border bg-background text-foreground text-sm focus:ring-2 focus:ring-primary outline-none"
                   />
               </div>
-              {/* Bouton Toggle Filtres (Mobile uniquement) */}
               <button 
                 onClick={() => setShowFilters(!showFilters)}
-                className="md:hidden shrink-0 px-3 py-2 bg-gray-100 dark:bg-gray-700 rounded-lg text-gray-600 dark:text-gray-300 border border-gray-300 dark:border-gray-600 text-sm font-medium"
+                className="md:hidden shrink-0 px-3 py-2 bg-secondary rounded-lg text-foreground border border-border text-sm font-medium"
               >
                 {showFilters ? 'Masquer' : 'Filtres'}
               </button>
           </div>
 
-          {/* Zone de filtres pliable sur mobile */}
           <div className={`mt-4 space-y-4 md:space-y-0 md:flex md:items-end md:gap-4 ${showFilters ? 'block' : 'hidden md:flex'}`}>
             <div className="min-w-[200px]">
-                <label className="block text-xs font-bold text-gray-500 mb-1 uppercase">Edition</label>
-                <select value={filterSet} onChange={(e) => setFilterSet(e.target.value)} className="w-full p-2.5 rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-900 text-sm cursor-pointer">
-                    <option value="all">Toutes les editions</option>
+                <label className="block text-xs font-bold text-muted mb-1 uppercase">Edition</label>
+                <select value={filterSet} onChange={(e) => setFilterSet(e.target.value)} className="w-full p-2.5 rounded-lg border border-border bg-background text-foreground text-sm cursor-pointer">
+                    <option value="all">Toutes les éditions</option>
                     {availableSets.map(set => <option key={set} value={set}>{set}</option>)}
                 </select>
             </div>
             <div className="min-w-[180px]">
-                <label className="block text-xs font-bold text-gray-500 mb-1 uppercase">Trier par</label>
-                <select value={sortBy} onChange={(e) => setSortBy(e.target.value as SortOption)} className="w-full p-2.5 rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-900 text-sm cursor-pointer">
+                <label className="block text-xs font-bold text-muted mb-1 uppercase">Trier par</label>
+                <select value={sortBy} onChange={(e) => setSortBy(e.target.value as SortOption)} className="w-full p-2.5 rounded-lg border border-border bg-background text-foreground text-sm cursor-pointer">
                     <option value="date">Date d&apos;ajout</option>
                     <option value="price_desc">Prix : Haut - Bas</option>
                     <option value="price_asc">Prix : Bas - Haut</option>
                     <option value="name">Nom : A - Z</option>
-                    <option value="quantity">Quantite</option>
+                    <option value="quantity">Quantité</option>
                 </select>
             </div>
             <div className="flex items-center gap-4 pb-3 pt-2 md:pt-0">
                 <label className="flex items-center gap-2 cursor-pointer select-none">
-                    <input type="checkbox" checked={filterFoil} onChange={(e) => setFilterFoil(e.target.checked)} className="w-4 h-4 text-blue-600 rounded" />
-                    <span className="text-sm font-medium">Foil</span>
+                    <input type="checkbox" checked={filterFoil} onChange={(e) => setFilterFoil(e.target.checked)} className="w-4 h-4 text-primary rounded border-border" />
+                    <span className="text-sm font-medium text-foreground">Foil</span>
                 </label>
                 <label className="flex items-center gap-2 cursor-pointer select-none">
-                    <input type="checkbox" checked={filterTrade} onChange={(e) => setFilterTrade(e.target.checked)} className="w-4 h-4 text-green-600 rounded" />
-                    <span className="text-sm font-medium">Echange</span>
+                    <input type="checkbox" checked={filterTrade} onChange={(e) => setFilterTrade(e.target.checked)} className="w-4 h-4 text-success rounded border-border" />
+                    <span className="text-sm font-medium text-foreground">Échange</span>
                 </label>
             </div>
           </div>
       </div>
 
       {isSelectMode && (
-          <div className="mb-4 flex items-center justify-between bg-blue-50 dark:bg-blue-900/20 p-3 rounded-lg border border-blue-100 dark:border-blue-800 animate-in fade-in slide-in-from-top-2">
-              <span className="font-bold text-blue-800 dark:text-blue-200 pl-2">
+          <div className="mb-4 flex items-center justify-between bg-primary/10 p-3 rounded-lg border border-primary/30 animate-in fade-in slide-in-from-top-2">
+              <span className="font-bold text-primary pl-2">
                   {selectedIds.length} carte(s)
               </span>
-              <button onClick={handleSelectAll} className="text-sm text-blue-600 hover:text-blue-800 font-medium px-3 py-1 rounded hover:bg-blue-100 transition">
-                  {selectedIds.length === filteredAndSortedCards.length ? 'Deselectionner' : 'Tout selectionner'}
+              <button onClick={handleSelectAll} className="text-sm text-primary font-bold px-3 py-1 rounded hover:bg-primary/10 transition">
+                  {selectedIds.length === filteredAndSortedCards.length ? 'Désélectionner' : 'Tout sélectionner'}
               </button>
           </div>
       )}
 
       {/* GRILLE */}
       {filteredAndSortedCards.length === 0 ? (
-        <div className="text-center py-20 bg-gray-50 dark:bg-gray-800/50 rounded-xl border-2 border-dashed border-gray-200 dark:border-gray-700">
-          <p className="text-xl text-gray-500 mb-4">Aucun resultat ne correspond a vos filtres.</p>
-          <button onClick={() => { setSearchQuery(''); setFilterSet('all'); setFilterTrade(false); setFilterFoil(false); }} className="text-blue-600 hover:underline">Reinitialiser les filtres</button>
+        <div className="text-center py-20 bg-secondary/50 rounded-xl border-2 border-dashed border-border">
+          <p className="text-xl text-muted mb-4">Aucun résultat ne correspond à vos filtres.</p>
+          <button onClick={() => { setSearchQuery(''); setFilterSet('all'); setFilterTrade(false); setFilterFoil(false); }} className="text-primary hover:underline">Réinitialiser les filtres</button>
         </div>
       ) : (
         <>
@@ -266,31 +261,30 @@ export default function CollectionPage() {
             ))}
             </div>
 
-            {/* BOUTON CHARGER PLUS */}
             {visibleCount < filteredAndSortedCards.length && (
                 <div className="mt-8 flex justify-center pb-10">
                     <button 
                         onClick={() => setVisibleCount(prev => prev + ITEMS_PER_PAGE)}
-                        className="bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-800 dark:text-gray-200 px-8 py-3 rounded-full font-bold shadow-sm transition flex items-center gap-2"
+                        className="bg-surface hover:bg-secondary text-foreground border border-border px-8 py-3 rounded-full font-bold shadow-sm transition flex items-center gap-2"
                     >
-                        Afficher plus ({filteredAndSortedCards.length - visibleCount}) V
+                        Afficher plus ({filteredAndSortedCards.length - visibleCount}) ▼
                     </button>
                 </div>
             )}
         </>
       )}
 
-      {/* BARRE FLOTTANTE ACTIONS (Mobile Friendly) */}
+      {/* ACTION BAR FLOTTANTE */}
       {isSelectMode && selectedIds.length > 0 && (
-          <div className="fixed bottom-6 left-4 right-4 md:left-1/2 md:right-auto md:-translate-x-1/2 bg-white dark:bg-gray-800 shadow-2xl border border-gray-200 dark:border-gray-700 p-2 rounded-2xl flex items-center justify-around gap-2 z-50 animate-in slide-in-from-bottom-6 duration-300">
+          <div className="fixed bottom-6 left-4 right-4 md:left-1/2 md:right-auto md:-translate-x-1/2 bg-surface shadow-2xl border border-border p-2 rounded-2xl flex items-center justify-around gap-2 z-50 animate-in slide-in-from-bottom-6 duration-300">
               <button onClick={() => handleBulkTrade(true)} className="px-4 py-2 bg-green-100 hover:bg-green-200 text-green-800 rounded-xl text-sm font-bold transition flex flex-col items-center leading-none gap-1">
                   <span>Trade</span>
               </button>
-              <button onClick={() => handleBulkTrade(false)} className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-800 rounded-xl text-sm font-bold transition flex flex-col items-center leading-none gap-1">
-                  <span>Prive</span>
+              <button onClick={() => handleBulkTrade(false)} className="px-4 py-2 bg-secondary hover:bg-border text-foreground rounded-xl text-sm font-bold transition flex flex-col items-center leading-none gap-1">
+                  <span>Privé</span>
               </button>
-              <div className="w-px h-8 bg-gray-300 mx-1"></div>
-              <button onClick={handleBulkDelete} className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-xl text-sm font-bold transition flex flex-col items-center leading-none gap-1 shadow-md">
+              <div className="w-px h-8 bg-border mx-1"></div>
+              <button onClick={handleBulkDelete} className="px-4 py-2 bg-danger hover:bg-red-600 text-white rounded-xl text-sm font-bold transition flex flex-col items-center leading-none gap-1 shadow-md">
                   <span>Suppr</span>
               </button>
           </div>
@@ -298,7 +292,7 @@ export default function CollectionPage() {
 
       <ImportModal isOpen={isImportOpen} onClose={() => setIsImportOpen(false)} targetCollection="collection" />
       <CollectionToolsModal isOpen={isToolsOpen} onClose={() => setIsToolsOpen(false)} totalCards={cards.length} onRefreshPrices={refreshCollectionPrices} onBulkTrade={bulkSetTradeStatus} />
-      <ConfirmModal isOpen={!!cardToDelete} onClose={() => setCardToDelete(null)} onConfirm={() => { if(cardToDelete) removeCard(cardToDelete); }} title="Retirer ?" message="Cette carte sera retiree de votre collection." />
+      <ConfirmModal isOpen={!!cardToDelete} onClose={() => setCardToDelete(null)} onConfirm={() => { if(cardToDelete) removeCard(cardToDelete); }} title="Retirer ?" message="Cette carte sera retirée de votre collection." />
     </main>
   );
 }

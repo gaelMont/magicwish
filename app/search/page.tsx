@@ -26,26 +26,16 @@ export default function SearchPage() {
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!query.trim()) return;
-
     setIsSearching(true);
     setHasSearched(true);
     setResults([]);
-
     try {
         const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
         const data = await res.json();
-        
-        if (data.data) {
-            setResults(data.data);
-        } else {
-            toast.error("Aucune carte trouvee.");
-        }
-    } catch (error) {
-        console.error(error);
-        toast.error("Erreur de recherche.");
-    } finally {
-        setIsSearching(false);
-    }
+        if (data.data) setResults(data.data);
+        else toast.error("Aucune carte trouvée.");
+    } catch (error) { console.error(error); toast.error("Erreur de recherche."); } 
+    finally { setIsSearching(false); }
   };
 
   const openPicker = (card: ScryfallRawData, destination: 'collection' | 'wishlist') => {
@@ -56,41 +46,22 @@ export default function SearchPage() {
 
   const handleConfirmAdd = async (card: CardType, targetListId: string = 'default') => {
       if (!user) return;
-
       const destLabel = targetDestination === 'collection' ? 'Collection' : 'Wishlist';
-      const toastId = toast.loading(`Ajout a : ${destLabel}...`);
-      
+      const toastId = toast.loading(`Ajout à : ${destLabel}...`);
       try {
           let collectionPath = 'collection';
           if (targetDestination === 'wishlist') {
-              if (targetListId === 'default') {
-                  collectionPath = 'wishlist';
-              } else {
-                  collectionPath = `wishlists_data/${targetListId}/cards`;
-              }
+              if (targetListId === 'default') collectionPath = 'wishlist';
+              else collectionPath = `wishlists_data/${targetListId}/cards`;
           }
-
           const cardRef = doc(db, 'users', user.uid, collectionPath, card.id);
-
           const dataToSave = {
-              ...card,
-              imageBackUrl: card.imageBackUrl || null,
-              addedAt: serverTimestamp(),
-              wishlistId: targetDestination === 'wishlist' ? targetListId : null, 
-              isForTrade: false 
+              ...card, imageBackUrl: card.imageBackUrl || null, addedAt: serverTimestamp(),
+              wishlistId: targetDestination === 'wishlist' ? targetListId : null, isForTrade: false 
           };
-
-          await setDoc(cardRef, {
-              ...dataToSave,
-              quantity: increment(card.quantity)
-          }, { merge: true });
-
-          toast.success(`Ajoute avec succes !`, { id: toastId });
-
-      } catch (error) {
-          console.error(error);
-          toast.error("Erreur lors de l'ajout", { id: toastId });
-      }
+          await setDoc(cardRef, { ...dataToSave, quantity: increment(card.quantity) }, { merge: true });
+          toast.success(`Ajouté avec succès !`, { id: toastId });
+      } catch (error) { console.error(error); toast.error("Erreur ajout", { id: toastId }); }
   };
 
   const uniqueResults = useMemo(() => {
@@ -107,11 +78,11 @@ export default function SearchPage() {
     <main className="container mx-auto p-4 max-w-5xl min-h-[85vh]">
       
       <div className="text-center mb-8 pt-4">
-          <h1 className="text-3xl font-bold bg-linear-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent mb-2">
+          <h1 className="text-3xl font-bold text-primary mb-2">
               Centre de Recherche
           </h1>
-          <p className="text-gray-500">
-              Trouvez n&apos;importe quelle carte et ajoutez-la a votre Collection ou votre Wishlist.
+          <p className="text-muted">
+              Trouvez n&apos;importe quelle carte et ajoutez-la à votre Collection ou votre Wishlist.
           </p>
       </div>
 
@@ -119,7 +90,7 @@ export default function SearchPage() {
           <form onSubmit={handleSearch} className="relative shadow-lg rounded-full">
               <input 
                   type="text" 
-                  className="w-full p-4 pl-6 pr-14 rounded-full border-2 border-transparent bg-white dark:bg-gray-800 dark:text-white focus:border-blue-500 outline-none transition text-lg"
+                  className="w-full p-4 pl-6 pr-14 rounded-full border border-border bg-surface text-foreground focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none transition text-lg"
                   placeholder="Nom de la carte (ex: Black Lotus, Sol Ring...)"
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
@@ -128,7 +99,7 @@ export default function SearchPage() {
               <button 
                   type="submit"
                   disabled={isSearching || !query.trim()}
-                  className="absolute right-2 top-2 bottom-2 bg-blue-600 hover:bg-blue-700 text-white rounded-full w-12 flex items-center justify-center transition disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="absolute right-2 top-2 bottom-2 bg-primary hover:opacity-90 text-primary-foreground rounded-full w-12 flex items-center justify-center transition disabled:opacity-50"
               >
                   {isSearching ? '...' : 'Go'}
               </button>
@@ -137,30 +108,30 @@ export default function SearchPage() {
 
       {isSearching ? (
           <div className="text-center py-20">
-              <div className="inline-block w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mb-4"></div>
-              <p className="text-gray-400">Interrogation de Scryfall...</p>
+              <div className="inline-block w-8 h-8 border-4 border-primary border-t-transparent rounded-full animate-spin mb-4"></div>
+              <p className="text-muted">Recherche en cours...</p>
           </div>
       ) : uniqueResults.length > 0 ? (
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
               {uniqueResults.map((card) => (
-                  <div key={card.id} className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden flex flex-col group hover:shadow-md transition">
-                      <div className="relative aspect-[2.5/3.5] bg-gray-200 overflow-hidden">
+                  <div key={card.id} className="bg-surface rounded-xl shadow-sm border border-border overflow-hidden flex flex-col group hover:shadow-md transition">
+                      <div className="relative aspect-[2.5/3.5] bg-secondary overflow-hidden">
                           {card.image_uris?.normal ? (
                               <img src={card.image_uris.normal} alt={card.name} className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110" loading="lazy" />
                           ) : (
-                             <div className="flex items-center justify-center h-full text-gray-400 text-xs">Pas d&apos;image</div>
+                             <div className="flex items-center justify-center h-full text-muted text-xs">Pas d&apos;image</div>
                           )}
                           
                           <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center gap-3 p-4">
                               <button 
                                   onClick={() => openPicker(card, 'collection')}
-                                  className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 rounded-lg text-sm shadow-lg transform translate-y-4 group-hover:translate-y-0 transition-transform duration-300"
+                                  className="w-full bg-primary hover:opacity-90 text-primary-foreground font-bold py-2 rounded-lg text-sm shadow-lg transform translate-y-4 group-hover:translate-y-0 transition-transform duration-300"
                               >
                                   + Collection
                               </button>
                               <button 
                                   onClick={() => openPicker(card, 'wishlist')}
-                                  className="w-full bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 rounded-lg text-sm shadow-lg transform translate-y-4 group-hover:translate-y-0 transition-transform duration-300 delay-75"
+                                  className="w-full bg-surface text-primary font-bold py-2 rounded-lg text-sm shadow-lg transform translate-y-4 group-hover:translate-y-0 transition-transform duration-300 delay-75"
                               >
                                   + Wishlist
                               </button>
@@ -168,25 +139,25 @@ export default function SearchPage() {
                       </div>
 
                       <div className="p-3">
-                          <h3 className="font-bold text-gray-900 dark:text-white truncate" title={card.name}>{card.name}</h3>
-                          <p className="text-xs text-gray-500">{card.set_name}</p>
+                          <h3 className="font-bold text-foreground truncate" title={card.name}>{card.name}</h3>
+                          <p className="text-xs text-muted">{card.set_name}</p>
                       </div>
                   </div>
               ))}
           </div>
       ) : hasSearched ? (
-          <div className="text-center py-20 bg-gray-50 dark:bg-gray-800/50 rounded-2xl border-2 border-dashed border-gray-200 dark:border-gray-700">
-              <p className="text-xl text-gray-500">Aucun resultat trouve pour &quot;{query}&quot;.</p>
+          <div className="text-center py-20 bg-secondary/50 rounded-2xl border-2 border-dashed border-border">
+              <p className="text-xl text-muted">Aucun résultat trouvé.</p>
           </div>
       ) : (
           <div className="grid md:grid-cols-2 gap-4 max-w-3xl mx-auto opacity-50 hover:opacity-100 transition-opacity">
-               <div className="p-6 border-2 border-dashed border-gray-200 dark:border-gray-700 rounded-xl text-center">
-                   <span className="text-4xl mb-2 block font-bold text-gray-300">COLLECTION</span>
-                   <h3 className="font-bold">Completer ma Collection</h3>
+               <div className="p-6 border-2 border-dashed border-border rounded-xl text-center">
+                   <span className="text-4xl mb-2 block font-bold text-muted">COLLECTION</span>
+                   <h3 className="font-bold text-foreground">Compléter ma Collection</h3>
                </div>
-               <div className="p-6 border-2 border-dashed border-gray-200 dark:border-gray-700 rounded-xl text-center">
-                   <span className="text-4xl mb-2 block font-bold text-gray-300">WISHLIST</span>
-                   <h3 className="font-bold">Remplir ma Wishlist</h3>
+               <div className="p-6 border-2 border-dashed border-border rounded-xl text-center">
+                   <span className="text-4xl mb-2 block font-bold text-muted">WISHLIST</span>
+                   <h3 className="font-bold text-foreground">Remplir ma Wishlist</h3>
                </div>
           </div>
       )}

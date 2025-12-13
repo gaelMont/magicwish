@@ -81,7 +81,19 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       const provider = new GoogleAuthProvider();
       await signInWithPopup(auth, provider);
       toast.success('Connexion réussie !');
-    } catch (error) {
+    } catch (error: unknown) {
+      // Gestion propre des erreurs sans 'any'
+      if (error && typeof error === 'object' && 'code' in error) {
+          const firebaseError = error as { code: string; message: string };
+          
+          // Ignorer si l'utilisateur a fermé la popup ou cliqué deux fois (conflit)
+          if (firebaseError.code === 'auth/cancelled-popup-request' || 
+              firebaseError.code === 'auth/popup-closed-by-user') {
+              console.warn("Processus de connexion annulé par l'utilisateur.");
+              return; 
+          }
+      }
+
       console.error(error);
       toast.error("Erreur lors de la connexion Google");
     }

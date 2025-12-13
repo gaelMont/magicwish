@@ -1,20 +1,74 @@
 @import "tailwindcss";
 
 :root {
-  /* MODE CLAIR : "Soft & Clean" (Gris Zinc très doux) */
-  --background: #fafafa; 
-  --foreground: #27272a; /* zinc-800 */
+  /* --- PALETTE DE BASE (Mode Clair) --- */
+  
+  /* Fond principal de la page */
+  --background: #f4f6fc; 
+  /* Texte principal */
+  --foreground: #27272a; /* Zinc-800 */
+
+  /* Surfaces (Cartes, Header, Modales) */
+  --surface: #ffffff;
+  --surface-foreground: #27272a;
+
+  /* Bordures */
+  --border: #e4e4e7; /* Zinc-200 */
+
+  /* COULEUR PRIMAIRE (Ton Bleu #6275b3) */
+  --primary: #6275b3;
+  --primary-foreground: #ffffff;
+
+  /* COULEUR SECONDAIRE (Pour les accents doux) */
+  --secondary: #eef2ff; /* Indigo-50 modifié */
+  --secondary-foreground: #6275b3;
+
+  /* ÉLÉMENTS D'ÉTAT */
+  --muted: #a1a1aa; /* Zinc-400 */
+  --danger: #ef4444; /* Red-500 */
+  --success: #10b981; /* Emerald-500 */
 }
 
-/* MODE SOMBRE */
 .dark {
-  --background: #09090b; /* zinc-950 */
-  --foreground: #f4f4f5; /* zinc-100 */
+  /* --- PALETTE MODE SOMBRE --- */
+  --background: #09090b; /* Zinc-950 */
+  --foreground: #f4f4f5; /* Zinc-100 */
+
+  --surface: #18181b; /* Zinc-900 */
+  --surface-foreground: #f4f4f5;
+
+  --border: #27272a; /* Zinc-800 */
+
+  /* On garde le même bleu ou on l'éclaircit légèrement pour le contraste sombre */
+  --primary: #7a8bc9; 
+  --primary-foreground: #ffffff;
+
+  --secondary: #1e1b4b; /* Indigo-950 */
+  --secondary-foreground: #a5b4fc;
 }
 
+/* --- CONFIGURATION TAILWIND --- */
 @theme inline {
+  /* On mappe les variables CSS aux classes Tailwind */
+  
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  
+  --color-surface: var(--surface);
+  --color-surface-foreground: var(--surface-foreground);
+  
+  --color-border: var(--border);
+
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+
+  --color-muted: var(--muted);
+  --color-danger: var(--danger);
+  --color-success: var(--success);
+
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
@@ -24,5 +78,11 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
   -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+}
+
+@layer components {
+  /* Bouton standard utilisant la variable Primary */
+  .btn-primary {
+    @apply bg-primary text-primary-foreground font-bold py-2 px-4 rounded-lg shadow-sm transition-transform active:scale-95 hover:opacity-90;
+  }
 }

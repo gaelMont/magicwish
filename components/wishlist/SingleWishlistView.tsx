@@ -1,12 +1,10 @@
-// components/wishlist/SingleWishlistView.tsx
 'use client';
 
 import { useAuth } from '@/lib/AuthContext';
 import { useCardCollection, CardType } from '@/hooks/useCardCollection';
 import MagicCard from '@/components/MagicCard';
-import { db } from '@/lib/firebase';
-import { doc, runTransaction, increment } from 'firebase/firestore';
 import toast from 'react-hot-toast';
+import { moveCardFromWishlistToCollection } from '@/lib/services/collectionService'; 
 
 type Props = {
     listId: string;
@@ -20,49 +18,31 @@ export default function SingleWishlistView({ listId, listName }: Props) {
     const moveToCollection = async (card: CardType) => {
         if (!user) return;
         const toastId = toast.loading("Déplacement...");
-        try {
-            const sourcePath = listId === 'default' ? 'wishlist' : `wishlists_data/${listId}/cards`;
-            const wishlistRef = doc(db, 'users', user.uid, sourcePath, card.id);
-            const collectionRef = doc(db, 'users', user.uid, 'collection', card.id);
+        
+        const result = await moveCardFromWishlistToCollection(user.uid, card, listId);
 
-            await runTransaction(db, async (transaction) => {
-                const colDoc = await transaction.get(collectionRef);
-                if (colDoc.exists()) {
-                    transaction.update(collectionRef, { quantity: increment(card.quantity) });
-                } else {
-                    transaction.set(collectionRef, { 
-                        ...card,
-                        // CORRECTION CRITIQUE ICI : On force null si undefined
-                        imageBackUrl: card.imageBackUrl || null, 
-                        wishlistId: null, 
-                        addedAt: new Date(),
-                        isFoil: card.isFoil || false
-                    });
-                }
-                transaction.delete(wishlistRef);
-            });
+        if (result.success) {
             toast.success("Ajoutée à la collection !", { id: toastId });
-        } catch (error) {
-            console.error(error);
-            toast.error("Erreur technique (voir console)", { id: toastId });
+        } else {
+            toast.error(result.error || "Erreur technique", { id: toastId });
         }
     };
 
-    if (loading) return <div className="p-10 text-center text-gray-500">Chargement des cartes...</div>;
+    if (loading) return <div className="p-10 text-center text-muted">Chargement des cartes...</div>;
 
     return (
         <div className="animate-in fade-in duration-300">
-            <div className="flex justify-between items-end mb-6 border-b pb-4 dark:border-gray-700">
-                <h2 className="text-2xl font-bold text-gray-800 dark:text-white">{listName}</h2>
+            <div className="flex justify-between items-end mb-6 border-b border-border pb-4">
+                <h2 className="text-2xl font-bold text-foreground">{listName}</h2>
                 <div className="text-right">
-                    <span className="text-xs text-gray-500 uppercase font-semibold">Total estimé</span>
-                    <p className="text-2xl font-bold text-green-600 dark:text-green-400">{totalPrice.toFixed(2)} €</p>
+                    <span className="text-xs text-muted uppercase font-semibold">Total estimé</span>
+                    <p className="text-2xl font-bold text-success">{totalPrice.toFixed(2)} €</p>
                 </div>
             </div>
 
             {cards.length === 0 ? (
-                <div className="text-center py-12 bg-gray-50 dark:bg-gray-800/50 rounded-xl border border-dashed border-gray-200 dark:border-gray-700">
-                    <p className="text-gray-500 italic">Cette liste est vide.</p>
+                <div className="text-center py-12 bg-secondary/30 rounded-xl border border-dashed border-border">
+                    <p className="text-muted italic">Cette liste est vide.</p>
                 </div>
             ) : (
                 <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">

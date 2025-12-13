@@ -3,7 +3,7 @@
 import { useState, useMemo, useTransition } from 'react';
 import { useAuth } from '@/lib/AuthContext';
 import { useCardCollection, CardType } from '@/hooks/useCardCollection';
-import { executeManualTrade } from '@/app/actions/trade'; // <--- Import de la Server Action
+import { executeManualTrade } from '@/app/actions/trade'; 
 import toast from 'react-hot-toast';
 import CardVersionPickerModal from '@/components/CardVersionPickerModal';
 import { ScryfallRawData } from '@/lib/cardUtils';
@@ -12,7 +12,6 @@ export default function ManualTradePage() {
   const { user } = useAuth();
   const { cards: myCollection, loading } = useCardCollection('collection'); 
   
-  // useTransition gère l'état "pending" pendant que le serveur travaille
   const [isPending, startTransition] = useTransition();
 
   const [toGive, setToGive] = useState<CardType[]>([]);
@@ -73,7 +72,6 @@ export default function ManualTradePage() {
       toast.success(`Ajouté : ${card.name}`);
   };
 
-  // --- NOUVELLE LOGIQUE DE VALIDATION SÉCURISÉE ---
   const handleValidate = async () => {
       if (!user) return;
       if (toGive.length === 0 && toReceive.length === 0) return;
@@ -82,7 +80,6 @@ export default function ManualTradePage() {
       const toastId = toast.loading("Validation sécurisée...");
 
       startTransition(async () => {
-        // On appelle le serveur
         const result = await executeManualTrade(user.uid, toGive, toReceive);
         
         if (result.success) {
@@ -110,25 +107,25 @@ export default function ManualTradePage() {
     });
   }, [searchResults]);
 
-  if (!user) return <div className="p-10 text-center">Connectez-vous.</div>;
+  if (!user) return <div className="p-10 text-center text-muted">Connectez-vous.</div>;
 
   return (
     <div className="container mx-auto p-4 h-[calc(100vh-64px)] flex flex-col">
         
-        <h1 className="text-2xl font-bold mb-4 flex-none flex items-center gap-2">
+        <h1 className="text-2xl font-bold mb-4 flex-none flex items-center gap-2 text-foreground">
             Échange Manuel / Externe
         </h1>
 
         <div className="grid lg:grid-cols-2 gap-6 grow overflow-hidden pb-24">
             
             {/* COLONNE GAUCHE : JE DONNE */}
-            <div className="flex flex-col h-full bg-red-50/50 dark:bg-red-900/10 rounded-xl border border-red-100 dark:border-red-900 overflow-hidden relative shadow-sm">
+            <div className="flex flex-col h-full bg-danger/5 rounded-xl border border-danger/20 overflow-hidden relative shadow-sm">
                 <div className="p-4 pb-0 flex-none">
-                    <h2 className="font-bold text-red-600 mb-2">Je donne (De ma collection)</h2>
+                    <h2 className="font-bold text-danger mb-2">Je donne (De ma collection)</h2>
                     <input 
                         type="text" 
                         placeholder="Chercher dans ma collection..." 
-                        className="w-full p-2 mb-2 rounded border dark:bg-gray-800 dark:text-white dark:border-gray-600 text-sm"
+                        className="w-full p-2 mb-2 rounded border border-border bg-surface text-foreground text-sm focus:ring-2 focus:ring-danger outline-none"
                         value={localSearch}
                         onChange={e => setLocalSearch(e.target.value)}
                     />
@@ -137,14 +134,14 @@ export default function ManualTradePage() {
                  <div className="grow overflow-y-auto custom-scrollbar p-4 pt-0 space-y-4">
                     {/* Liste des cartes sélectionnées */}
                     {toGive.length > 0 && (
-                        <div className="bg-white dark:bg-gray-800 rounded-lg border border-red-200 dark:border-red-800 overflow-hidden">
-                            <div className="bg-red-100 dark:bg-red-900/30 px-3 py-1 text-xs font-bold text-red-700 dark:text-red-300">
+                        <div className="bg-surface rounded-lg border border-danger/30 overflow-hidden">
+                            <div className="bg-danger/10 px-3 py-1 text-xs font-bold text-danger">
                                 SÉLECTION ({toGive.reduce((a,c)=>a+c.quantity,0)})
                             </div>
                             {toGive.map(card => (
-                                <div key={card.id} className="flex justify-between items-center text-sm p-2 border-b dark:border-gray-700 last:border-0 hover:bg-gray-50 dark:hover:bg-gray-700/50">
-                                    <span className="truncate">{card.quantity}x {card.name}</span>
-                                    <button onClick={() => setToGive(p => p.filter(c => c.id !== card.id))} className="text-red-500 hover:bg-red-50 rounded px-1">X</button>
+                                <div key={card.id} className="flex justify-between items-center text-sm p-2 border-b border-border last:border-0 hover:bg-secondary/50">
+                                    <span className="truncate text-foreground">{card.quantity}x {card.name}</span>
+                                    <button onClick={() => setToGive(p => p.filter(c => c.id !== card.id))} className="text-danger hover:bg-danger/10 rounded px-1">X</button>
                                 </div>
                             ))}
                         </div>
@@ -152,106 +149,106 @@ export default function ManualTradePage() {
 
                     {/* Liste de la collection */}
                     <div className="space-y-1">
-                        <p className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Ma Collection</p>
-                        {loading ? <p className="text-sm">Chargement...</p> : 
+                        <p className="text-xs font-bold text-muted uppercase tracking-wider mb-2">Ma Collection</p>
+                        {loading ? <p className="text-sm text-muted">Chargement...</p> : 
                             myCollection
                                 .filter(c => c.name.toLowerCase().includes(localSearch.toLowerCase()))
                                 .slice(0, 50)
                                 .map(card => (
-                                    <div key={card.id} onClick={() => handleAddToGive(card)} className="cursor-pointer bg-white dark:bg-gray-800/50 hover:bg-red-100 dark:hover:bg-red-900/30 p-2 rounded flex items-center gap-2 border border-transparent hover:border-red-200 transition shadow-sm group">
-                                        <div className="w-8 h-11 bg-gray-200 rounded shrink-0 overflow-hidden">
+                                    <div key={card.id} onClick={() => handleAddToGive(card)} className="cursor-pointer bg-surface hover:bg-danger/10 p-2 rounded flex items-center gap-2 border border-transparent hover:border-danger/30 transition shadow-sm group">
+                                        <div className="w-8 h-11 bg-secondary rounded shrink-0 overflow-hidden">
                                             <img src={card.imageUrl} className="w-full h-full object-cover" alt="" />
                                         </div>
                                         <div className="grow min-w-0">
-                                            <p className="font-bold text-xs truncate dark:text-gray-200">{card.name}</p>
-                                            <p className="text-[10px] text-gray-500">{card.setName} - Stock: {card.quantity}</p>
+                                            <p className="font-bold text-xs truncate text-foreground">{card.name}</p>
+                                            <p className="text-[10px] text-muted">{card.setName} - Stock: {card.quantity}</p>
                                         </div>
-                                        <span className="text-xs font-bold text-gray-400 group-hover:text-red-500 shrink-0">+</span>
+                                        <span className="text-xs font-bold text-muted group-hover:text-danger shrink-0">+</span>
                                     </div>
                                 ))
                         }
                     </div>
                 </div>
 
-                <div className="flex-none bg-red-50 dark:bg-red-900/20 p-3 border-t border-red-100 dark:border-red-900 text-center">
-                    <span className="text-xs text-red-600 dark:text-red-400 font-bold uppercase">Total Donné</span>
-                    <div className="text-xl font-bold text-red-700 dark:text-red-300">{valGive.toFixed(2)} EUR</div>
+                <div className="flex-none bg-danger/10 p-3 border-t border-danger/20 text-center">
+                    <span className="text-xs text-danger font-bold uppercase">Total Donné</span>
+                    <div className="text-xl font-bold text-danger">{valGive.toFixed(2)} EUR</div>
                 </div>
             </div>
 
             {/* COLONNE DROITE : JE REÇOIS */}
-            <div className="flex flex-col h-full bg-green-50/50 dark:bg-green-900/10 rounded-xl border border-green-100 dark:border-green-900 overflow-hidden relative shadow-sm">
+            <div className="flex flex-col h-full bg-success/5 rounded-xl border border-success/20 overflow-hidden relative shadow-sm">
                 <div className="p-4 pb-0 flex-none">
-                    <h2 className="font-bold text-green-600 mb-2">Je reçois (Ajout libre)</h2>
+                    <h2 className="font-bold text-success mb-2">Je reçois (Ajout libre)</h2>
                     <form onSubmit={handleSearchScryfall} className="flex gap-2 mb-2">
                         <input 
                             type="text" 
                             placeholder="Rechercher carte à recevoir..." 
-                            className="grow p-2 rounded border dark:bg-gray-800 dark:text-white dark:border-gray-600 text-sm"
+                            className="grow p-2 rounded border border-border bg-surface text-foreground text-sm focus:ring-2 focus:ring-success outline-none"
                             value={remoteSearch}
                             onChange={e => setRemoteSearch(e.target.value)}
                         />
-                        <button type="submit" className="bg-green-600 hover:bg-green-700 text-white px-3 rounded shadow-sm">V</button>
+                        <button type="submit" className="bg-success hover:bg-green-600 text-white px-3 rounded shadow-sm">V</button>
                     </form>
                 </div>
 
                  <div className="grow overflow-y-auto custom-scrollbar p-4 pt-0 space-y-4">
                     
                     {toReceive.length > 0 && (
-                        <div className="bg-white dark:bg-gray-800 rounded-lg border border-green-200 dark:border-green-800 overflow-hidden">
-                            <div className="bg-green-100 dark:bg-green-900/30 px-3 py-1 text-xs font-bold text-green-700 dark:text-green-300">
+                        <div className="bg-surface rounded-lg border border-success/30 overflow-hidden">
+                            <div className="bg-success/10 px-3 py-1 text-xs font-bold text-success">
                                 SÉLECTION ({toReceive.reduce((a,c)=>a+c.quantity,0)})
                             </div>
                             {toReceive.map((card, idx) => (
-                                <div key={`${card.id}-${idx}`} className="flex justify-between items-center text-sm p-2 border-b dark:border-gray-700 last:border-0 hover:bg-gray-50 dark:hover:bg-gray-700/50">
+                                <div key={`${card.id}-${idx}`} className="flex justify-between items-center text-sm p-2 border-b border-border last:border-0 hover:bg-secondary/50">
                                     <div className="flex items-center gap-2 overflow-hidden">
-                                        <span className="font-bold shrink-0">{card.quantity}x</span>
+                                        <span className="font-bold shrink-0 text-foreground">{card.quantity}x</span>
                                         <div className="flex flex-col truncate">
-                                            <span className="dark:text-gray-200 truncate">{card.name}</span>
-                                            <span className="text-[10px] text-gray-500 truncate">
+                                            <span className="text-foreground truncate">{card.name}</span>
+                                            <span className="text-[10px] text-muted truncate">
                                                 {card.setName} {card.isFoil && 'Foil'}
                                             </span>
                                         </div>
                                     </div>
-                                    <button onClick={() => setToReceive(p => p.filter((_, i) => i !== idx))} className="text-red-500 hover:bg-red-50 rounded px-1 ml-2">X</button>
+                                    <button onClick={() => setToReceive(p => p.filter((_, i) => i !== idx))} className="text-danger hover:bg-danger/10 rounded px-1 ml-2">X</button>
                                 </div>
                             ))}
                         </div>
                     )}
 
                      <div className="space-y-1">
-                        <p className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Résultats Scryfall</p>
-                        {isSearching && <p className="text-xs text-center py-4">Recherche...</p>}
+                        <p className="text-xs font-bold text-muted uppercase tracking-wider mb-2">Résultats Scryfall</p>
+                        {isSearching && <p className="text-xs text-center py-4 text-muted">Recherche...</p>}
                         
                         {uniqueSearchResults.map(card => (
-                            <div key={card.id} onClick={() => handleSearchResultClick(card)} className="cursor-pointer bg-white dark:bg-gray-800/50 hover:bg-green-100 dark:hover:bg-green-900/30 p-2 rounded flex items-center gap-2 border border-transparent hover:border-green-200 transition shadow-sm group">
-                                 <div className="w-8 h-11 bg-gray-200 rounded overflow-hidden shrink-0">
+                            <div key={card.id} onClick={() => handleSearchResultClick(card)} className="cursor-pointer bg-surface hover:bg-success/10 p-2 rounded flex items-center gap-2 border border-transparent hover:border-success/30 transition shadow-sm group">
+                                 <div className="w-8 h-11 bg-secondary rounded overflow-hidden shrink-0">
                                     {card.image_uris?.small && <img src={card.image_uris.small} className="w-full h-full object-cover" alt="" />}
                                  </div>
                                  <div className="grow min-w-0">
-                                    <p className="font-bold text-xs truncate dark:text-gray-200">{card.name}</p>
-                                    <p className="text-[10px] text-gray-500 italic">Sélectionner version...</p>
+                                    <p className="font-bold text-xs truncate text-foreground">{card.name}</p>
+                                    <p className="text-[10px] text-muted italic">Sélectionner version...</p>
                                  </div>
-                                 <span className="text-xs font-bold text-gray-400 group-hover:text-green-500 shrink-0">Choisir</span>
+                                 <span className="text-xs font-bold text-muted group-hover:text-success shrink-0">Choisir</span>
                             </div>
                         ))}
                     </div>
                 </div>
 
-                <div className="flex-none bg-green-50 dark:bg-green-900/20 p-3 border-t border-green-100 dark:border-green-900 text-center">
-                    <span className="text-xs text-green-600 dark:text-green-400 font-bold uppercase">Total Reçu</span>
-                    <div className="text-xl font-bold text-green-700 dark:text-green-300">{valReceive.toFixed(2)} EUR</div>
+                <div className="flex-none bg-success/10 p-3 border-t border-success/20 text-center">
+                    <span className="text-xs text-success font-bold uppercase">Total Reçu</span>
+                    <div className="text-xl font-bold text-success">{valReceive.toFixed(2)} EUR</div>
                 </div>
             </div>
         </div>
 
-        <div className="fixed bottom-0 left-0 right-0 h-20 bg-white dark:bg-gray-900 border-t dark:border-gray-800 flex justify-between items-center px-6 z-40 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)]">
+        <div className="fixed bottom-0 left-0 right-0 h-20 bg-surface border-t border-border flex justify-between items-center px-6 z-40 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)]">
             
             <div className="flex-1"></div>
 
             <div className="flex-1 flex flex-col items-center justify-center">
-                <span className="text-xs text-gray-400 font-bold uppercase tracking-widest">Balance</span>
-                <div className={`text-2xl font-black ${valGive - valReceive >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                <span className="text-xs text-muted font-bold uppercase tracking-widest">Balance</span>
+                <div className={`text-2xl font-black ${valGive - valReceive >= 0 ? 'text-success' : 'text-danger'}`}>
                     {valGive - valReceive > 0 ? '+' : ''}{(valGive - valReceive).toFixed(2)} EUR
                 </div>
             </div>
@@ -259,9 +256,8 @@ export default function ManualTradePage() {
             <div className="flex-1 flex justify-end">
                 <button 
                     onClick={handleValidate}
-                    // Désactivé pendant le chargement (isPending) ou si vide
                     disabled={isPending || (toGive.length === 0 && toReceive.length === 0)}
-                    className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-3 rounded-xl font-bold disabled:opacity-50 transition shadow-lg transform active:scale-95"
+                    className="bg-primary hover:opacity-90 text-primary-foreground px-8 py-3 rounded-xl font-bold disabled:opacity-50 transition shadow-lg transform active:scale-95"
                 >
                     {isPending ? 'Validation...' : 'Valider l\'échange'}
                 </button>

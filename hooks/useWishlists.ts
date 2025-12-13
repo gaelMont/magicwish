@@ -1,14 +1,15 @@
 // hooks/useWishlists.ts
 import { useState, useEffect } from 'react';
 import { db } from '@/lib/firebase';
-import { collection, onSnapshot, addDoc, deleteDoc, doc, serverTimestamp, setDoc } from 'firebase/firestore';
+import { collection, onSnapshot, addDoc, doc, serverTimestamp, setDoc } from 'firebase/firestore';
 import { useAuth } from '@/lib/AuthContext';
+import { deleteWishlistAction } from '@/app/actions/wishlist'; // <--- IMPORT
 import toast from 'react-hot-toast';
 
 export type WishlistMeta = {
   id: string;
   name: string;
-  isDefault?: boolean; // Pour identifier la liste principale historique
+  isDefault?: boolean;
 };
 
 export function useWishlists() {
@@ -23,7 +24,6 @@ export function useWishlists() {
       return;
     }
 
-    // On écoute la collection des métadonnées
     const metaRef = collection(db, 'users', user.uid, 'wishlists_meta');
     
     const unsubscribe = onSnapshot(metaRef, (snapshot) => {
@@ -32,12 +32,9 @@ export function useWishlists() {
         ...doc.data()
       })) as WishlistMeta[];
 
-      // Si aucune liste n'existe (premier lancement V2), on crée la liste "Défaut"
-      // qui pointera conceptuellement vers ton ancienne collection
       if (fetchedLists.length === 0 && !snapshot.metadata.fromCache) {
         createList("Liste principale", "default");
       } else {
-        // On trie : Défaut en premier, puis alphabétique
         fetchedLists.sort((a, b) => {
           if (a.id === 'default') return -1;
           if (b.id === 'default') return 1;
@@ -68,21 +65,25 @@ export function useWishlists() {
   };
 
   const deleteList = async (listId: string) => {
-    if (!user || listId === 'default') return; // On protège la liste par défaut
+    if (!user || listId === 'default') return; 
     if (!confirm("Supprimer cette liste et toutes ses cartes ?")) return;
     
+    const toastId = toast.loading("Suppression en cours...");
+
     try {
-        // 1. Supprimer les métadonnées
-        await deleteDoc(doc(db, 'users', user.uid, 'wishlists_meta', listId));
-        
-        // 2. Note: Idéalement, il faudrait aussi supprimer la sous-collection 'cards'.
-        // C'est complexe côté client. Pour l'instant on supprime juste l'accès (meta).
-        // Une Cloud Function serait idéale ici pour le nettoyage complet.
-        
-        toast.success("Liste supprimée");
-    } catch (err) {
+        // Appel de la Server Action pour nettoyage complet
+        const result = await deleteWishlistAction(user.uid, listId);
+
+        if (result.success) {
+            toast.success("Liste supprimée", { id: toastId });
+        } else {
+            throw new Error(result.error);
+        }
+    } catch (err: unknown) {
         console.error(err);
-        toast.error("Erreur suppression");
+        let msg = "Erreur suppression";
+        if (err instanceof Error) msg = err.message;
+        toast.error(msg, { id: toastId });
     }
   };
 

@@ -2,7 +2,7 @@
 import { useState } from 'react';
 import { useAuth } from '@/lib/AuthContext';
 import { db } from '@/lib/firebase';
-import { collection, getDocs, doc, writeBatch } from 'firebase/firestore'; 
+import { collection, getDocs, doc, writeBatch, query, where } from 'firebase/firestore'; 
 import { useWishlists, WishlistMeta } from './useWishlists'; 
 import { useFriends, FriendProfile } from './useFriends';
 import { CardType } from './useCardCollection';
@@ -14,6 +14,21 @@ export type TradeProposal = {
   balance: number;       
 };
 
+// Typage strict pour la réponse de l'API Scryfall dans refreshPrices
+type ScryfallPriceUpdate = {
+    id: string;
+    prices: {
+        eur: string | null;
+        usd: string | null;
+    };
+};
+
+type ScryfallCollectionResponse = {
+    data: ScryfallPriceUpdate[];
+    not_found?: unknown[];
+    object: string;
+};
+
 export function useTradeMatcher() {
   const { user } = useAuth();
   const { lists } = useWishlists();
@@ -23,13 +38,28 @@ export function useTradeMatcher() {
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("");
 
-  // --- 1. CHARGEMENT OPTIMISÉ (Retourne une Map directement) ---
-  const fetchCardsAsMap = async (uid: string, mode: 'collection' | 'wishlist', userLists: WishlistMeta[] = []) => {
+  // --- 1. CHARGEMENT OPTIMISÉ (Avec filtrage 'isForTrade' côté serveur) ---
+  const fetchCardsAsMap = async (
+      uid: string, 
+      mode: 'collection' | 'wishlist', 
+      userLists: WishlistMeta[] = [],
+      onlyTradeable: boolean = false // <--- Nouveau paramètre d'optimisation
+  ) => {
     const cardsMap = new Map<string, CardType>();
 
     try {
         if (mode === 'collection') {
-            const snap = await getDocs(collection(db, 'users', uid, 'collection'));
+            const colRef = collection(db, 'users', uid, 'collection');
+            
+            // OPTIMISATION : Si on ne veut que les échanges, on filtre via Firestore (économie de lectures)
+            let q;
+            if (onlyTradeable) {
+                q = query(colRef, where('isForTrade', '==', true));
+            } else {
+                q = colRef;
+            }
+
+            const snap = await getDocs(q);
             snap.forEach(d => cardsMap.set(d.id, { id: d.id, ...d.data() } as CardType));
         } else {
             // Charge la liste par défaut
@@ -62,14 +92,13 @@ export function useTradeMatcher() {
     return cardsMap;
   };
 
-  // --- 2. MISE À JOUR PRIX CIBLÉE (CORRIGÉE : SEULEMENT MES CARTES) ---
+  // --- 2. MISE À JOUR PRIX CIBLÉE (CORRIGÉE & STRICTE) ---
   const refreshPricesForProposals = async (currentProposals: TradeProposal[], myUid: string) => {
      // On extrait toutes les cartes uniques impliquées
      const cardsToUpdateMap = new Map<string, { card: CardType, ownerUid: string, collection: string }>();
 
      currentProposals.forEach(p => {
          // IMPORTANT: On ne mettra pas à jour les cartes de l'ami ici car on n'a pas les droits d'écriture
-         // On peut les lire pour le calcul de balance, mais pas les update en base.
          p.toReceive.forEach(c => cardsToUpdateMap.set(`${p.friend.uid}_${c.id}`, { card: c, ownerUid: p.friend.uid, collection: 'collection' }));
          p.toGive.forEach(c => cardsToUpdateMap.set(`${myUid}_${c.id}`, { card: c, ownerUid: myUid, collection: 'collection' }));
      });
@@ -99,12 +128,12 @@ export function useTradeMatcher() {
 
              if (!res.ok) continue;
 
-             const data = await res.json();
-             // eslint-disable-next-line @typescript-eslint/no-explicit-any
-             const foundCards: any[] = data.data || [];
+             // Typage strict de la réponse
+             const data = await res.json() as ScryfallCollectionResponse;
+             const foundCards = data.data || [];
 
              foundCards.forEach(scryCard => {
-                 const newPrice = parseFloat(scryCard.prices?.eur || "0");
+                 const newPrice = parseFloat(scryCard.prices.eur || "0");
                  
                  // On retrouve les cartes locales qui correspondent à cet ID Scryfall
                  const localMatches = chunk.filter(item => item.card.id === scryCard.id);
@@ -139,8 +168,9 @@ export function useTradeMatcher() {
 
     try {
         // A. Charger MES données
+        // OPTIMISATION: Pour ma collection, je ne charge que ce qui est "For Trade"
         const [myCollectionMap, myWishlistMap] = await Promise.all([
-            fetchCardsAsMap(user.uid, 'collection'),
+            fetchCardsAsMap(user.uid, 'collection', [], true), 
             fetchCardsAsMap(user.uid, 'wishlist', lists)
         ]);
 
@@ -153,22 +183,25 @@ export function useTradeMatcher() {
         });
 
         // C. Indexation de MON Trade Binder
-        const myTradeCards = Array.from(myCollectionMap.values()).filter(c => c.isForTrade);
+        // Note: myCollectionMap ne contient déjà QUE les cartes isForTrade grâce au filtre Firestore
+        const myTradeCards = Array.from(myCollectionMap.values());
 
         setStatus(`Analyse simultanée de ${friends.length} amis...`);
 
         // D. SCAN PARALLÈLE DES AMIS
         const matchPromises = friends.map(async (friend) => {
+            // OPTIMISATION: On ne charge que les cartes échangeables de l'ami
             const [friendCollectionMap, friendWishlistMap] = await Promise.all([
-                fetchCardsAsMap(friend.uid, 'collection'),
+                fetchCardsAsMap(friend.uid, 'collection', [], true),
                 fetchCardsAsMap(friend.uid, 'wishlist')
             ]);
 
             const toReceive: CardType[] = [];
             const toGive: CardType[] = [];
 
-            // 1. Check ce que JE reçois (Sa Collection vs Ma Wishlist)
+            // 1. Check ce que JE reçois (Sa Collection [déjà filtrée Trade] vs Ma Wishlist)
             friendCollectionMap.forEach(card => {
+                // Le check isForTrade est redondant ici si le serveur a bien filtré, mais on garde par sécurité
                 if (card.isForTrade) { 
                     if (myWishlistIds.has(card.id) || myWishlistNames.has(card.name)) {
                         toReceive.push(card);

@@ -3,9 +3,12 @@
 
 import { getAdminFirestore } from '@/lib/firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
-import { CardType } from '@/hooks/useCardCollection';
+// AJOUT ICI : Import de z (Zod) et de CardSchema
+import { z } from 'zod'; 
+import { TradeExecutionSchema, ValidatedCard, CardSchema } from '@/lib/validators';
 
-const createCardData = (card: CardType) => {
+// Helper pour préparer la donnée propre pour Firestore
+const createCardData = (card: ValidatedCard) => {
     return {
         name: card.name,
         imageUrl: card.imageUrl,
@@ -23,17 +26,32 @@ const createCardData = (card: CardType) => {
     };
 };
 
-// --- ACTION 1 : ÉCHANGE P2P AVEC VALIDATION STATUS ---
+// --- ACTION 1 : ÉCHANGE P2P SÉCURISÉ ---
 export async function executeServerTrade(
-    tradeId: string, // <-- Nouveau paramètre
+    tradeId: string,
     senderUid: string,
     receiverUid: string,
-    itemsGiven: CardType[],
-    itemsReceived: CardType[]
+    itemsGivenRaw: unknown,    
+    itemsReceivedRaw: unknown  
 ) {
     const db = getAdminFirestore();
 
     try {
+        // 1. VALIDATION STRICTE AVEC ZOD
+        const validation = TradeExecutionSchema.safeParse({
+            tradeId,
+            senderUid,
+            receiverUid,
+            itemsGiven: itemsGivenRaw,
+            itemsReceived: itemsReceivedRaw
+        });
+
+        if (!validation.success) {
+            throw new Error("Données d'échange invalides : " + validation.error.message);
+        }
+
+        const { itemsGiven, itemsReceived } = validation.data;
+
         await db.runTransaction(async (t) => {
             // PHASE 1 : TOUTES LES LECTURES
             
@@ -41,7 +59,11 @@ export async function executeServerTrade(
             const tradeRef = db.doc(`trades/${tradeId}`);
             const tradeSnap = await t.get(tradeRef);
             if (!tradeSnap.exists) throw new Error("Échange introuvable");
-            if (tradeSnap.data()?.status !== 'pending') throw new Error("Cet échange n'est plus en attente.");
+            
+            const tradeData = tradeSnap.data();
+            if (tradeData?.status !== 'pending') {
+                throw new Error(`Cet échange n'est plus en attente (Status: ${tradeData?.status}).`);
+            }
 
             // B. Lire les stocks Expéditeur
             const senderStockSnaps = [];
@@ -76,7 +98,7 @@ export async function executeServerTrade(
 
             // PHASE 2 : TOUTES LES ÉCRITURES
 
-            // 1. Mise à jour du statut de l'échange (IMPORTANT)
+            // 1. Mise à jour du statut de l'échange
             t.update(tradeRef, { 
                 status: 'completed',
                 completedAt: FieldValue.serverTimestamp()
@@ -143,12 +165,25 @@ export async function executeServerTrade(
 // --- ACTION 2 : ÉCHANGE MANUEL (SOLO) ---
 export async function executeManualTrade(
     userId: string,
-    itemsGiven: CardType[],    
-    itemsReceived: CardType[]  
+    itemsGivenRaw: unknown,    
+    itemsReceivedRaw: unknown  
 ) {
     const db = getAdminFirestore();
 
     try {
+        // Validation partielle : On utilise Zod pour valider les tableaux
+        const ItemsGivenSchema = z.array(CardSchema);
+        
+        const parsedGiven = ItemsGivenSchema.safeParse(itemsGivenRaw);
+        const parsedReceived = ItemsGivenSchema.safeParse(itemsReceivedRaw);
+
+        if (!parsedGiven.success || !parsedReceived.success) {
+             throw new Error("Données invalides pour l'échange manuel.");
+        }
+
+        const itemsGiven = parsedGiven.data;
+        const itemsReceived = parsedReceived.data;
+
         await db.runTransaction(async (t) => {
             // PHASE 1 : LECTURES
             const stockSnaps = [];

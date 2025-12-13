@@ -4,16 +4,25 @@ import { db } from '@/lib/firebase';
 import { useAuth } from '@/lib/AuthContext';
 import { 
   doc, setDoc, deleteDoc, 
-  collection, onSnapshot, serverTimestamp, writeBatch,
-  query, collectionGroup, where, getDocs, limit 
+  collection, onSnapshot, serverTimestamp, 
+  query, collectionGroup, where, getDocs, limit,
+  writeBatch // <--- C'était l'import manquant
 } from 'firebase/firestore';
+import { acceptFriendRequestAction } from '@/app/actions/friends';
 import toast from 'react-hot-toast';
 
 export type FriendProfile = {
   uid: string;
   username: string;
   displayName: string;
-  photoURL?: string;
+  photoURL?: string; 
+};
+
+type FirestoreProfileData = {
+    username: string;
+    displayName: string;
+    photoURL?: string;
+    [key: string]: unknown;
 };
 
 export function useFriends() {
@@ -23,24 +32,20 @@ export function useFriends() {
   const [requestsReceived, setRequestsReceived] = useState<FriendProfile[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Écouter les amis et les demandes en temps réel
   useEffect(() => {
     if (!user) {
-      // CORRECTION : On ne set que si nécessaire pour éviter la boucle
       setFriends(prev => prev.length > 0 ? [] : prev);
       setRequestsReceived(prev => prev.length > 0 ? [] : prev);
       setLoading(prev => prev ? false : prev);
       return;
     }
 
-    // 1. Écoute Mes Amis
     const friendsRef = collection(db, 'users', user.uid, 'friends');
     const unsubFriends = onSnapshot(friendsRef, (snap) => {
       const list = snap.docs.map(d => d.data() as FriendProfile);
       setFriends(list);
     });
 
-    // 2. Écoute Demandes Reçues
     const reqRef = collection(db, 'users', user.uid, 'friend_requests_received');
     const unsubReq = onSnapshot(reqRef, (snap) => {
       const list = snap.docs.map(d => ({ uid: d.id, ...d.data() } as FriendProfile));
@@ -57,14 +62,12 @@ export function useFriends() {
 
   // --- ACTIONS ---
 
-  // 1. Rechercher des utilisateurs (Partiel : "Commence par...")
   const searchUsers = async (searchTerm: string) => {
     const term = searchTerm.trim().toLowerCase();
     if (term.length < 2) return [];
 
-    // Technique Firestore pour "Starts With"
     const usersQuery = query(
-      collectionGroup(db, 'public_profile'), // Cherche dans TOUS les profils publics
+      collectionGroup(db, 'public_profile'), 
       where('username', '>=', term),
       where('username', '<=', term + '\uf8ff'),
       limit(5)
@@ -73,10 +76,9 @@ export function useFriends() {
     const snapshot = await getDocs(usersQuery);
     
     const results: FriendProfile[] = [];
-    snapshot.forEach(doc => {
-      const data = doc.data();
-      // Retrouver l'UID parent (users/{uid}/public_profile/info)
-      const foundUid = doc.ref.parent.parent?.id;
+    snapshot.forEach(docSnap => {
+      const data = docSnap.data() as FirestoreProfileData;
+      const foundUid = docSnap.ref.parent.parent?.id;
 
       if (foundUid && foundUid !== user?.uid) {
         results.push({
@@ -91,23 +93,20 @@ export function useFriends() {
     return results;
   };
 
-  // 2. Envoyer une demande
   const sendFriendRequest = async (targetUser: FriendProfile) => {
     if (!user || !username) return;
 
-    // Check si déjà ami
     if (friends.some(f => f.uid === targetUser.uid)) {
       toast.error("Vous êtes déjà amis !");
       return;
     }
 
     try {
-      // On écrit dans SA collection 'friend_requests_received'
       await setDoc(doc(db, 'users', targetUser.uid, 'friend_requests_received', user.uid), {
         uid: user.uid,
         username: username,
         displayName: user.displayName,
-        photoURL: user.photoURL,
+        photoURL: user.photoURL || null,
         sentAt: serverTimestamp()
       });
       
@@ -118,52 +117,65 @@ export function useFriends() {
     }
   };
 
-  // 3. Accepter une demande (Transaction Batch)
   const acceptRequest = async (sender: FriendProfile) => {
-    if (!user || !username) return;
+    if (!user) return;
+
+    const toastId = toast.loading("Acceptation...");
 
     try {
-      const batch = writeBatch(db);
+        const cleanSender = {
+            ...sender,
+            photoURL: sender.photoURL || null
+        };
 
-      // A. Ajouter dans MES amis
-      const myFriendRef = doc(db, 'users', user.uid, 'friends', sender.uid);
-      batch.set(myFriendRef, sender);
+        const result = await acceptFriendRequestAction(user.uid, cleanSender);
 
-      // B. Ajouter MOI dans SES amis
-      const hisFriendRef = doc(db, 'users', sender.uid, 'friends', user.uid);
-      batch.set(hisFriendRef, {
-        uid: user.uid,
-        username: username,
-        displayName: user.displayName,
-        photoURL: user.photoURL
-      });
-
-      // C. Supprimer la demande reçue
-      const reqRef = doc(db, 'users', user.uid, 'friend_requests_received', sender.uid);
-      batch.delete(reqRef);
-
-      await batch.commit();
-      toast.success(`Ami ajouté : @${sender.username}`);
-    } catch (err) {
+        if (result.success) {
+            toast.success(`Ami ajouté : @${sender.username}`, { id: toastId });
+        } else {
+            throw new Error(result.error);
+        }
+    } catch (err: unknown) {
       console.error(err);
-      toast.error("Erreur validation");
+      let msg = "Erreur validation";
+      if (err instanceof Error) msg = err.message;
+      toast.error(msg, { id: toastId });
     }
   };
 
-  // 4. Refuser
   const declineRequest = async (senderUid: string) => {
     if (!user) return;
-    await deleteDoc(doc(db, 'users', user.uid, 'friend_requests_received', senderUid));
-    toast.success("Demande supprimée");
+    try {
+        await deleteDoc(doc(db, 'users', user.uid, 'friend_requests_received', senderUid));
+        toast.success("Demande supprimée");
+    } catch (error) {
+        console.error(error);
+        toast.error("Erreur lors du refus");
+    }
   };
   
-  // 5. Supprimer ami
+  // Suppression avec nettoyage complet (nécessite writeBatch)
   const removeFriend = async (friendUid: string) => {
       if(!user) return;
-      if(!confirm("Retirer cet ami ?")) return;
+      if(!confirm("Retirer cet ami définitivement ?")) return;
       
-      await deleteDoc(doc(db, 'users', user.uid, 'friends', friendUid));
-      toast.success("Ami retiré");
+      try {
+        const batch = writeBatch(db);
+        
+        // 1. Supprimer de MA liste
+        batch.delete(doc(db, 'users', user.uid, 'friends', friendUid));
+        
+        // 2. Me supprimer de SA liste (Le "Unfriend" réciproque)
+        // La règle de sécurité 'allow delete' doit être déployée pour que cela fonctionne
+        batch.delete(doc(db, 'users', friendUid, 'friends', user.uid));
+
+        await batch.commit();
+        
+        toast.success("Ami retiré (Liaison coupée)");
+      } catch (error) {
+        console.error("Erreur suppression ami:", error);
+        toast.error("Erreur lors de la suppression");
+      }
   };
 
   return { 

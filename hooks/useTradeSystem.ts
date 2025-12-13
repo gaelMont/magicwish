@@ -2,13 +2,14 @@
 import { useState, useEffect } from 'react';
 import { db } from '@/lib/firebase';
 import { 
-  collection, addDoc, query, where, onSnapshot, 
-  doc, updateDoc, serverTimestamp, orderBy, 
+  collection, query, where, onSnapshot, 
+  doc, updateDoc, orderBy, 
   Timestamp
 } from 'firebase/firestore';
 import { useAuth } from '@/lib/AuthContext';
 import { CardType } from './useCardCollection';
 import { executeServerTrade } from '@/app/actions/trade'; 
+import { proposeTradeAction } from '@/app/actions/trade-proposal'; // <--- IMPORT
 import toast from 'react-hot-toast';
 
 export type TradeStatus = 'pending' | 'completed' | 'rejected' | 'cancelled';
@@ -25,26 +26,14 @@ export type TradeRequest = {
   createdAt: Timestamp;
 };
 
-// Fonction de nettoyage
-const cleanCardsForServer = (cards: CardType[]) => {
-    return cards.map(card => {
-        const clean = { ...card };
-        // @ts-expect-error: Timestamp Firestore non sérialisable
-        delete clean.addedAt;
-        // @ts-expect-error: Timestamp Firestore non sérialisable
-        delete clean.importedAt;
-        // @ts-expect-error: Timestamp Firestore non sérialisable
-        delete clean.createdAt;
-        // @ts-expect-error: Timestamp Firestore non sérialisable
-        delete clean.lastUpdated;
-        
-        Object.keys(clean).forEach(key => {
-            const k = key as keyof CardType;
-            if (clean[k] === undefined) delete clean[k];
-        });
-        
-        return clean;
-    });
+// Fonction utilitaire pour convertir les CardType du client vers le format attendu par le serveur
+// (Gère les incompatibilités de types strictes si nécessaire)
+const mapCardsForServer = (cards: CardType[]) => {
+    return cards.map(c => ({
+        ...c,
+        imageBackUrl: c.imageBackUrl || null,
+        scryfallData: (c.scryfallData as Record<string, unknown>) || null
+    }));
 };
 
 export function useTradeSystem() {
@@ -85,28 +74,35 @@ export function useTradeSystem() {
   }, [user]);
 
   const proposeTrade = async (receiverUid: string, receiverName: string, toGive: CardType[], toReceive: CardType[]) => {
-    if (!user) return;
+    if (!user) return false;
     const toastId = toast.loading("Envoi de la proposition...");
 
     try {
-      const cleanGiven = cleanCardsForServer(toGive);
-      const cleanReceived = cleanCardsForServer(toReceive);
+      // Préparation des données pour la Server Action
+      const payload = {
+          senderUid: user.uid,
+          senderName: username || user.displayName || 'Inconnu',
+          receiverUid,
+          receiverName,
+          itemsGiven: mapCardsForServer(toGive),
+          itemsReceived: mapCardsForServer(toReceive)
+      };
 
-      await addDoc(collection(db, 'trades'), {
-        senderUid: user.uid,
-        senderName: username || user.displayName || 'Inconnu',
-        receiverUid,
-        receiverName,
-        itemsGiven: cleanGiven,    
-        itemsReceived: cleanReceived, 
-        status: 'pending',
-        createdAt: serverTimestamp()
-      });
-      toast.success("Proposition envoyee !", { id: toastId });
-      return true;
-    } catch (e) {
-      console.error("Erreur Firestore:", e);
-      toast.error("Erreur envoi", { id: toastId });
+      // Appel de la Server Action
+      const result = await proposeTradeAction(payload);
+
+      if (result.success) {
+          toast.success("Proposition envoyée !", { id: toastId });
+          return true;
+      } else {
+          throw new Error(result.error);
+      }
+
+    } catch (e: unknown) {
+      console.error("Erreur proposeTrade:", e);
+      let msg = "Erreur envoi";
+      if (e instanceof Error) msg = e.message;
+      toast.error(msg, { id: toastId });
       return false;
     }
   };
@@ -115,32 +111,27 @@ export function useTradeSystem() {
     if (!user) return;
     
     setIsProcessing(true);
-    const toastId = toast.loading("Validation securisee en cours...");
+    const toastId = toast.loading("Validation sécurisée en cours...");
 
     try {
-        const safeItemsGiven = cleanCardsForServer(trade.itemsGiven);
-        const safeItemsReceived = cleanCardsForServer(trade.itemsReceived);
-
-        // Appel Server Action (qui gère stocks + status)
+        // executeServerTrade attend toujours CardType[], on passe directement
         const result = await executeServerTrade(
-            trade.id, // <-- On passe l'ID de l'échange
+            trade.id, 
             trade.senderUid,
             user.uid, 
-            safeItemsGiven,
-            safeItemsReceived
+            trade.itemsGiven,
+            trade.itemsReceived
         );
 
         if (result.success) {
-            // Note: On ne fait plus updateDoc ici pour 'completed', 
-            // le serveur l'a fait. Le onSnapshot mettra l'UI à jour.
-            toast.success("Echange termine avec succes !", { id: toastId });
+            toast.success("Échange terminé avec succès !", { id: toastId });
         } else {
             throw new Error(result.error || "Erreur serveur inconnue");
         }
 
     } catch (error: unknown) { 
         console.error("Erreur Accept Trade:", error);
-        let msg = "Echec de l'echange";
+        let msg = "Échec de l'échange";
         if (error instanceof Error) msg = error.message;
         else if (typeof error === "string") msg = error;
         toast.error(msg, { id: toastId });
@@ -149,18 +140,26 @@ export function useTradeSystem() {
     }
   };
 
-  // 'rejected' reste autorisé côté client dans les nouvelles règles
   const rejectTrade = async (tradeId: string) => {
-    if(!confirm("Refuser cet echange ?")) return;
-    await updateDoc(doc(db, 'trades', tradeId), { status: 'rejected' });
-    toast.success("Echange refuse");
+    if(!confirm("Refuser cet échange ?")) return;
+    try {
+        await updateDoc(doc(db, 'trades', tradeId), { status: 'rejected' });
+        toast.success("Échange refusé");
+    } catch (error) {
+        console.error(error);
+        toast.error("Erreur");
+    }
   };
 
-  // 'cancelled' reste autorisé côté client dans les nouvelles règles
   const cancelTrade = async (tradeId: string) => {
     if(!confirm("Annuler cette proposition ?")) return;
-    await updateDoc(doc(db, 'trades', tradeId), { status: 'cancelled' });
-    toast.success("Proposition annulee");
+    try {
+        await updateDoc(doc(db, 'trades', tradeId), { status: 'cancelled' });
+        toast.success("Proposition annulée");
+    } catch (error) {
+        console.error(error);
+        toast.error("Erreur");
+    }
   };
 
   return { 
