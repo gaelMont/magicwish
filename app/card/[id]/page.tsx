@@ -180,7 +180,7 @@ const CardDetailsClient = ({ cardData }: { cardData: CardType }) => {
 };
 
 
-// --- Composant d'affichage de toutes les versions (CORRIGÉ) ---
+// --- Composant d'affichage de toutes les versions ---
 const AllVersionsList = ({ oracleId, currentCardId, onVersionSelect, collectionMap }: 
     { 
         oracleId: string, 
@@ -189,7 +189,7 @@ const AllVersionsList = ({ oracleId, currentCardId, onVersionSelect, collectionM
         collectionMap: Map<string, CardType>
     }) => {
     
-    // --- 1. TOUS LES HOOKS EN PREMIER (Crucial pour éviter l'erreur "Rendered more hooks") ---
+    // --- 1. TOUS LES HOOKS EN PREMIER ---
     const [allVersions, setAllVersions] = useState<ScryfallRawData[]>([]);
     const [loading, setLoading] = useState(true);
     const [selectedRawCard, setSelectedRawCard] = useState<ScryfallRawData | null>(null);
@@ -206,10 +206,9 @@ const AllVersionsList = ({ oracleId, currentCardId, onVersionSelect, collectionM
                 
                 if (data.data && data.data.length > 0) {
                     setAllVersions(data.data);
-                    // Sélectionner la carte courante par défaut dans la liste (si elle existe)
                     const current = data.data.find((v: ScryfallRawData) => v.id === currentCardId);
                     if (current) setSelectedRawCard(current);
-                    else setSelectedRawCard(data.data[0]); // Sinon la première
+                    else setSelectedRawCard(data.data[0]); 
                 } else {
                     toast.error("Aucune version trouvée sur Scryfall.");
                 }
@@ -225,21 +224,18 @@ const AllVersionsList = ({ oracleId, currentCardId, onVersionSelect, collectionM
         }
     }, [oracleId, currentCardId]);
 
-    // Calcul de l'image à afficher (Memoized)
     const cardToDisplay = useMemo(() => {
         if (selectedRawCard) return normalizeCardData(selectedRawCard);
         if (allVersions.length > 0) return normalizeCardData(allVersions[0]);
         return null;
     }, [selectedRawCard, allVersions]);
     
-    // Calcul de la liste filtrée (Memoized)
     const filteredVersions = useMemo(() => {
         if (!showOwnedOnly) return allVersions;
-        // Filtre sur les cartes dont l'ID existe dans la collectionMap
         return allVersions.filter(v => collectionMap.has(v.id));
     }, [allVersions, showOwnedOnly, collectionMap]);
 
-    // --- 2. CONDITIONS DE RETOUR (APRES tous les Hooks) ---
+    // --- 2. CONDITIONS DE RETOUR ---
     if (loading) {
         return (
             <div className="p-10 text-center">
@@ -259,7 +255,7 @@ const AllVersionsList = ({ oracleId, currentCardId, onVersionSelect, collectionM
     return (
         <div className="grid md:grid-cols-3 gap-8">
             
-            {/* COLONNE GAUCHE : IMAGE DE LA VERSION SÉLECTIONNÉE (col-span-1) */}
+            {/* COLONNE GAUCHE */}
             <div className="md:col-span-1 flex flex-col items-center sticky top-24 self-start">
                  <div 
                     className="w-full max-w-sm aspect-[2.5/3.5] rounded-xl overflow-hidden shadow-2xl ring-4 ring-primary/20 cursor-pointer"
@@ -278,10 +274,10 @@ const AllVersionsList = ({ oracleId, currentCardId, onVersionSelect, collectionM
                 )}
             </div>
 
-            {/* COLONNE DROITE : LISTE DES VERSIONS (col-span-2) */}
+            {/* COLONNE DROITE */}
             <div className="md:col-span-2 space-y-6">
                  
-                 {/* EN-TÊTE AVEC FILTRE (Case à cocher alignée à droite) */}
+                 {/* EN-TÊTE AVEC FILTRE */}
                 <div className="flex justify-between items-center bg-secondary p-3 rounded-xl border border-border">
                     <h2 className="text-xl font-bold text-foreground">
                         Impressions ({filteredVersions.length} / {allVersions.length})
@@ -321,7 +317,7 @@ const AllVersionsList = ({ oracleId, currentCardId, onVersionSelect, collectionM
                                     isSelectedInList
                                         ? 'bg-primary/10 border-primary shadow-lg ring-2 ring-primary/50' 
                                         : isOwned 
-                                            ? 'bg-success/5 border-success/30 hover:bg-success/10' // Fond vert léger si possédée
+                                            ? 'bg-success/5 border-success/30 hover:bg-success/10' 
                                             : 'bg-surface border-border hover:bg-primary/5' 
                                 }`}
                             >
@@ -348,7 +344,6 @@ const AllVersionsList = ({ oracleId, currentCardId, onVersionSelect, collectionM
                     })}
                 </div>
 
-                {/* Bouton de confirmation */}
                 <div className="pt-4 border-t border-border">
                     <button 
                         onClick={() => selectedRawCard && onVersionSelect(selectedRawCard)}
@@ -367,7 +362,6 @@ const AllVersionsList = ({ oracleId, currentCardId, onVersionSelect, collectionM
 
 // --- PAGE PRINCIPALE ---
 export default function CardDetailPage({ params }: CardDetailPageProps) {
-    // --- HOOKS ---
     const { user } = useAuth();
     const unwrappedParams = use(params);
     const cardId = unwrappedParams.id;
@@ -375,7 +369,6 @@ export default function CardDetailPage({ params }: CardDetailPageProps) {
     // Chargement de TOUTE la collection pour le filtre "Mes versions"
     const { cards: collectionCards } = useCardCollection('collection'); 
     
-    // Indexation de la collection pour un accès rapide par ID
     const collectionMap = useMemo(() => {
         const map = new Map<string, CardType>();
         collectionCards.forEach(c => map.set(c.id, c));
@@ -418,9 +411,9 @@ export default function CardDetailPage({ params }: CardDetailPageProps) {
                             
                             setCard({
                                 ...normalized,
-                                quantity: 0, // Je n'en ai pas
-                                uid: '', // Pas d'owner
-                                wishlistId: null,
+                                quantity: 0, 
+                                uid: '', 
+                                wishlistId: undefined, // CORRECTION : 'undefined' au lieu de 'null'
                                 isFoil: false,
                                 isSpecificVersion: false,
                                 quantityForTrade: 0
@@ -451,7 +444,6 @@ export default function CardDetailPage({ params }: CardDetailPageProps) {
             if (!prev) return null;
             return {
                 ...prev,
-                // Mise à jour visuelle uniquement
                 name: normalized.name,
                 imageUrl: normalized.imageUrl,
                 imageBackUrl: normalized.imageBackUrl,
@@ -471,7 +463,6 @@ export default function CardDetailPage({ params }: CardDetailPageProps) {
     if (!user) return <div className="p-10 text-center text-muted">Connectez-vous pour voir les détails.</div>;
     if (loading) return <div className="p-10 text-center text-muted animate-pulse">Chargement des détails de la carte...</div>;
     
-    // Si après tout ça, pas de carte, c'est une 404 réelle
     if (!card) return <div className="p-10 text-center text-danger">Carte introuvable.</div>;
 
     const { name, imageUrl, imageBackUrl, setName } = normalizeCardData(card.scryfallData as ScryfallRawData);
@@ -480,7 +471,6 @@ export default function CardDetailPage({ params }: CardDetailPageProps) {
     
     const displayImage = isFlipped && imageBackUrl ? imageBackUrl : imageUrl;
     
-    // Si j'ai un UID dans l'objet carte et qu'il correspond au mien, je suis le propriétaire
     const isOwner = !!card.uid && user.uid === card.uid; 
     
     return (
