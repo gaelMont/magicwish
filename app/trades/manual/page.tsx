@@ -252,9 +252,7 @@ export default function ManualTradePage() {
       const toastId = toast.loading("Validation...");
 
       startTransition(async () => {
-        // CORRECTION MAJEURE ICI :
-        // On passe les données par la fonction de mapping pour convertir
-        // les propriétés 'undefined' en 'null' (pour imageBackUrl notamment).
+        // CORRECTION APPLIQUÉE ICI : Utilisation de mapCardsForServer
         const cleanToGive = mapCardsForServer(toGive);
         const cleanToReceive = mapCardsForServer(toReceive);
         
@@ -305,7 +303,7 @@ export default function ManualTradePage() {
                     <TradeSelectionTable cards={toGive} onRemove={(id) => setToGive(p => p.filter(c => c.id !== id))} colorClass="text-danger" emptyLabel="Sélectionnez vos cartes en bas..." />
                 </div>
 
-                <div className="p-3 flex-none border-t border-border bg-surface border-b">
+                <div className="p-3 flex-none border-t bg-surface border-b border-border">
                     <div className="flex justify-between items-center mb-2">
                         <h2 className="font-bold text-muted text-xs uppercase tracking-wide">Chercher dans ma Collection</h2>
                         <span className="text-[10px] bg-secondary text-muted px-2 py-0.5 rounded-full">{myCollection.length} cartes</span>
@@ -332,7 +330,7 @@ export default function ManualTradePage() {
                     <TradeSelectionTable cards={toReceive} onRemove={(id) => setToReceive(p => p.filter((_, idx) => p[idx].id !== id || idx !== p.findIndex(x => x.id === id)))} colorClass="text-success" emptyLabel="Recherchez des cartes en bas..." />
                 </div>
 
-                <div className="p-3 flex-none border-t border-border bg-surface border-b">
+                <div className="p-3 flex-none border-t bg-surface border-b border-border">
                     <h2 className="font-bold text-muted text-xs uppercase tracking-wide mb-2">Recherche Scryfall</h2>
                     <form onSubmit={handleSearchScryfall} className="flex gap-2">
                         <input type="text" placeholder="Carte à recevoir..." className="grow p-2 rounded-lg border border-border bg-background text-foreground text-sm focus:ring-2 focus:ring-success outline-none" value={remoteSearch} onChange={e => setRemoteSearch(e.target.value)} />

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useAuth } from '@/lib/AuthContext';
 import { db } from '@/lib/firebase';
-import { collection, getDocs, doc, getDoc, query, where, writeBatch } from 'firebase/firestore';
+import { collection, getDocs, doc, getDoc, query, where } from 'firebase/firestore';
 import { useWishlists, WishlistMeta } from './useWishlists';
 import { useFriends, FriendProfile } from './useFriends';
 import { CardType } from './useCardCollection';
@@ -49,6 +49,7 @@ export function useTradeMatcher() {
                    listsSnap.forEach(doc => {
                        paths.push(`users/${uid}/wishlists_data/${doc.id}/cards`);
                    });
+              // eslint-disable-next-line @typescript-eslint/no-unused-vars
               } catch (error: unknown) {
                   // Silencieux si pas de permission ou collection vide
               }

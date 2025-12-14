@@ -3,7 +3,8 @@ import { db } from '@/lib/firebase';
 import { collection, onSnapshot, doc, updateDoc, deleteDoc, increment, writeBatch } from 'firebase/firestore';
 import { useAuth } from '@/lib/AuthContext';
 import toast from 'react-hot-toast';
-import { checkAutoMatch, removeAutoMatchNotification } from '@/app/actions/matching'; 
+import { updateUserStats } from '@/app/actions/stats';
+import { checkAutoMatch, removeAutoMatchNotification } from '@/app/actions/matching';
 
 type ScryfallDataRaw = {
     id: string;
@@ -16,20 +17,20 @@ export type CardType = {
   id: string;
   name: string;
   imageUrl: string;
-  imageBackUrl?: string | null;
+  imageBackUrl: string | null; // Strictement null si pas d'image
   quantity: number;
   price?: number; 
   customPrice?: number;
-  setName?: string;
-  setCode?: string;
-  wishlistId?: string;
+  setName: string;
+  setCode: string;
+  wishlistId?: string | null;
   
-  isFoil?: boolean;             
-  isSpecificVersion?: boolean;
-  quantityForTrade?: number; 
+  isFoil: boolean;             
+  isSpecificVersion: boolean;
+  quantityForTrade: number; 
   
   lastPriceUpdate?: Date | null; 
-  scryfallData?: Record<string, unknown>;
+  scryfallData?: Record<string, unknown> | null;
 };
 
 export function useCardCollection(
@@ -42,9 +43,8 @@ export function useCardCollection(
   const [loading, setLoading] = useState(true);
 
   const effectiveUid = targetUid || user?.uid;
-  
-  // CORRECTION : isOwner doit être faux si user est null
-  const isOwner = !!user && user.uid === effectiveUid;
+  // Correction : isOwner est false si user est null
+  const isOwner = !!user && user.uid === effectiveUid; 
 
   useEffect(() => {
     if (!effectiveUid || authLoading) {
@@ -65,12 +65,37 @@ export function useCardCollection(
     }
 
     const colRef = collection(db, collectionPath);
+    
     const unsubscribe = onSnapshot(colRef, (snapshot) => {
-      const items = snapshot.docs.map((doc) => ({
-        id: doc.id,
-        wishlistId: listId,
-        ...doc.data(),
-      })) as CardType[];
+      // --- NETTOYAGE DES DONNÉES À LA SOURCE ---
+      const items = snapshot.docs.map((doc) => {
+        const data = doc.data();
+        return {
+            id: doc.id,
+            uid: effectiveUid, // On attache l'UID du propriétaire
+            wishlistId: listId === 'default' ? null : listId,
+            
+            // Valeurs par défaut sécurisées (jamais undefined)
+            name: data.name || 'Carte Inconnue',
+            imageUrl: data.imageUrl || '',
+            imageBackUrl: data.imageBackUrl ?? null, // Convertit undefined en null
+            
+            quantity: typeof data.quantity === 'number' ? data.quantity : 1,
+            price: typeof data.price === 'number' ? data.price : 0,
+            customPrice: data.customPrice, // Peut rester undefined (optionnel)
+            
+            setName: data.setName || '',
+            setCode: data.setCode || '',
+            
+            isFoil: !!data.isFoil,
+            isSpecificVersion: !!data.isSpecificVersion,
+            quantityForTrade: typeof data.quantityForTrade === 'number' ? data.quantityForTrade : 0,
+            
+            lastPriceUpdate: data.lastPriceUpdate?.toDate ? data.lastPriceUpdate.toDate() : null,
+            scryfallData: data.scryfallData || null
+        } as CardType;
+      });
+      
       setCards(items);
       setLoading(false);
     }, (error) => {
@@ -86,7 +111,12 @@ export function useCardCollection(
     return () => unsubscribe();
   }, [effectiveUid, target, listId, authLoading]);
 
-  // --- ACTIONS ---
+  // --- ACTIONS HELPER ---
+  const triggerStatsUpdate = () => {
+      if (user?.uid && isOwner) {
+          updateUserStats(user.uid).catch(e => console.error("Stats BG error", e));
+      }
+  };
 
   const getDocRef = (cardId: string) => {
       if (!isOwner || !effectiveUid) return null;
@@ -103,17 +133,17 @@ export function useCardCollection(
       if (ref) {
           await updateDoc(ref, { customPrice: price });
           toast.success("Prix mis à jour");
+          triggerStatsUpdate();
       }
   };
 
-  // GESTION UNITAIRE DU TRADE
   const setTradeQuantity = async (cardId: string, quantity: number) => {
-      if (!isOwner || !user || target !== 'collection') return; // Ajout !user
+      if (!isOwner || !user || target !== 'collection') return;
       
       const card = cards.find(c => c.id === cardId);
       if (!card) return;
 
-      const maxQty = card.quantity ?? 0;
+      const maxQty = card.quantity;
       const safeQty = Math.min(maxQty, Math.max(0, quantity));
       
       const ref = getDocRef(cardId);
@@ -140,6 +170,7 @@ export function useCardCollection(
       const ref = getDocRef(cardId);
       if (ref) {
           await updateDoc(ref, { [field]: !currentValue });
+          if (field === 'isFoil') triggerStatsUpdate();
       }
   };
 
@@ -150,7 +181,9 @@ export function useCardCollection(
     if (currentQuantity + amount <= 0) return 'shouldDelete';
     try {
       await updateDoc(ref, { quantity: increment(amount) });
+      triggerStatsUpdate();
       return 'updated';
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     } catch (err) { return 'error'; }
   };
 
@@ -160,8 +193,8 @@ export function useCardCollection(
     if(ref) { 
         await deleteDoc(ref); 
         toast.success('Carte retirée');
-        // Si on supprime la carte, on supprime aussi les notifs liées
-        if (target === 'collection' && user) { // Check user ici aussi
+        triggerStatsUpdate();
+        if (target === 'collection' && user) {
             removeAutoMatchNotification(user.uid, [cardId]);
         }
     }
@@ -175,7 +208,7 @@ export function useCardCollection(
       const FORTY_EIGHT_HOURS_MS = 48 * 60 * 60 * 1000;
 
       const cardsToUpdate = cards.filter(card => {
-          const lastUpdateMS = card.lastPriceUpdate instanceof Date ? card.lastPriceUpdate.getTime() : 0;
+          const lastUpdateMS = card.lastPriceUpdate ? card.lastPriceUpdate.getTime() : 0;
           return (NOW - lastUpdateMS) > FORTY_EIGHT_HOURS_MS;
       });
       
@@ -229,6 +262,7 @@ export function useCardCollection(
           }
 
           toast.success(`Succès : ${cardsToUpdate.length} cartes mises à jour !`, { id: toastId });
+          triggerStatsUpdate();
 
       } catch (e: unknown) {
           console.error(e);
@@ -236,17 +270,15 @@ export function useCardCollection(
       }
   };
 
-  // GESTION DE MASSE DU CLASSEUR D'ÉCHANGE
   const bulkSetTradeStatus = async (
       action: 'excess' | 'all' | 'reset', 
       threshold: number = 4
   ) => {
-      if (!isOwner || !user || cards.length === 0) return; // Ajout !user
+      if (!isOwner || !user || cards.length === 0) return;
       
       const batch = writeBatch(db);
       let opCount = 0;
 
-      // Listes pour les actions serveur (Notification ou Nettoyage)
       const cardsToScan: { id: string, name: string, isFoil: boolean }[] = [];
       const cardsToRemoveNotif: string[] = [];
 
@@ -280,7 +312,6 @@ export function useCardCollection(
                   batch.update(ref, { quantityForTrade: newValue });
                   opCount++;
 
-                  // Préparation des actions post-update
                   if (newValue > 0) {
                       cardsToScan.push({ id: card.id, name: card.name, isFoil: !!card.isFoil });
                   } else {
@@ -294,16 +325,12 @@ export function useCardCollection(
           await batch.commit();
           toast.success(`${opCount} cartes mises à jour`);
 
-          // --- DÉCLENCHEURS SERVEUR ---
-          
-          // 1. Scanner les ajouts
           if (cardsToScan.length > 0) {
               checkAutoMatch(user.uid, cardsToScan).then(res => {
                   if (res.matches && res.matches > 0) toast(`🎉 ${res.matches} Matchs trouvés !`, { icon: '🔔' });
               });
           }
 
-          // 2. Nettoyer les suppressions
           if (cardsToRemoveNotif.length > 0) {
               removeAutoMatchNotification(user.uid, cardsToRemoveNotif);
           }
@@ -314,7 +341,7 @@ export function useCardCollection(
   };
 
   const bulkRemoveCards = async (cardIds: string[]) => {
-      if (!isOwner || !user || cardIds.length === 0) return; // Ajout !user
+      if (!isOwner || !user || cardIds.length === 0) return;
       
       const batch = writeBatch(db);
       cardIds.forEach(id => {
@@ -324,15 +351,15 @@ export function useCardCollection(
 
       await batch.commit();
       toast.success(`${cardIds.length} cartes supprimées`);
+      triggerStatsUpdate();
       
-      // Nettoyage des notifs pour les cartes supprimées
       if (target === 'collection') {
           removeAutoMatchNotification(user.uid, cardIds);
       }
   };
 
   const bulkUpdateAttribute = async (cardIds: string[], field: 'quantityForTrade' | 'isFoil' | 'isSpecificVersion', value: boolean | number) => {
-      if (!isOwner || !user || cardIds.length === 0) return; // Ajout !user
+      if (!isOwner || !user || cardIds.length === 0) return;
 
       const batch = writeBatch(db);
       const cardsToScan: { id: string, name: string, isFoil: boolean }[] = [];
@@ -343,7 +370,6 @@ export function useCardCollection(
           if (ref) {
              batch.update(ref, { [field]: value });
              
-             // Si on modifie le statut Trade en masse
              if (field === 'quantityForTrade') {
                  const card = cards.find(c => c.id === id);
                  if (card) {
@@ -360,8 +386,8 @@ export function useCardCollection(
 
       await batch.commit();
       toast.success("Mise à jour effectuée");
+      if (field === 'isFoil') triggerStatsUpdate();
 
-      // Appels Serveur
       if (cardsToScan.length > 0) checkAutoMatch(user.uid, cardsToScan);
       if (cardsToRemoveNotif.length > 0) removeAutoMatchNotification(user.uid, cardsToRemoveNotif);
   };

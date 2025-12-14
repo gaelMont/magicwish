@@ -96,6 +96,8 @@ export default function CardVersionPickerModal({
         scryfallData: currentCardRaw,
         wishlistId: destination === 'wishlist' ? selectedListId : undefined,
         uid: '' // uid est ajouté par le hook collection ou le serveur
+        ,
+        quantityForTrade: 0
     };
     
     onConfirm(finalCard, selectedListId);
