@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useAuth } from '@/lib/AuthContext';
 import { db } from '@/lib/firebase';
-import { collection, getDocs, doc, getDoc, query, where } from 'firebase/firestore';
+import { collection, getDocs, doc, getDoc, query, where, writeBatch } from 'firebase/firestore';
 import { useWishlists, WishlistMeta } from './useWishlists';
 import { useFriends, FriendProfile } from './useFriends';
 import { CardType } from './useCardCollection';
@@ -22,7 +22,7 @@ export function useTradeMatcher() {
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("");
 
-  // --- 1. CHARGEMENT DES CARTES (Map) ---
+  // --- 1. CHARGEMENT ROBUSTE (Gère les données manquantes et la rétrocompatibilité) ---
   const fetchCardsAsMap = async (
       uid: string, 
       subCollection: 'collection' | 'wishlist',
@@ -31,111 +31,107 @@ export function useTradeMatcher() {
       const cardsMap = new Map<string, CardType>();
       const paths: string[] = [];
 
+      // Déterminer les chemins de lecture
       if (subCollection === 'collection') {
-          paths.push(`users/${uid}/collection`); // Chemin simplifié (V2)
+          paths.push(`users/${uid}/collection`);
       } else {
-          // Gestion des wishlists multiples
-          if (userLists && userLists.length > 0) {
-              userLists.forEach(list => paths.push(`users/${uid}/wishlists_data/${list.id}/cards`));
-              // Toujours inclure la default si elle n'est pas dans la liste des metas (cas legacy)
-              if (!userLists.some(l => l.id === 'default')) {
-                  paths.push(`users/${uid}/wishlist`);
-              }
-          } else {
-              // Fallback : On tente de récupérer la liste par défaut + on devine les autres
-              paths.push(`users/${uid}/wishlist`);
-              try {
-                   const listsSnap = await getDocs(collection(db, `users/${uid}/wishlists_meta`));
-                   listsSnap.forEach(doc => {
-                       paths.push(`users/${uid}/wishlists_data/${doc.id}/cards`);
-                   });
-              // eslint-disable-next-line @typescript-eslint/no-unused-vars
-              } catch (error: unknown) {
-                  // Silencieux si pas de permission ou collection vide
-              }
+          paths.push(`users/${uid}/wishlist`); // Liste par défaut (ancienne structure)
+          if (userLists) {
+              userLists.filter(l => l.id !== 'default').forEach(list => paths.push(`users/${uid}/wishlists_data/${list.id}/cards`));
           }
       }
 
-      // Exécution parallèle
       const promises = paths.map(path => getDocs(collection(db, path)).catch(() => null));
-      
-      try {
-          const snapshots = await Promise.all(promises);
-          snapshots.forEach(snap => {
-              if (snap) {
-                  snap.forEach(doc => {
-                      const data = doc.data() as CardType;
-                      // On utilise l'ID comme clé. Si doublon (plusieurs wishlists), le dernier écrase.
-                      cardsMap.set(doc.id, { ...data, id: doc.id });
-                  });
-              }
-          });
-      } catch (error: unknown) {
-          console.error(`Erreur fetchCardsAsMap (${subCollection}):`, error);
-      }
+      const snapshots = await Promise.all(promises);
+
+      snapshots.forEach(snap => {
+          if (snap) {
+              snap.forEach(doc => {
+                  const data = doc.data();
+                  
+                  // --- VÉRIFICATION CRITIQUE DU STATUT TRADE ---
+                  let computedTradeQty = 0;
+                  if (typeof data.quantityForTrade === 'number') {
+                      computedTradeQty = data.quantityForTrade; // Nouveau système
+                  } else if (data.isForTrade === true) {
+                      computedTradeQty = typeof data.quantity === 'number' ? data.quantity : 1; // Ancien système
+                  }
+                  
+                  // --- CONSTRUCTION SÉCURISÉE DE L'OBJET CardType ---
+                  const cleanCard: CardType = {
+                      id: doc.id,
+                      name: data.name || 'Carte Inconnue',
+                      imageUrl: data.imageUrl || '',
+                      imageBackUrl: data.imageBackUrl || null,
+                      quantity: typeof data.quantity === 'number' ? data.quantity : 1,
+                      price: typeof data.price === 'number' ? data.price : 0,
+                      customPrice: data.customPrice,
+                      setName: data.setName || '',
+                      setCode: data.setCode || '',
+                      isFoil: !!data.isFoil,
+                      isSpecificVersion: !!data.isSpecificVersion,
+                      quantityForTrade: computedTradeQty,
+                      wishlistId: data.wishlistId || null,
+                      scryfallData: data.scryfallData || null,
+                      // On n'inclut pas le uid ici, car il est parfois undefined dans le type CardType, 
+                      // on le gère avec l'objet parent si besoin.
+                  };
+
+                  cardsMap.set(doc.id, cleanCard);
+              });
+          }
+      });
 
       return cardsMap;
   };
 
-  // --- 2. RÉCUPÉRATION DE TOUS LES PARTENAIRES (AMIS + GROUPES) ---
+  // --- 2. RÉCUPÉRATION PARTENAIRES (Playgroups inclus) ---
   const getAllPartners = async (): Promise<FriendProfile[]> => {
       if (!user) return [];
       const partnersMap = new Map<string, FriendProfile>();
 
-      // A. Amis directs
       friends.forEach(f => partnersMap.set(f.uid, f));
 
-      // B. Membres des Playgroups
       try {
           const groupsQuery = query(collection(db, 'groups'), where('members', 'array-contains', user.uid));
           const groupsSnap = await getDocs(groupsQuery);
           
           const unknownUids = new Set<string>();
-          
           groupsSnap.forEach(g => {
-              const data = g.data();
-              if (Array.isArray(data.members)) {
-                  data.members.forEach((memberUid: string) => {
-                      if (memberUid !== user.uid && !partnersMap.has(memberUid)) {
-                          unknownUids.add(memberUid);
-                      }
+              const d = g.data();
+              if (Array.isArray(d.members)) {
+                  d.members.forEach((mUid: string) => {
+                      if (mUid !== user.uid && !partnersMap.has(mUid)) unknownUids.add(mUid);
                   });
               }
           });
 
-          // Récupération des profils manquants
           for (const uid of Array.from(unknownUids)) {
               try {
                   const docSnap = await getDoc(doc(db, 'users', uid, 'public_profile', 'info'));
                   if (docSnap.exists()) {
-                      const data = docSnap.data();
+                      const d = docSnap.data();
                       partnersMap.set(uid, {
-                          uid: uid,
-                          username: typeof data.username === 'string' ? data.username : 'Inconnu',
-                          displayName: typeof data.displayName === 'string' ? data.displayName : 'Joueur',
-                          photoURL: typeof data.photoURL === 'string' ? data.photoURL : undefined
+                          uid,
+                          username: d.username || 'Inconnu',
+                          displayName: d.displayName || 'Joueur',
+                          photoURL: d.photoURL || null
                       });
                   }
-              } catch (e: unknown) { 
-                  console.error(`Erreur profil ${uid}`, e); 
-              }
+              } catch (e) { console.error(e); }
           }
-
-      } catch (e: unknown) {
-          console.error("Erreur groupes", e);
-      }
+      } catch (e) { console.error(e); }
 
       return Array.from(partnersMap.values());
   };
 
-  // --- 3. ALGORITHME DE MATCHING ---
+  // --- 3. ALGORITHME DE MATCHING (Aligné sur la notification) ---
   const runScan = async () => {
     if (!user) return;
     setLoading(true);
-    setStatus("Recensement...");
+    setStatus("Recensement des partenaires...");
 
     try {
-        // 1. Identifier les partenaires
         const allPartners = await getAllPartners();
         
         if (allPartners.length === 0) {
@@ -145,60 +141,49 @@ export function useTradeMatcher() {
             return;
         }
 
-        // 2. Charger MES données
+        // 1. Charger MES données
         const [myCollectionMap, myWishlistMap] = await Promise.all([
             fetchCardsAsMap(user.uid, 'collection'), 
             fetchCardsAsMap(user.uid, 'wishlist', lists)
         ]);
 
-        // Indexation de ma Wishlist (Set pour rapidité)
-        const myWishlistIds = new Set<string>();
+        // 2. Indexation de MA Wishlist (PAR NOM - Match Souple)
         const myWishlistNames = new Set<string>();
-        
-        myWishlistMap.forEach(c => {
-            if (c.isSpecificVersion) myWishlistIds.add(c.id);
-            else myWishlistNames.add(c.name);
-        });
+        myWishlistMap.forEach(c => myWishlistNames.add(c.name));
 
-        // Indexation de mon Trade Binder (Ce que JE donne)
-        // CORRECTION MAJEURE ICI : quantityForTrade > 0
-        const myTradeCards = Array.from(myCollectionMap.values()).filter(c => (c.quantityForTrade ?? 0) > 0);
+        // 3. Indexation de MON Trade Binder (Filtré par Qty > 0)
+        // CORRECTION CRITIQUE: on filtre par la quantité calculée dans fetchCardsAsMap
+        const myTradeCards = Array.from(myCollectionMap.values()).filter(c => c.quantityForTrade > 0);
 
         setStatus(`Analyse de ${allPartners.length} collections...`);
 
-        // 3. Scan Parallèle
+        // 4. SCAN PARALLÈLE
         const matchPromises = allPartners.map(async (partner) => {
             const [friendCollectionMap, friendWishlistMap] = await Promise.all([
                 fetchCardsAsMap(partner.uid, 'collection'),
                 fetchCardsAsMap(partner.uid, 'wishlist') 
             ]);
             
-            // Ce que L'AMI donne
-            // CORRECTION MAJEURE ICI : quantityForTrade > 0
-            const friendTradeCards = Array.from(friendCollectionMap.values()).filter(c => (c.quantityForTrade ?? 0) > 0);
+            // FILTRE AMIS : Cartes dispo chez l'ami
+            // CORRECTION CRITIQUE: On filtre par Qty > 0 calculée dans fetchCardsAsMap
+            const friendTradeCards = Array.from(friendCollectionMap.values()).filter(c => c.quantityForTrade > 0);
 
             const toReceive: CardType[] = [];
             const toGive: CardType[] = [];
 
-            // A. MATCH : Ce qu'il a QUE JE VEUX (Je reçois)
+            // A. JE REÇOIS (Match par Nom)
             friendTradeCards.forEach(card => {
-                if (myWishlistIds.has(card.id) || myWishlistNames.has(card.name)) {
+                if (myWishlistNames.has(card.name)) {
                     toReceive.push({ ...card });
                 }
             });
 
-            // B. MATCH : Ce que j'ai QU'IL VEUT (Je donne)
-            // On indexe sa wishlist à la volée
-            const friendWishlistIds = new Set<string>();
+            // B. JE DONNE (Match par Nom)
             const friendWishlistNames = new Set<string>();
-            
-            friendWishlistMap.forEach(c => {
-                if (c.isSpecificVersion) friendWishlistIds.add(c.id);
-                else friendWishlistNames.add(c.name);
-            });
+            friendWishlistMap.forEach(c => friendWishlistNames.add(c.name));
 
             myTradeCards.forEach(card => {
-                if (friendWishlistIds.has(card.id) || friendWishlistNames.has(card.name)) {
+                if (friendWishlistNames.has(card.name)) {
                     toGive.push({ ...card });
                 }
             });
@@ -217,14 +202,13 @@ export function useTradeMatcher() {
         const results = await Promise.all(matchPromises);
         const validProposals = results.filter((p): p is TradeProposal => p !== null);
 
-        // 4. Calcul des Balances
+        // 5. Calcul des Balances
         if (validProposals.length > 0) {
             setStatus("Finalisation...");
             
-            // On peut lancer une mise à jour des prix en tâche de fond ici si besoin
-            // Pour l'instant on utilise les prix stockés
-            
             validProposals.forEach(p => {
+                // IMPORTANT: On utilise la quantité réelle (quantity) ici, pas quantityForTrade
+                // car on veut la valeur totale du stock matché, mais on filtre sur quantityForTrade.
                 const valReceive = p.toReceive.reduce((sum, c) => sum + ((c.customPrice ?? c.price ?? 0) * (c.quantity || 1)), 0);
                 const valGive = p.toGive.reduce((sum, c) => sum + ((c.customPrice ?? c.price ?? 0) * (c.quantity || 1)), 0);
                 p.balance = valGive - valReceive;
