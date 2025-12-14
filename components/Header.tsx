@@ -1,3 +1,4 @@
+// components/Header.tsx
 'use client';
 
 import { useState } from 'react';
@@ -59,11 +60,11 @@ export default function Header() {
                     
                     <div className="absolute top-full right-0 mt-2 w-48 bg-surface border border-border rounded-lg shadow-xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 transform origin-top-right z-50">
                       <div className="py-1">
-                        <Link href="/stats" className="px-4 py-2 text-sm text-foreground hover:bg-secondary transition justify-between items-center">
+                        <Link href="/stats" className="flex w-full px-4 py-2 text-sm text-foreground hover:bg-secondary transition justify-between items-center">
                            Panthéon
                         </Link>
                         <div className="border-t border-border my-1"></div>
-                        <Link href="/contacts" className="px-4 py-2 text-sm text-foreground hover:bg-secondary transition justify-between items-center">
+                        <Link href="/contacts" className="flex w-full px-4 py-2 text-sm text-foreground hover:bg-secondary transition justify-between items-center">
                           Mes Contacts
                           {friendRequestCount > 0 && (
                             <span className="bg-primary text-primary-foreground text-[10px] font-bold px-1.5 py-0.5 rounded-full">
@@ -71,7 +72,7 @@ export default function Header() {
                             </span>
                           )}
                         </Link>
-                        <Link href="/groups" className="block px-4 py-2 text-sm text-foreground hover:bg-secondary transition">
+                        <Link href="/groups" className="flex w-full px-4 py-2 text-sm text-foreground hover:bg-secondary transition items-center">
                           Mes Playgroups
                         </Link>
                       </div>
