@@ -1,11 +1,10 @@
-// hooks/useCardCollection.ts
 import { useState, useEffect, useMemo } from 'react';
 import { db } from '@/lib/firebase';
 import { collection, onSnapshot, doc, updateDoc, deleteDoc, increment, writeBatch } from 'firebase/firestore';
 import { useAuth } from '@/lib/AuthContext';
 import toast from 'react-hot-toast';
+import { checkAutoMatch, removeAutoMatchNotification } from '@/app/actions/matching'; 
 
-// Definition d'un type partiel pour Scryfall
 type ScryfallDataRaw = {
     id: string;
     prices?: { eur?: string; usd?: string };
@@ -13,7 +12,7 @@ type ScryfallDataRaw = {
 };
 
 export type CardType = {
-  uid: string;
+  uid?: string;
   id: string;
   name: string;
   imageUrl: string;
@@ -27,12 +26,9 @@ export type CardType = {
   
   isFoil?: boolean;             
   isSpecificVersion?: boolean;
-  
-  // Remplacement de isForTrade
   quantityForTrade?: number; 
   
   lastPriceUpdate?: Date | null; 
-  
   scryfallData?: Record<string, unknown>;
 };
 
@@ -46,11 +42,13 @@ export function useCardCollection(
   const [loading, setLoading] = useState(true);
 
   const effectiveUid = targetUid || user?.uid;
-  const isOwner = user?.uid === effectiveUid; 
+  
+  // CORRECTION : isOwner doit être faux si user est null
+  const isOwner = !!user && user.uid === effectiveUid;
 
   useEffect(() => {
     if (!effectiveUid || authLoading) {
-        if (!authLoading) {
+        if (!authLoading && !effectiveUid) {
             setLoading(false);
             setCards([]);
         }
@@ -77,11 +75,11 @@ export function useCardCollection(
       setLoading(false);
     }, (error) => {
         if (error.code === 'permission-denied') {
-            console.warn(`useCardCollection: Permission refusée pour ${collectionPath}. Arrêt de l'écoute.`);
+            console.warn(`Permission refusée pour ${collectionPath}`);
             setCards([]);
             setLoading(false);
         } else {
-            console.error(`useCardCollection: Erreur inattendue sur ${collectionPath}:`, error);
+            console.error(`Erreur inattendue`, error);
         }
     });
     
@@ -108,20 +106,30 @@ export function useCardCollection(
       }
   };
 
-  // Fonction pour la quantité d'échange
+  // GESTION UNITAIRE DU TRADE
   const setTradeQuantity = async (cardId: string, quantity: number) => {
-      if (!isOwner || target !== 'collection') return;
+      if (!isOwner || !user || target !== 'collection') return; // Ajout !user
       
       const card = cards.find(c => c.id === cardId);
-      const maxQty = card?.quantity ?? 0;
+      if (!card) return;
+
+      const maxQty = card.quantity ?? 0;
       const safeQty = Math.min(maxQty, Math.max(0, quantity));
       
       const ref = getDocRef(cardId);
       if (ref) {
           await updateDoc(ref, { quantityForTrade: safeQty });
+          
+          if (safeQty > 0) {
+              checkAutoMatch(user.uid, [{ id: card.id, name: card.name, isFoil: !!card.isFoil }])
+                  .then(res => {
+                      if (res.matches && res.matches > 0) toast(`🎉 ${res.matches} Matchs trouvés !`, { icon: '🔔' });
+                  });
+          } else {
+              removeAutoMatchNotification(user.uid, [card.id]);
+          }
       }
   };
-
 
   const toggleAttribute = async (
       cardId: string, 
@@ -143,17 +151,22 @@ export function useCardCollection(
     try {
       await updateDoc(ref, { quantity: increment(amount) });
       return 'updated';
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     } catch (err) { return 'error'; }
   };
 
   const removeCard = async (cardId: string) => {
     if (!isOwner) return;
     const ref = getDocRef(cardId);
-    if(ref) { await deleteDoc(ref); toast.success('Carte retirée', { icon: '🗑️' }); }
+    if(ref) { 
+        await deleteDoc(ref); 
+        toast.success('Carte retirée');
+        // Si on supprime la carte, on supprime aussi les notifs liées
+        if (target === 'collection' && user) { // Check user ici aussi
+            removeAutoMatchNotification(user.uid, [cardId]);
+        }
+    }
   };
 
-  // --- MISE À JOUR GLOBALE DES PRIX ---
   const refreshCollectionPrices = async () => {
       if (!isOwner || cards.length === 0) return;
       const toastId = toast.loading(`Mise à jour des prix...`);
@@ -163,9 +176,7 @@ export function useCardCollection(
 
       const cardsToUpdate = cards.filter(card => {
           const lastUpdateMS = card.lastPriceUpdate instanceof Date ? card.lastPriceUpdate.getTime() : 0;
-          const freshness = NOW - lastUpdateMS;
-
-          return freshness > FORTY_EIGHT_HOURS_MS;
+          return (NOW - lastUpdateMS) > FORTY_EIGHT_HOURS_MS;
       });
       
       if (cardsToUpdate.length === 0) {
@@ -219,22 +230,25 @@ export function useCardCollection(
 
           toast.success(`Succès : ${cardsToUpdate.length} cartes mises à jour !`, { id: toastId });
 
-      } catch (e) {
+      } catch (e: unknown) {
           console.error(e);
           toast.error("Erreur lors de la mise à jour", { id: toastId });
       }
   };
 
-  // --- GESTION DE MASSE DU CLASSEUR D'ÉCHANGE ---
+  // GESTION DE MASSE DU CLASSEUR D'ÉCHANGE
   const bulkSetTradeStatus = async (
       action: 'excess' | 'all' | 'reset', 
       threshold: number = 4
   ) => {
-      if (!isOwner || cards.length === 0) return;
+      if (!isOwner || !user || cards.length === 0) return; // Ajout !user
       
       const batch = writeBatch(db);
       let opCount = 0;
-      let label = "";
+
+      // Listes pour les actions serveur (Notification ou Nettoyage)
+      const cardsToScan: { id: string, name: string, isFoil: boolean }[] = [];
+      const cardsToRemoveNotif: string[] = [];
 
       cards.forEach(card => {
           let shouldUpdate = false;
@@ -245,14 +259,12 @@ export function useCardCollection(
                   shouldUpdate = true;
                   newValue = 0;
               }
-              label = "Remise à zéro";
           } 
           else if (action === 'all') {
               if ((card.quantityForTrade ?? 0) !== card.quantity) {
                   shouldUpdate = true;
                   newValue = card.quantity;
               }
-              label = "Tout ajouter";
           } 
           else if (action === 'excess') {
               const tradeableQty = Math.max(0, card.quantity - threshold);
@@ -267,21 +279,42 @@ export function useCardCollection(
               if (ref) {
                   batch.update(ref, { quantityForTrade: newValue });
                   opCount++;
+
+                  // Préparation des actions post-update
+                  if (newValue > 0) {
+                      cardsToScan.push({ id: card.id, name: card.name, isFoil: !!card.isFoil });
+                  } else {
+                      cardsToRemoveNotif.push(card.id);
+                  }
               }
           }
       });
 
       if (opCount > 0) {
           await batch.commit();
-          toast.success(`${opCount} cartes mises à jour (${action === 'excess' ? `Quantité > ${threshold}` : label})`);
+          toast.success(`${opCount} cartes mises à jour`);
+
+          // --- DÉCLENCHEURS SERVEUR ---
+          
+          // 1. Scanner les ajouts
+          if (cardsToScan.length > 0) {
+              checkAutoMatch(user.uid, cardsToScan).then(res => {
+                  if (res.matches && res.matches > 0) toast(`🎉 ${res.matches} Matchs trouvés !`, { icon: '🔔' });
+              });
+          }
+
+          // 2. Nettoyer les suppressions
+          if (cardsToRemoveNotif.length > 0) {
+              removeAutoMatchNotification(user.uid, cardsToRemoveNotif);
+          }
+
       } else {
           toast(`Aucune carte ne correspond aux critères.`);
       }
   };
 
-  // --- ACTIONS DE SÉLECTION MULTIPLE ---
   const bulkRemoveCards = async (cardIds: string[]) => {
-      if (!isOwner || cardIds.length === 0) return;
+      if (!isOwner || !user || cardIds.length === 0) return; // Ajout !user
       
       const batch = writeBatch(db);
       cardIds.forEach(id => {
@@ -291,26 +324,46 @@ export function useCardCollection(
 
       await batch.commit();
       toast.success(`${cardIds.length} cartes supprimées`);
+      
+      // Nettoyage des notifs pour les cartes supprimées
+      if (target === 'collection') {
+          removeAutoMatchNotification(user.uid, cardIds);
+      }
   };
 
-  const bulkUpdateAttribute = async (cardIds: string[], field: 'isFoil' | 'quantityForTrade' | 'isSpecificVersion', value: boolean | number) => {
-      if (!isOwner || cardIds.length === 0) return;
+  const bulkUpdateAttribute = async (cardIds: string[], field: 'quantityForTrade' | 'isFoil' | 'isSpecificVersion', value: boolean | number) => {
+      if (!isOwner || !user || cardIds.length === 0) return; // Ajout !user
 
       const batch = writeBatch(db);
+      const cardsToScan: { id: string, name: string, isFoil: boolean }[] = [];
+      const cardsToRemoveNotif: string[] = [];
+
       cardIds.forEach(id => {
           const ref = getDocRef(id);
           if (ref) {
+             batch.update(ref, { [field]: value });
+             
+             // Si on modifie le statut Trade en masse
              if (field === 'quantityForTrade') {
-                 const tradeQty = typeof value === 'boolean' ? (value ? 99 : 0) : value;
-                 batch.update(ref, { [field]: tradeQty });
-             } else {
-                 batch.update(ref, { [field]: value });
+                 const card = cards.find(c => c.id === id);
+                 if (card) {
+                     const numValue = value as number;
+                     if (numValue > 0) {
+                         cardsToScan.push({ id: card.id, name: card.name, isFoil: !!card.isFoil });
+                     } else {
+                         cardsToRemoveNotif.push(card.id);
+                     }
+                 }
              }
           }
       });
 
       await batch.commit();
       toast.success("Mise à jour effectuée");
+
+      // Appels Serveur
+      if (cardsToScan.length > 0) checkAutoMatch(user.uid, cardsToScan);
+      if (cardsToRemoveNotif.length > 0) removeAutoMatchNotification(user.uid, cardsToRemoveNotif);
   };
 
   const totalPrice = useMemo(() => {
@@ -323,7 +376,7 @@ export function useCardCollection(
   return { 
       cards, loading, isOwner, totalPrice,
       updateQuantity, removeCard, setCustomPrice, toggleAttribute,
-      setTradeQuantity, // <--- EXPOSÉ
+      setTradeQuantity, 
       refreshCollectionPrices, bulkSetTradeStatus,
       bulkRemoveCards, bulkUpdateAttribute 
   };

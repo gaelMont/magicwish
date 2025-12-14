@@ -1,4 +1,3 @@
-// app/collection/page.tsx
 'use client';
 
 import { useState, useMemo, useEffect } from 'react';
@@ -12,6 +11,7 @@ import ColumnSlider from '@/components/ColumnSlider';
 import DataTransferHubModal from '@/components/DataTransferHubModal'; 
 import ImportModal from '@/components/ImportModal';
 import ExportModal from '@/components/ExportModal';
+import { updateUserStats } from '@/app/actions/stats'; // Import Action
 
 type SortOption = 'name' | 'price_desc' | 'price_asc' | 'quantity' | 'date';
 
@@ -28,7 +28,6 @@ export default function CollectionPage() {
     totalPrice 
   } = useCardCollection('collection');
 
-  // Nouveaux états pour le contrôle des modales
   const [isHubOpen, setIsHubOpen] = useState(false);
   const [isImportOpen, setIsImportOpen] = useState(false);
   const [isExportOpen, setIsExportOpen] = useState(false);
@@ -49,7 +48,6 @@ export default function CollectionPage() {
   const [minPriceFilter, setMinPriceFilter] = useState<string>('');
   const [maxPriceFilter, setMaxPriceFilter] = useState<string>('');
   
-  // --- Fonctions de navigation modale ---
   const closeAllModals = () => {
     setIsHubOpen(false);
     setIsImportOpen(false);
@@ -72,8 +70,6 @@ export default function CollectionPage() {
     setIsExportOpen(true);
   }
 
-  // --- Logique de Filtrage et Tri (inchangée) ---
-  
   useEffect(() => {
     if (visibleCount !== ITEMS_PER_PAGE) {
       setVisibleCount(ITEMS_PER_PAGE);
@@ -134,10 +130,17 @@ export default function CollectionPage() {
       return Array.from(sets).sort();
   }, [cards]);
 
+  // Fonction trigger Update Stats
+  const triggerStatsUpdate = () => {
+      if (user?.uid) updateUserStats(user.uid).catch(e => console.error("Stats update error", e));
+  };
+
   const handleDecrement = async (cardId: string, currentQty: number) => {
     const result = await updateQuantity(cardId, -1, currentQty);
     if (result === 'shouldDelete') {
       setCardToDelete(cardId);
+    } else {
+        triggerStatsUpdate(); // Update si quantité change
     }
   };
 
@@ -170,6 +173,7 @@ export default function CollectionPage() {
   const handleBulkDelete = async () => {
       if (!confirm(`Supprimer ces ${selectedIds.length} cartes définitivement ?`)) return;
       await bulkRemoveCards(selectedIds);
+      triggerStatsUpdate(); // Update stats après suppression de masse
       setSelectedIds([]);
       setIsSelectMode(false);
   };
@@ -179,6 +183,15 @@ export default function CollectionPage() {
       await bulkUpdateAttribute(selectedIds, 'quantityForTrade', targetQuantity); 
       setSelectedIds([]);
       setIsSelectMode(false);
+  };
+
+  // Wrapper pour suppression unitaire
+  const confirmDeleteSingle = async () => {
+      if(cardToDelete) {
+          await removeCard(cardToDelete);
+          triggerStatsUpdate();
+          setCardToDelete(null);
+      }
   };
 
   if (loading) return <div className="flex h-screen items-center justify-center text-muted animate-pulse">Chargement de votre collection...</div>;
@@ -326,7 +339,6 @@ export default function CollectionPage() {
           </div>
       )}
 
-      {/* GRILLE */}
       {filteredAndSortedCards.length === 0 ? (
         <div className="text-center py-20 bg-secondary/50 rounded-xl border-2 border-dashed border-border">
           <p className="text-xl text-muted mb-4">Aucun résultat ne correspond à vos filtres.</p>
@@ -344,10 +356,19 @@ export default function CollectionPage() {
                     <MagicCard 
                         key={card.id}
                         {...card}
-                        onIncrement={() => updateQuantity(card.id, 1, card.quantity)}
+                        onIncrement={() => {
+                            updateQuantity(card.id, 1, card.quantity);
+                            triggerStatsUpdate();
+                        }}
                         onDecrement={() => handleDecrement(card.id, card.quantity)}
-                        onEditPrice={(newPrice) => setCustomPrice(card.id, newPrice)}
-                        onToggleAttribute={(field, val) => toggleAttribute(card.id, field, val)}
+                        onEditPrice={(newPrice) => {
+                            setCustomPrice(card.id, newPrice);
+                            triggerStatsUpdate(); // Changement de prix = Changement de stats
+                        }}
+                        onToggleAttribute={(field, val) => {
+                            toggleAttribute(card.id, field, val);
+                            if (field === 'isFoil') triggerStatsUpdate();
+                        }}
                         
                         onIncrementTrade={() => handleIncrementTrade(card.id, card.quantityForTrade ?? 0, card.quantity)}
                         onDecrementTrade={() => handleDecrementTrade(card.id, card.quantityForTrade ?? 0)}
@@ -372,7 +393,6 @@ export default function CollectionPage() {
         </>
       )}
 
-      {/* ACTION BAR FLOTTANTE */}
       {isSelectMode && selectedIds.length > 0 && (
           <div className="fixed bottom-6 left-4 right-4 md:left-1/2 md:right-auto md:-translate-x-1/2 bg-surface shadow-2xl border border-border p-2 rounded-2xl flex items-center justify-around gap-2 z-50 animate-in slide-in-from-bottom-6 duration-300">
               <button onClick={() => handleBulkTrade(true)} className="px-4 py-2 bg-success/10 hover:bg-success/20 text-success rounded-xl text-sm font-bold transition flex flex-col items-center leading-none gap-1">
@@ -387,8 +407,6 @@ export default function CollectionPage() {
               </button>
           </div>
       )}
-
-      {/* --- MODALES --- */}
 
       <DataTransferHubModal 
         isOpen={isHubOpen}
@@ -418,7 +436,7 @@ export default function CollectionPage() {
       />
 
       <CollectionToolsModal isOpen={isToolsOpen} onClose={() => setIsToolsOpen(false)} totalCards={cards.length} onRefreshPrices={refreshCollectionPrices} onBulkTrade={bulkSetTradeStatus} />
-      <ConfirmModal isOpen={!!cardToDelete} onClose={() => setCardToDelete(null)} onConfirm={() => { if(cardToDelete) removeCard(cardToDelete); }} title="Retirer ?" message="Cette carte sera retirée de votre collection." />
+      <ConfirmModal isOpen={!!cardToDelete} onClose={() => setCardToDelete(null)} onConfirm={confirmDeleteSingle} title="Retirer ?" message="Cette carte sera retirée de votre collection." />
     </main>
   );
 }

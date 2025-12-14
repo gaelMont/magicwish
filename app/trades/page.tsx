@@ -268,7 +268,7 @@ const TradeRowProposal = ({ proposal, onProposalSent }: { proposal: TradeProposa
 export default function TradesPage() {
   const { user } = useAuth();
   const { proposals, loading, status, runScan } = useTradeMatcher();
-  const { incomingTrades, outgoingTrades, cancelTrade } = useTradeSystem(); 
+  const { incomingTrades, outgoingTrades } = useTradeSystem(); 
   const [activeTab, setActiveTab] = useState<'scan' | 'requests'>('scan');
 
   if (!user) return <div className="p-10 text-center text-muted">Connectez-vous.</div>;

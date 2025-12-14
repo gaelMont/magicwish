@@ -106,5 +106,21 @@ service cloud.firestore {
         )
       );
     }
+
+    // 7. GROUPES / CERCLES DE JEU
+    match /groups/{groupId} {
+      // Lecture : Uniquement les membres
+      allow read: if isAuthenticated() && request.auth.uid in resource.data.members;
+      
+      // Création : Tout le monde
+      allow create: if isAuthenticated() && request.resource.data.ownerUid == request.auth.uid;
+      
+      // Modification : Uniquement les membres (pour la logique interne, sécurisée par les Actions Server)
+      // Mais pour être strict, on bloque l'écriture client directe sauf pour quitter
+      allow update: if false; 
+      
+      // Suppression : Seul le propriétaire
+      allow delete: if isAuthenticated() && resource.data.ownerUid == request.auth.uid;
+    }
   }
 }

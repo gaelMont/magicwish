@@ -1,4 +1,3 @@
-// components/Header.tsx
 'use client';
 
 import { useState } from 'react';
@@ -8,7 +7,7 @@ import { usePathname } from 'next/navigation';
 import ThemeToggle from './ThemeToggle';
 
 export default function Header() {
-  const { user, logOut, friendRequestCount, isAdmin } = useAuth();
+  const { user, friendRequestCount } = useAuth();
   const pathname = usePathname();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
 
@@ -18,6 +17,8 @@ export default function Header() {
       ? 'text-primary font-bold' 
       : 'text-muted hover:text-foreground'}
   `;
+
+  const isSocialActive = ['/contacts', '/groups', '/stats'].includes(pathname);
 
   return (
     <header className="bg-surface/80 backdrop-blur-md border-b border-border p-4 sticky top-0 z-40 transition-colors duration-300">
@@ -37,58 +38,69 @@ export default function Header() {
 
             {user ? (
               <>
-                {/* --- NAVIGATION DESKTOP --- */}
+                {/* NAVIGATION DESKTOP */}
                 <nav className="hidden md:flex gap-6 mr-4 items-center">
                   <Link href="/search" className={linkClass('/search')}>Recherche</Link> 
                   <Link href="/wishlist" className={linkClass('/wishlist')}>Wishlist</Link>
                   <Link href="/collection" className={linkClass('/collection')}>Collection</Link>
                   <Link href="/trades" className={linkClass('/trades')}>Echanges</Link>
-                  <Link href="/contacts" className={`${linkClass('/contacts')} relative flex items-center gap-1`}>
-                    Contacts
-                    {friendRequestCount > 0 && (
-                      <span className="absolute -top-1.5 -right-2 bg-primary text-primary-foreground text-[10px] font-bold px-1.5 py-0.5 rounded-full animate-pulse">
-                        {friendRequestCount}
-                      </span>
-                    )}
-                  </Link>
                   
-                  {/* LIEN ADMIN CONDITIONNEL (DESKTOP) */}
-                  {isAdmin && (
-                    <Link href="/admin" className={linkClass('/admin')}>
-                        Admin
-                    </Link>
-                  )}
+                  {/* DROPDOWN SOCIAL */}
+                  <div className="relative group">
+                    <button className={`text-sm font-medium transition-colors flex items-center gap-1 ${isSocialActive ? 'text-primary font-bold' : 'text-muted hover:text-foreground'}`}>
+                      Social
+                      {friendRequestCount > 0 && (
+                        <span className="bg-primary text-primary-foreground text-[10px] font-bold px-1.5 py-0.5 rounded-full animate-pulse">
+                          {friendRequestCount}
+                        </span>
+                      )}
+                      <span className="text-[10px] transform group-hover:rotate-180 transition-transform">▼</span>
+                    </button>
+                    
+                    <div className="absolute top-full right-0 mt-2 w-48 bg-surface border border-border rounded-lg shadow-xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 transform origin-top-right z-50">
+                      <div className="py-1">
+                        <Link href="/stats" className="px-4 py-2 text-sm text-foreground hover:bg-secondary transition justify-between items-center">
+                           Panthéon
+                        </Link>
+                        <div className="border-t border-border my-1"></div>
+                        <Link href="/contacts" className="px-4 py-2 text-sm text-foreground hover:bg-secondary transition justify-between items-center">
+                          Mes Contacts
+                          {friendRequestCount > 0 && (
+                            <span className="bg-primary text-primary-foreground text-[10px] font-bold px-1.5 py-0.5 rounded-full">
+                              {friendRequestCount}
+                            </span>
+                          )}
+                        </Link>
+                        <Link href="/groups" className="block px-4 py-2 text-sm text-foreground hover:bg-secondary transition">
+                          Mes Playgroups
+                        </Link>
+                      </div>
+                    </div>
+                  </div>
+
+                  <Link 
+                    href="/settings"
+                    className={linkClass('/settings')}
+                  >
+                    Paramètres
+                  </Link>
                 </nav>
 
                 <div className="h-5 w-px bg-border hidden md:block"></div>
 
                 <div className="flex items-center gap-3">
-                  {/* LIEN PARAMÈTRES */}
-                  <Link 
-                    href="/settings"
-                    className={`p-2 rounded-full hover:bg-secondary transition-colors ${pathname === '/settings' ? 'text-primary' : 'text-muted hover:text-foreground'}`}
-                    title="Paramètres"
-                  >
-                    ⚙️
-                  </Link>
-
                   {user.photoURL && (
                     <img 
                       src={user.photoURL} 
                       alt="Avatar" 
-                      className="w-8 h-8 rounded-full bg-surface border border-border object-cover"
+                      className="w-8 h-8 rounded-full bg-secondary border border-border object-cover"
                     />
                   )}
-                  <button
-                    onClick={logOut}
-                    className="hidden md:block text-xs font-medium text-danger hover:text-danger/80 transition"
-                  >
-                    Déconnexion
-                  </button>
-
+                  
+                  {/* Bouton Menu Mobile */}
                   <button 
                     onClick={() => setIsMenuOpen(!isMenuOpen)}
-                    className="md:hidden p-2 text-primary hover:bg-secondary rounded-lg transition-colors"
+                    className="md:hidden p-2 text-foreground hover:bg-secondary rounded-lg"
                   >
                     Menu
                   </button>
@@ -113,13 +125,29 @@ export default function Header() {
                <Link href="/wishlist" className={linkClass('/wishlist')} onClick={() => setIsMenuOpen(false)}>Wishlist</Link>
                <Link href="/collection" className={linkClass('/collection')} onClick={() => setIsMenuOpen(false)}>Collection</Link>
                <Link href="/trades" className={linkClass('/trades')} onClick={() => setIsMenuOpen(false)}>Echanges</Link>
-               <Link href="/contacts" className={linkClass('/contacts')} onClick={() => setIsMenuOpen(false)}>Contacts</Link>
                
-               {/* LIEN ADMIN CONDITIONNEL (MOBILE) */}
-               {isAdmin && <Link href="/admin" className={linkClass('/admin')} onClick={() => setIsMenuOpen(false)}>👑 Admin</Link>} 
-               
+               <div className="pt-2 pb-2 border-y border-border/50">
+                 <p className="text-xs text-muted font-bold uppercase mb-2 ml-4">Social</p>
+                 
+                 <Link href="/stats" className={`${linkClass('/stats')} pl-4 mb-2 flex items-center gap-2`} onClick={() => setIsMenuOpen(false)}>
+                    Panthéon
+                 </Link>
+                 
+                 <Link href="/contacts" className={`${linkClass('/contacts')} pl-4 mb-2 flex items-center gap-2`} onClick={() => setIsMenuOpen(false)}>
+                    Contacts 
+                    {friendRequestCount > 0 && (
+                        <span className="bg-primary text-primary-foreground text-[10px] font-bold px-1.5 py-0.5 rounded-full">
+                          {friendRequestCount}
+                        </span>
+                    )}
+                 </Link>
+                 
+                 <Link href="/groups" className={`${linkClass('/groups')} pl-4`} onClick={() => setIsMenuOpen(false)}>
+                    Mes Playgroups
+                 </Link>
+               </div>
+
                <Link href="/settings" className={linkClass('/settings')} onClick={() => setIsMenuOpen(false)}>Paramètres</Link>
-               <button onClick={() => { logOut(); setIsMenuOpen(false); }} className="text-left py-2 text-danger text-sm font-medium">Déconnexion</button>
              </nav>
           </div>
         )}

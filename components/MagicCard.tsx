@@ -1,4 +1,3 @@
-// components/MagicCard.tsx
 'use client';
 
 import { useState, useEffect, memo } from 'react';
@@ -21,7 +20,6 @@ type MagicCardProps = {
   onMove?: () => void;
   onEditPrice?: (newPrice: number) => void;
   onToggleAttribute?: (field: 'isFoil' | 'isSpecificVersion', currentValue: boolean) => void;
-  // NOUVELLES PROPS
   onIncrementTrade?: () => void; 
   onDecrementTrade?: () => void;
   
@@ -47,7 +45,7 @@ function MagicCard(props: MagicCardProps) {
       onEditPrice, onToggleAttribute, 
       readOnly, isWishlist,
       onIncrement, onDecrement, onMove,
-      onIncrementTrade, onDecrementTrade, // <--- NOUVELLES PROPS
+      onIncrementTrade, onDecrementTrade, 
       isSelectMode, isSelected, onSelect,
       returnTo
   } = props;
@@ -101,7 +99,6 @@ function MagicCard(props: MagicCardProps) {
       }
   };
 
-  // --- VUE LISTE (TradeView) ---
   if (isTradeView) {
       return (
         <div className="flex items-center gap-3 bg-surface p-2 rounded-lg border border-border content-visibility-auto transition-colors">
@@ -136,7 +133,6 @@ function MagicCard(props: MagicCardProps) {
       );
   }
 
-  // --- VUE GRILLE (Collection / Wishlist) ---
   return (
     <div 
         onClick={handleCardClick}
@@ -149,7 +145,7 @@ function MagicCard(props: MagicCardProps) {
       {isSelectMode && (
           <div className="absolute top-2 right-2 z-30 pointer-events-none">
               <div className={`w-5 h-5 rounded-full border flex items-center justify-center transition-all ${isSelected ? 'bg-primary border-primary' : 'bg-surface border-muted'}`}>
-                  {isSelected && <span className="text-primary-foreground text-xs font-bold">✓</span>}
+                  {isSelected && <span className="text-primary-foreground text-xs font-bold">V</span>}
               </div>
           </div>
       )}
@@ -164,7 +160,7 @@ function MagicCard(props: MagicCardProps) {
         />
         {isFoil && <div className="absolute bottom-0 right-0 bg-amber-500 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-tl-md shadow-sm">FOIL</div>}
         {imageBackUrl && !isSelectMode && (
-          <button onClick={(e) => { e.stopPropagation(); setIsFlipped(!isFlipped); }} className="absolute top-2 right-2 bg-black/50 hover:bg-black/70 text-white p-1.5 rounded-full backdrop-blur-sm transition-opacity opacity-0 group-hover:opacity-100 z-10 text-[9px] font-bold">↻</button>
+          <button onClick={(e) => { e.stopPropagation(); setIsFlipped(!isFlipped); }} className="absolute top-2 right-2 bg-black/50 hover:bg-black/70 text-white p-1.5 rounded-full backdrop-blur-sm transition-opacity opacity-0 group-hover:opacity-100 z-10 text-[9px] font-bold">Flip</button>
         )}
       </div>
       
@@ -176,7 +172,6 @@ function MagicCard(props: MagicCardProps) {
 
         <div className={`flex flex-wrap gap-1 mb-2 ${isSelectMode ? 'pointer-events-none opacity-50' : ''}`}>
             
-            {/* BOUTON FOIL/NORMAL */}
             {onToggleAttribute ? (
                 <button 
                     onClick={(e) => { e.stopPropagation(); onToggleAttribute('isFoil', !!isFoil); }}
@@ -188,7 +183,6 @@ function MagicCard(props: MagicCardProps) {
                 </button>
             ) : null}
 
-            {/* BOUTON EXACT/AUTO (Wishlist) */}
             {isWishlist && onToggleAttribute && (
                 <button 
                     onClick={(e) => { e.stopPropagation(); onToggleAttribute('isSpecificVersion', !!isSpecificVersion); }}
@@ -200,7 +194,6 @@ function MagicCard(props: MagicCardProps) {
                 </button>
             )}
             
-            {/* BOUTON ACHETÉ (Wishlist) */}
             {isWishlist && !readOnly && !isSelectMode && onMove && (
                 <button 
                     onClick={(e) => { e.stopPropagation(); onMove(); }}
@@ -214,14 +207,12 @@ function MagicCard(props: MagicCardProps) {
         
         <div className={`mt-auto flex justify-between items-center border-t border-border pt-2 ${isSelectMode ? 'pointer-events-none opacity-50' : ''}`}>
             
-            {/* GESTION DE LA QUANTITÉ TOTALE */}
             <div className="flex items-center gap-1">
                 {!readOnly && <button onClick={(e) => {e.stopPropagation(); onDecrement?.()}} className="w-5 h-5 rounded bg-secondary hover:bg-border text-muted hover:text-foreground flex items-center justify-center text-xs font-bold transition" title="Diminuer stock">-</button>}
                 <span className={`text-sm ${readOnly ? 'font-bold text-foreground' : 'w-4 text-center text-foreground'}`}>{quantity}</span>
                 {!readOnly && <button onClick={(e) => {e.stopPropagation(); onIncrement?.()}} className="w-5 h-5 rounded bg-primary/10 hover:bg-primary/20 text-primary border border-primary/30 flex items-center justify-center text-xs font-bold transition" title="Augmenter stock">+</button>}
             </div>
 
-            {/* GESTION DU TRADE (Collection seulement) */}
             {!isWishlist && !readOnly && !isSelectMode && (
                 <div className="flex items-center gap-1 mx-1 grow justify-center">
                     <button 
@@ -236,7 +227,7 @@ function MagicCard(props: MagicCardProps) {
                         className="text-xs font-bold text-success bg-success/10 px-2 py-0.5 rounded-full" 
                         title={`${tradeQty} exemplaire(s) disponible(s) pour l'échange.`}
                     >
-                        {tradeQty} / {quantity} 🤝
+                        {tradeQty} / {quantity} Trade
                     </span>
                     <button 
                         onClick={(e) => {e.stopPropagation(); onIncrementTrade?.()}} 

@@ -8,11 +8,12 @@ import toast from 'react-hot-toast';
 import CardVersionPickerModal from '@/components/CardVersionPickerModal';
 import { ScryfallRawData } from '@/lib/cardUtils';
 
+// Definition locale stricte du payload attendu par le serveur
 interface ServerCardPayload {
     id: string;
     name: string;
     imageUrl: string;
-    imageBackUrl: string | null;
+    imageBackUrl: string | null; // Ici, pas d'undefined autorisé
     quantity: number;
     price: number;
     customPrice?: number;
@@ -24,13 +25,16 @@ interface ServerCardPayload {
     wishlistId: string | null;
 }
 
+// Fonction de conversion CardType (Client) -> ServerCardPayload (Serveur)
+// Elle transforme les undefined en null pour satisfaire le typage strict
 const mapCardsForServer = (cards: CardType[]): ServerCardPayload[] => {
     return cards.map(c => {
         const payload: ServerCardPayload = {
             id: c.id,
             name: c.name,
             imageUrl: c.imageUrl,
-            imageBackUrl: c.imageBackUrl || null,
+            // CORRECTION ICI : on force null si c.imageBackUrl est undefined
+            imageBackUrl: c.imageBackUrl ?? null,
             quantity: c.quantity,
             price: c.price ?? 0,
             customPrice: c.customPrice,
@@ -41,17 +45,21 @@ const mapCardsForServer = (cards: CardType[]): ServerCardPayload[] => {
             scryfallData: (c.scryfallData as Record<string, unknown>) || null,
             wishlistId: c.wishlistId ?? null,
         };
+        
+        // Nettoyage si customPrice est undefined (car optionnel dans l'interface aussi)
         if (payload.customPrice === undefined) delete payload.customPrice;
+        
         return payload;
     });
 };
 
-// --- TYPE GUARD (La clé pour corriger les erreurs TS) ---
+// Type Guard pour distinguer une carte de collection d'un résultat API brut
 function isCollectionCard(item: CardType | ScryfallRawData): item is CardType {
     return (item as CardType).quantity !== undefined;
 }
 
-// --- TABLEAU DE SÉLECTION (PANIER) ---
+// --- COMPOSANTS UI ---
+
 const TradeSelectionTable = ({ 
     cards, 
     onRemove, 
@@ -105,7 +113,6 @@ const TradeSelectionTable = ({
     );
 };
 
-// --- TABLEAU DU BAS (SOURCE / RÉSULTATS) ---
 const TradeSourceTable = ({ 
     cards, 
     onAdd, 
@@ -113,7 +120,7 @@ const TradeSourceTable = ({
     loading 
 }: { 
     cards: (CardType | ScryfallRawData)[], 
-    onAdd: (c: CardType | ScryfallRawData) => void, // Plus de 'any' ici
+    onAdd: (c: CardType | ScryfallRawData) => void, 
     buttonColorClass: 'text-danger' | 'text-success',
     loading?: boolean
 }) => {
@@ -135,7 +142,6 @@ const TradeSourceTable = ({
                 </thead>
                 <tbody className="divide-y divide-border">
                     {cards.map((item, i) => {
-                        // Utilisation du Type Guard pour extraire les données proprement
                         let name: string;
                         let setCode: string;
                         let collectorNum: string;
@@ -153,7 +159,7 @@ const TradeSourceTable = ({
                             name = item.name;
                             setCode = item.set || '';
                             collectorNum = item.collector_number || '?';
-                            isFoil = false; // Par défaut pour recherche Scryfall
+                            isFoil = false; 
                             quantityDisplay = '-';
                         }
 
@@ -195,8 +201,6 @@ export default function ManualTradePage() {
   // --- ACTIONS ---
 
   const handleAddToGive = (item: CardType | ScryfallRawData) => {
-      // Pour "Je donne", l'item vient forcément de la collection (donc CardType)
-      // Mais le composant générique envoie l'union. On sécurise.
       if (!isCollectionCard(item)) return;
       const card = item;
 
@@ -245,18 +249,22 @@ export default function ManualTradePage() {
       if (toGive.length === 0 && toReceive.length === 0) return;
       if (!confirm("Confirmer cet échange ? Vos cartes données seront retirées de votre collection.")) return;
 
-      const toastId = toast.loading("Validation sécurisée...");
+      const toastId = toast.loading("Validation...");
 
       startTransition(async () => {
+        // CORRECTION MAJEURE ICI :
+        // On passe les données par la fonction de mapping pour convertir
+        // les propriétés 'undefined' en 'null' (pour imageBackUrl notamment).
         const cleanToGive = mapCardsForServer(toGive);
         const cleanToReceive = mapCardsForServer(toReceive);
+        
         const result = await executeManualTrade(user.uid, cleanToGive, cleanToReceive) as { success: boolean; error?: string; };
         
         if (result.success) {
             toast.success("Echange validé !", { id: toastId });
             setToGive([]); setToReceive([]); setLocalSearch("");
         } else {
-            toast.error(result.error || "Erreur lors de l'échange", { id: toastId });
+            toast.error(result.error || "Erreur", { id: toastId });
         }
       });
   };
@@ -289,7 +297,6 @@ export default function ManualTradePage() {
             {/* GAUCHE : JE DONNE */}
             <div className="flex flex-col h-full bg-danger/5 rounded-xl border border-danger/20 overflow-hidden relative shadow-sm">
                 
-                {/* 1. Sélection (Top) */}
                 <div className="flex-2 flex flex-col min-h-0 bg-surface">
                     <div className="flex justify-between items-center p-2 bg-danger/10 border-b border-danger/20">
                         <span className="text-xs font-bold text-danger uppercase">À DONNER ({toGive.reduce((a,c)=>a+c.quantity,0)})</span>
@@ -298,7 +305,6 @@ export default function ManualTradePage() {
                     <TradeSelectionTable cards={toGive} onRemove={(id) => setToGive(p => p.filter(c => c.id !== id))} colorClass="text-danger" emptyLabel="Sélectionnez vos cartes en bas..." />
                 </div>
 
-                {/* 2. Recherche (Middle) */}
                 <div className="p-3 flex-none border-t border-border bg-surface border-b">
                     <div className="flex justify-between items-center mb-2">
                         <h2 className="font-bold text-muted text-xs uppercase tracking-wide">Chercher dans ma Collection</h2>
@@ -307,7 +313,6 @@ export default function ManualTradePage() {
                     <input type="text" placeholder="Filtrer par nom..." className="w-full p-2 rounded-lg border border-border bg-background text-foreground text-sm focus:ring-2 focus:ring-danger outline-none" value={localSearch} onChange={e => setLocalSearch(e.target.value)} />
                 </div>
                 
-                {/* 3. Résultats (Bottom) */}
                 <TradeSourceTable 
                     cards={filteredCollection} 
                     onAdd={handleAddToGive} 
@@ -319,7 +324,6 @@ export default function ManualTradePage() {
             {/* DROITE : JE REÇOIS */}
             <div className="flex flex-col h-full bg-success/5 rounded-xl border border-success/20 overflow-hidden relative shadow-sm">
                 
-                {/* 1. Sélection (Top) */}
                 <div className="flex-2 flex flex-col min-h-0 bg-surface">
                     <div className="flex justify-between items-center p-2 bg-success/10 border-b border-success/20">
                         <span className="text-xs font-bold text-success uppercase">À RECEVOIR ({toReceive.reduce((a,c)=>a+c.quantity,0)})</span>
@@ -328,7 +332,6 @@ export default function ManualTradePage() {
                     <TradeSelectionTable cards={toReceive} onRemove={(id) => setToReceive(p => p.filter((_, idx) => p[idx].id !== id || idx !== p.findIndex(x => x.id === id)))} colorClass="text-success" emptyLabel="Recherchez des cartes en bas..." />
                 </div>
 
-                {/* 2. Recherche (Middle) */}
                 <div className="p-3 flex-none border-t border-border bg-surface border-b">
                     <h2 className="font-bold text-muted text-xs uppercase tracking-wide mb-2">Recherche Scryfall</h2>
                     <form onSubmit={handleSearchScryfall} className="flex gap-2">
@@ -337,11 +340,9 @@ export default function ManualTradePage() {
                     </form>
                 </div>
 
-                {/* 3. Résultats (Bottom) */}
                 <TradeSourceTable 
                     cards={uniqueSearchResults} 
                     onAdd={(item) => { 
-                        // Ici c'est ScryfallRawData, donc on ouvre la modale
                         if (!isCollectionCard(item)) setCardToPick(item); 
                     }} 
                     buttonColorClass="text-success" 
@@ -350,7 +351,6 @@ export default function ManualTradePage() {
             </div>
         </div>
 
-        {/* FOOTER */}
         <div className="fixed bottom-0 left-0 right-0 h-20 bg-surface border-t border-border flex justify-between items-center px-6 z-40 shadow-sm">
             <div className="hidden sm:block flex-1"></div>
             <div className="flex-1 flex flex-col items-center justify-center">
@@ -361,7 +361,7 @@ export default function ManualTradePage() {
             </div>
             <div className="flex-1 flex justify-end">
                 <button onClick={handleValidate} disabled={isPending || (toGive.length === 0 && toReceive.length === 0)} className="btn-primary px-6 py-3 disabled:opacity-50 text-sm">
-                    {isPending ? 'Validation...' : 'Valider l\'échange'}
+                    {isPending ? 'Validation...' : 'Valider'}
                 </button>
             </div>
         </div>

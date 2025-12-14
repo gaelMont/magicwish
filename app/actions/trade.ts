@@ -1,12 +1,11 @@
-// app/actions/trade.ts
 'use server';
 
 import { getAdminFirestore } from '@/lib/firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
 import { z } from 'zod'; 
 import { TradeExecutionSchema, ValidatedCard, CardSchema } from '@/lib/validators';
+import { updateUserStats } from '@/app/actions/stats'; // <--- IMPORT
 
-// Interface stricte des données de carte sérialisables pour le serveur (pour le typage TypeScript des arguments)
 interface ServerCardPayload {
     id: string;
     name: string;
@@ -23,7 +22,6 @@ interface ServerCardPayload {
     wishlistId: string | null;
 }
 
-// Helper pour préparer la donnée propre pour Firestore (utilise ValidatedCard)
 const createCardData = (card: ValidatedCard) => {
     return {
         name: card.name,
@@ -42,18 +40,17 @@ const createCardData = (card: ValidatedCard) => {
     };
 };
 
-// --- ACTION 1 : ÉCHANGE P2P SÉCURISÉ ---
+// --- ACTION 1 : ÉCHANGE P2P ---
 export async function executeServerTrade(
     tradeId: string,
     senderUid: string,
     receiverUid: string,
-    itemsGivenRaw: ServerCardPayload[], // Type strict ici
-    itemsReceivedRaw: ServerCardPayload[] // Type strict ici
+    itemsGivenRaw: ServerCardPayload[],
+    itemsReceivedRaw: ServerCardPayload[]
 ) {
     const db = getAdminFirestore();
 
     try {
-        // 1. VALIDATION STRICTE AVEC ZOD
         const validation = TradeExecutionSchema.safeParse({
             tradeId,
             senderUid,
@@ -63,28 +60,23 @@ export async function executeServerTrade(
         });
 
         if (!validation.success) {
-            // Log Zod pour aider au debug
             console.error("Zod Validation Error:", validation.error);
-            throw new Error("Données d'échange invalides : " + validation.error.message);
+            throw new Error("Données d'échange invalides.");
         }
 
-        // Utilisation du type ValidatedCard après la validation Zod
         const itemsGiven = validation.data.itemsGiven as ValidatedCard[]; 
         const itemsReceived = validation.data.itemsReceived as ValidatedCard[];
 
         await db.runTransaction(async (t) => {
-            // PHASE 1 : TOUTES LES LECTURES
-            
             const tradeRef = db.doc(`trades/${tradeId}`);
             const tradeSnap = await t.get(tradeRef);
             if (!tradeSnap.exists) throw new Error("Échange introuvable");
             
             const tradeData = tradeSnap.data();
             if (tradeData?.status !== 'pending') {
-                throw new Error(`Cet échange n'est plus en attente (Status: ${tradeData?.status}).`);
+                throw new Error("Cet échange n'est plus en attente.");
             }
 
-            // B. Lire les stocks Expéditeur
             const senderStockSnaps = [];
             for (const card of itemsGiven) {
                 const ref = db.doc(`users/${senderUid}/collection/${card.id}`);
@@ -92,7 +84,6 @@ export async function executeServerTrade(
                 senderStockSnaps.push({ ref, card, snap });
             }
 
-            // C. Lire les stocks Receveur
             const receiverStockSnaps = [];
             for (const card of itemsReceived) {
                 const ref = db.doc(`users/${receiverUid}/collection/${card.id}`);
@@ -100,7 +91,6 @@ export async function executeServerTrade(
                 receiverStockSnaps.push({ ref, card, snap });
             }
 
-            // D. Lire les destinations
             const senderDestSnaps = [];
             for (const card of itemsReceived) {
                 const ref = db.doc(`users/${senderUid}/collection/${card.id}`);
@@ -115,60 +105,37 @@ export async function executeServerTrade(
                 receiverDestSnaps.push({ ref, card, snap });
             }
 
-            // PHASE 2 : TOUTES LES ÉCRITURES
+            t.update(tradeRef, { status: 'completed', completedAt: FieldValue.serverTimestamp() });
 
-            // 1. Mise à jour du statut de l'échange
-            t.update(tradeRef, { 
-                status: 'completed',
-                completedAt: FieldValue.serverTimestamp()
-            });
-
-            // 2. RETIRER les cartes de l'Expéditeur
             for (const item of senderStockSnaps) {
-                if (!item.snap.exists || (item.snap.data()?.quantity || 0) < item.card.quantity) {
-                    throw new Error(`Erreur: ${item.card.name} manquante chez l'expéditeur.`);
-                }
-                if (item.snap.data()?.quantity === item.card.quantity) {
-                    t.delete(item.ref);
-                } else {
-                    t.update(item.ref, { quantity: FieldValue.increment(-item.card.quantity) });
-                }
+                if (!item.snap.exists || (item.snap.data()?.quantity || 0) < item.card.quantity) throw new Error(`Erreur stock expéditeur: ${item.card.name}`);
+                if (item.snap.data()?.quantity === item.card.quantity) t.delete(item.ref);
+                else t.update(item.ref, { quantity: FieldValue.increment(-item.card.quantity) });
             }
 
-            // 3. RETIRER les cartes du Receveur
             for (const item of receiverStockSnaps) {
-                if (!item.snap.exists || (item.snap.data()?.quantity || 0) < item.card.quantity) {
-                    throw new Error(`Erreur: ${item.card.name} manquante chez le partenaire.`);
-                }
-                if (item.snap.data()?.quantity === item.card.quantity) {
-                    t.delete(item.ref);
-                } else {
-                    t.update(item.ref, { quantity: FieldValue.increment(-item.card.quantity) });
-                }
+                if (!item.snap.exists || (item.snap.data()?.quantity || 0) < item.card.quantity) throw new Error(`Erreur stock receveur: ${item.card.name}`);
+                if (item.snap.data()?.quantity === item.card.quantity) t.delete(item.ref);
+                else t.update(item.ref, { quantity: FieldValue.increment(-item.card.quantity) });
             }
 
-            // 4. AJOUTER chez l'Expéditeur + Clean Wishlist
             for (const item of senderDestSnaps) {
                 const wishRef = db.doc(`users/${senderUid}/wishlist/${item.card.id}`);
-                if (item.snap.exists) {
-                    t.update(item.ref, { quantity: FieldValue.increment(item.card.quantity) });
-                } else {
-                    t.set(item.ref, createCardData(item.card));
-                }
+                if (item.snap.exists) t.update(item.ref, { quantity: FieldValue.increment(item.card.quantity) });
+                else t.set(item.ref, createCardData(item.card));
                 t.delete(wishRef); 
             }
 
-            // 5. AJOUTER chez le Receveur + Clean Wishlist
             for (const item of receiverDestSnaps) {
                 const wishRef = db.doc(`users/${receiverUid}/wishlist/${item.card.id}`);
-                if (item.snap.exists) {
-                    t.update(item.ref, { quantity: FieldValue.increment(item.card.quantity) });
-                } else {
-                    t.set(item.ref, createCardData(item.card));
-                }
+                if (item.snap.exists) t.update(item.ref, { quantity: FieldValue.increment(item.card.quantity) });
+                else t.set(item.ref, createCardData(item.card));
                 t.delete(wishRef);
             }
         });
+
+        // --- OPTIMISATION : Mise à jour asynchrone des stats ---
+        Promise.all([updateUserStats(senderUid), updateUserStats(receiverUid)]).catch(err => console.error("Stats update failed", err));
 
         return { success: true };
 
@@ -176,36 +143,29 @@ export async function executeServerTrade(
         console.error("Trade Error:", error);
         let errorMessage = "Une erreur inconnue est survenue";
         if (error instanceof Error) errorMessage = error.message;
-        else if (typeof error === "string") errorMessage = error;
         return { success: false, error: errorMessage };
     }
 }
 
-// --- ACTION 2 : ÉCHANGE MANUEL (SOLO) ---
+// --- ACTION 2 : ÉCHANGE MANUEL ---
 export async function executeManualTrade(
     userId: string,
-    itemsGivenRaw: ServerCardPayload[], // Type strict ici
-    itemsReceivedRaw: ServerCardPayload[] // Type strict ici
+    itemsGivenRaw: ServerCardPayload[], 
+    itemsReceivedRaw: ServerCardPayload[] 
 ) {
     const db = getAdminFirestore();
 
     try {
-        // Validation stricte : On utilise Zod pour valider les tableaux
         const ItemsSchema = z.array(CardSchema);
-        
         const parsedGiven = ItemsSchema.safeParse(itemsGivenRaw);
         const parsedReceived = ItemsSchema.safeParse(itemsReceivedRaw);
 
-        if (!parsedGiven.success || !parsedReceived.success) {
-             throw new Error("Données invalides pour l'échange manuel.");
-        }
+        if (!parsedGiven.success || !parsedReceived.success) throw new Error("Données invalides.");
 
-        // Utilisation du type ValidatedCard après la validation Zod
         const itemsGiven = parsedGiven.data as ValidatedCard[];
         const itemsReceived = parsedReceived.data as ValidatedCard[];
 
         await db.runTransaction(async (t) => {
-            // PHASE 1 : LECTURES
             const stockSnaps = [];
             for (const card of itemsGiven) {
                 const ref = db.doc(`users/${userId}/collection/${card.id}`);
@@ -220,28 +180,22 @@ export async function executeManualTrade(
                 destSnaps.push({ ref, card, snap });
             }
 
-            // PHASE 2 : ÉCRITURES
             for (const item of stockSnaps) {
-                if (!item.snap.exists || (item.snap.data()?.quantity || 0) < item.card.quantity) {
-                    throw new Error(`Erreur: Vous ne possédez pas assez de "${item.card.name}".`);
-                }
-                if (item.snap.data()?.quantity === item.card.quantity) {
-                    t.delete(item.ref);
-                } else {
-                    t.update(item.ref, { quantity: FieldValue.increment(-item.card.quantity) });
-                }
+                if (!item.snap.exists || (item.snap.data()?.quantity || 0) < item.card.quantity) throw new Error(`Stock insuffisant: ${item.card.name}`);
+                if (item.snap.data()?.quantity === item.card.quantity) t.delete(item.ref);
+                else t.update(item.ref, { quantity: FieldValue.increment(-item.card.quantity) });
             }
 
             for (const item of destSnaps) {
                 const wishRef = db.doc(`users/${userId}/wishlist/${item.card.id}`);
-                if (item.snap.exists) {
-                    t.update(item.ref, { quantity: FieldValue.increment(item.card.quantity) });
-                } else {
-                    t.set(item.ref, createCardData(item.card));
-                }
+                if (item.snap.exists) t.update(item.ref, { quantity: FieldValue.increment(item.card.quantity) });
+                else t.set(item.ref, createCardData(item.card));
                 t.delete(wishRef);
             }
         });
+
+        // --- OPTIMISATION : Mise à jour stats ---
+        updateUserStats(userId).catch(err => console.error("Stats update failed", err));
 
         return { success: true };
 

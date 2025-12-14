@@ -1,4 +1,3 @@
-// components/ImportModal.tsx
 'use client';
 
 import React, { useState, useMemo, useEffect } from 'react';
@@ -8,8 +7,8 @@ import { db } from '@/lib/firebase';
 import { doc, writeBatch, increment } from 'firebase/firestore';
 import toast from 'react-hot-toast';
 import AdContainer from './AdContainer'; 
-
-// --- Types unifiés pour l'Import/Sync (strictement typé) ---
+import { updateUserStats } from '@/app/actions/stats';
+import { checkWishlistMatch } from '@/app/actions/matching'; // <--- IMPORT
 
 type ManaboxRow = {
   "Binder Name": string;
@@ -27,7 +26,6 @@ type ManaboxRow = {
   "Condition": string;
 };
 
-// Structures de sous-objets pour les objets Scryfall
 interface ScryfallImageUris {
     normal?: string;
 }
@@ -55,8 +53,6 @@ type ExistingCard = {
   foil?: boolean;
 };
 
-// --- Props mises à jour ---
-
 type ImportModalProps = {
   isOpen: boolean;
   onClose: () => void;
@@ -77,40 +73,28 @@ const chunkArray = <T,>(array: T[], size: number): T[][] => {
 };
 
 const getCardInfo = (scryfallCard: ScryfallCard) => {
-    
-    // 1. Définition des valeurs initiales
     let name = scryfallCard.name as string;
     let imageUrl = scryfallCard.image_uris?.normal;
     let imageBackUrl: string | null = null;
     
-    // 2. Vérification des faces de carte (pour les cartes double face)
     const cardFaces = scryfallCard.card_faces;
 
     if (cardFaces && cardFaces.length > 1) {
-        // Face 1 (Recto)
         name = cardFaces[0].name;
-
-        // Si l'image de la face 1 est meilleure que l'image globale (ou si l'image globale n'existe pas)
         if (!imageUrl && cardFaces[0].image_uris?.normal) {
             imageUrl = cardFaces[0].image_uris.normal;
         }
-
-        // Face 2 (Verso)
         if (cardFaces[1]?.image_uris?.normal) {
             imageBackUrl = cardFaces[1].image_uris.normal;
         }
     }
     
-    // 3. Fallback pour l'URL d'image
     if (!imageUrl) {
         imageUrl = "https://cards.scryfall.io/large/front/a/6/a6984342-f723-4e80-8e69-902d287a915f.jpg";
     }
 
-    // Le retour est propre : imageUrl est toujours une chaîne, imageBackUrl est string ou null.
     return { name, imageUrl, imageBackUrl };
 };
-
-// --- Composant ImportModal ---
 
 export default function ImportModal({ 
     isOpen, 
@@ -190,7 +174,7 @@ export default function ImportModal({
     });
 
     if (rows.length === 0) {
-        toast.error("Format de texte non reconnu. (Attendu: Qty Nom (Set Code) Num)");
+        toast.error("Format de texte non reconnu.");
         return;
     }
     setColumns(["Name", "Set code", "Quantity", "Foil", "Collector number"]);
@@ -232,7 +216,6 @@ export default function ImportModal({
     let processedCount = skippedCount; 
     let successCount = 0; 
 
-    // --- MISE À JOUR RAPIDE DES CARTES EXISTANTES ---
     if (rowsToUpdateDirectly.length > 0) {
         setStatusMsg("Mise à jour rapide des cartes existantes...");
         const updateChunks = chunkArray(rowsToUpdateDirectly, 400);
@@ -260,9 +243,8 @@ export default function ImportModal({
         }
     }
 
-    // --- IDENTIFICATION ET CRÉATION DES NOUVELLES CARTES ---
     if (rowsToFetch.length > 0) {
-        setStatusMsg("Identification des cartes (Scryfall)...");
+        setStatusMsg("Identification des cartes...");
         const fetchChunks = chunkArray(rowsToFetch, 75);
 
         for (const chunk of fetchChunks) {
@@ -354,9 +336,32 @@ export default function ImportModal({
     }
 
     toast.success(`${successCount} cartes synchronisée(s) !`, { duration: 4000 });
+    
+    // --- GESTION DES ACTIONS POST-IMPORT ---
+    if (targetCollection === 'collection') {
+        // Recalcul des stats si import en collection
+        updateUserStats(user.uid).catch(e => console.error("Erreur update stats BG", e));
+    } 
+    else if (targetCollection === 'wishlist') {
+        // NOUVEAU : Scan des matchs pour la Wishlist
+        // On récupère les cartes ajoutées (simplifié via 'data')
+        const cardsToCheck = data.map(row => ({
+            id: row["Scryfall ID"] || '', // ID optionnel, le nom suffit pour la recherche
+            name: row["Name"],
+            isFoil: row["Foil"] === "true"
+        })).filter(c => c.name); // Sécurité
+
+        if (cardsToCheck.length > 0) {
+            checkWishlistMatch(user.uid, cardsToCheck).then(res => {
+                 if (res.matches && res.matches > 0) {
+                     toast(`🎉 ${res.matches} cartes trouvées chez vos amis !`, { icon: '🔔', duration: 5000 });
+                 }
+            });
+        }
+    }
+
     onCloseAll();
   };
-
 
   if (!isOpen) return null;
 
@@ -365,7 +370,7 @@ export default function ImportModal({
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 backdrop-blur-sm" onClick={() => step !== 'importing' && onGoBack()}>
       <div 
-        className="bg-surface rounded-xl p-6 max-w-5xl w-full shadow-2xl border border-border flex flex-col max-h-[90vh] animate-in fade-in duration-200"
+        className="bg-surface rounded-xl p-6 max-w-5xl w-full shadow-2xl border border-border flex flex-col max-h-[90vh]"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex-none flex justify-between items-center mb-4 border-b border-border pb-3">
@@ -383,7 +388,6 @@ export default function ImportModal({
         </div>
 
         <div className="grow overflow-hidden flex flex-col min-h-0">
-            
             {step === 'upload' && (
                 <div className="flex flex-col h-full overflow-hidden">
                     <p className="text-sm text-muted mb-4 flex-none">
@@ -406,7 +410,7 @@ export default function ImportModal({
                                 value={textInput} 
                                 onChange={(e) => setTextInput(e.target.value)} 
                                 rows={15} 
-                                placeholder="Collez votre liste ici. Format recommandé : Qty Nom (Code Set) Numéro" 
+                                placeholder="Collez votre liste ici..." 
                                 className="grow w-full p-4 rounded-lg border border-border bg-background text-foreground font-mono text-xs focus:ring-2 focus:ring-primary outline-none resize-none" 
                             />
                             <p className="text-xs text-muted my-2 text-center">Ex: 4 Sol Ring (CMD) 100</p>

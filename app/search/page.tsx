@@ -9,6 +9,7 @@ import { CardType } from '@/hooks/useCardCollection';
 import { useWishlists } from '@/hooks/useWishlists';
 import CardVersionPickerModal from '@/components/CardVersionPickerModal';
 import toast from 'react-hot-toast';
+import { checkWishlistMatch } from '@/app/actions/matching'; 
 
 export default function SearchPage() {
   const { user } = useAuth();
@@ -26,16 +27,26 @@ export default function SearchPage() {
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!query.trim()) return;
+
     setIsSearching(true);
     setHasSearched(true);
     setResults([]);
+
     try {
         const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
         const data = await res.json();
-        if (data.data) setResults(data.data);
-        else toast.error("Aucune carte trouvée.");
-    } catch (error) { console.error(error); toast.error("Erreur de recherche."); } 
-    finally { setIsSearching(false); }
+        
+        if (data.data) {
+            setResults(data.data);
+        } else {
+            toast.error("Aucune carte trouvée.");
+        }
+    } catch (error) {
+        console.error(error);
+        toast.error("Erreur de recherche.");
+    } finally {
+        setIsSearching(false);
+    }
   };
 
   const openPicker = (card: ScryfallRawData, destination: 'collection' | 'wishlist') => {
@@ -46,22 +57,54 @@ export default function SearchPage() {
 
   const handleConfirmAdd = async (card: CardType, targetListId: string = 'default') => {
       if (!user) return;
+
       const destLabel = targetDestination === 'collection' ? 'Collection' : 'Wishlist';
       const toastId = toast.loading(`Ajout à : ${destLabel}...`);
+      
       try {
           let collectionPath = 'collection';
           if (targetDestination === 'wishlist') {
-              if (targetListId === 'default') collectionPath = 'wishlist';
-              else collectionPath = `wishlists_data/${targetListId}/cards`;
+              if (targetListId === 'default') {
+                  collectionPath = 'wishlist';
+              } else {
+                  collectionPath = `wishlists_data/${targetListId}/cards`;
+              }
           }
+
           const cardRef = doc(db, 'users', user.uid, collectionPath, card.id);
+
           const dataToSave = {
-              ...card, imageBackUrl: card.imageBackUrl || null, addedAt: serverTimestamp(),
-              wishlistId: targetDestination === 'wishlist' ? targetListId : null, isForTrade: false 
+              ...card,
+              imageBackUrl: card.imageBackUrl || null,
+              addedAt: serverTimestamp(),
+              wishlistId: targetDestination === 'wishlist' ? targetListId : null, 
+              isForTrade: false 
           };
-          await setDoc(cardRef, { ...dataToSave, quantity: increment(card.quantity) }, { merge: true });
+
+          await setDoc(cardRef, {
+              ...dataToSave,
+              quantity: increment(card.quantity)
+          }, { merge: true });
+
           toast.success(`Ajouté avec succès !`, { id: toastId });
-      } catch (error) { console.error(error); toast.error("Erreur ajout", { id: toastId }); }
+
+          // --- DÉCLENCHEUR SCAN WISHLIST ---
+          if (targetDestination === 'wishlist') {
+              checkWishlistMatch(user.uid, [{ 
+                  id: card.id, 
+                  name: card.name, 
+                  isFoil: !!card.isFoil 
+              }]).then(res => {
+                  if (res.matches && res.matches > 0) {
+                      toast(`🎉 ${res.matches} ami(s) possèdent cette carte !`, { icon: '🔔', duration: 5000 });
+                  }
+              });
+          }
+
+      } catch (error) {
+          console.error(error);
+          toast.error("Erreur lors de l'ajout", { id: toastId });
+      }
   };
 
   const uniqueResults = useMemo(() => {
