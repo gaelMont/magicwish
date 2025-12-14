@@ -176,26 +176,38 @@ function MagicCard(props: MagicCardProps) {
 
         {/* TAGS */}
         <div className={`flex flex-wrap gap-1 mb-auto ${isSelectMode ? 'pointer-events-none opacity-50' : ''}`}>
-            {onToggleAttribute ? (
-                <button 
-                    onClick={(e) => { e.stopPropagation(); onToggleAttribute('isFoil', !!isFoil); }}
-                    className={`text-[9px] px-1.5 py-0.5 rounded border transition-colors font-medium flex-1 text-center ${
-                        isFoil ? 'bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-900/30 dark:text-amber-400 dark:border-amber-800' : 'bg-secondary text-muted border-transparent hover:bg-border'
+            {/* BADGE FOIL NON CLIQUABLE POUR LA COLLECTION */}
+            {!isWishlist && (
+                <span className={`text-[9px] px-1.5 py-0.5 rounded border font-medium flex-1 text-center ${
+                        isFoil 
+                        ? 'bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-900/30 dark:text-amber-400 dark:border-amber-800' 
+                        : 'bg-secondary text-muted border-transparent'
                     }`}
                 >
                     {isFoil ? 'Foil' : 'Normal'}
-                </button>
-            ) : null}
+                </span>
+            )}
 
+            {/* TOGGLES CLIQUABLES POUR LA WISHLIST UNIQUEMENT */}
             {isWishlist && onToggleAttribute && (
-                <button 
-                    onClick={(e) => { e.stopPropagation(); onToggleAttribute('isSpecificVersion', !!isSpecificVersion); }}
-                    className={`text-[9px] px-1.5 py-0.5 rounded border transition-colors font-medium flex-1 text-center ${
-                        isSpecificVersion ? 'bg-primary/10 text-primary border-primary/30' : 'bg-secondary text-muted border-transparent'
-                    }`}
-                >
-                    {isSpecificVersion ? 'Exact' : 'Auto'}
-                </button>
+                <>
+                    <button 
+                        onClick={(e) => { e.stopPropagation(); onToggleAttribute('isFoil', !!isFoil); }}
+                        className={`text-[9px] px-1.5 py-0.5 rounded border transition-colors font-medium flex-1 text-center ${
+                            isFoil ? 'bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-900/30 dark:text-amber-400 dark:border-amber-800' : 'bg-secondary text-muted border-transparent hover:bg-border'
+                        }`}
+                    >
+                        {isFoil ? 'Foil' : 'Normal'}
+                    </button>
+                    <button 
+                        onClick={(e) => { e.stopPropagation(); onToggleAttribute('isSpecificVersion', !!isSpecificVersion); }}
+                        className={`text-[9px] px-1.5 py-0.5 rounded border transition-colors font-medium flex-1 text-center ${
+                            isSpecificVersion ? 'bg-primary/10 text-primary border-primary/30' : 'bg-secondary text-muted border-transparent'
+                        }`}
+                    >
+                        {isSpecificVersion ? 'Exact' : 'Auto'}
+                    </button>
+                </>
             )}
             
             {isWishlist && !readOnly && !isSelectMode && onMove && (
@@ -209,7 +221,7 @@ function MagicCard(props: MagicCardProps) {
             )}
         </div>
         
-        {/* FOOTER : CORRECTION FLEXBOX (Plus robuste pour les petits espaces) */}
+        {/* FOOTER */}
         <div className={`mt-2 border-t border-border pt-1.5 flex justify-between items-center min-h-[26px] ${isSelectMode ? 'pointer-events-none opacity-50' : ''}`}>
             
             {/* 1. QUANTITE (GAUCHE) */}
@@ -221,7 +233,7 @@ function MagicCard(props: MagicCardProps) {
                 </div>
             </div>
 
-            {/* 2. TRADE (CENTRE) - Flex Shrinkable mais priorité au contenu */}
+            {/* 2. TRADE (CENTRE) */}
             <div className="shrink-0 flex justify-center mx-1">
                 {!isWishlist && !readOnly && !isSelectMode && (
                     <div className="flex items-center bg-success/10 border border-success/20 rounded-[4px] p-[1px] h-[20px]">

@@ -1,3 +1,4 @@
+// app/card/[id]/page.tsx
 'use client';
 
 import { use, useEffect, useState, useMemo } from 'react';
@@ -7,68 +8,15 @@ import { useAuth } from '@/lib/AuthContext';
 import { useCardCollection, CardType } from '@/hooks/useCardCollection'; 
 import { normalizeCardData, ScryfallRawData } from '@/lib/cardUtils'; 
 import Link from 'next/link';
-import toast from 'react-hot-toast';
 import { useSearchParams } from 'next/navigation';
 
 // Imports des composants séparés
 import CardMainDetails from '@/components/card-page/CardMainDetails';
 import CardVersionsGrid from '@/components/card-page/CardVersionsGrid';
+import DualQuantityManager from '@/components/card-page/DualQuantityManager'; // <--- IMPORT DU NOUVEAU COMPOSANT
 
 type CardDetailPageProps = {
     params: Promise<{ id: string }>;
-};
-
-// Composant local simple pour la gestion du stock
-const QuantityManager = ({ card }: { card: CardType }) => {
-    const { updateQuantity, removeCard, setTradeQuantity } = useCardCollection('collection'); 
-    
-    const maxStock = card.quantity;
-    const [tradeQtyInput, setTradeQtyInput] = useState(card.quantityForTrade ?? 0);
-    const [isUpdatingTrade, setIsUpdatingTrade] = useState(false);
-
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    useEffect(() => setTradeQtyInput(card.quantityForTrade ?? 0), [card.quantityForTrade]);
-    
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    useEffect(() => { if (tradeQtyInput > maxStock) setTradeQtyInput(maxStock); }, [maxStock, tradeQtyInput]);
-
-    const handleSaveTradeQty = async () => {
-        if (!card.id || tradeQtyInput > maxStock || tradeQtyInput < 0) return;
-        setIsUpdatingTrade(true);
-        await setTradeQuantity(card.id, tradeQtyInput);
-        setIsUpdatingTrade(false);
-        toast.success(`Statut d'échange mis à jour.`);
-    };
-
-    const handleUpdateStock = async (amount: 1 | -1) => {
-        const result = await updateQuantity(card.id, amount, card.quantity);
-        if (result === 'shouldDelete') {
-            if (confirm("Supprimer la carte de la collection ?")) removeCard(card.id);
-        }
-    };
-
-    return (
-        <div className="bg-surface p-6 rounded-xl border border-border shadow-md space-y-4">
-            <h2 className="text-xl font-bold text-foreground mb-3">Gestion du Stock</h2>
-            <div className="flex justify-between items-center bg-background p-3 rounded-lg border border-border">
-                <p className="font-medium text-sm">Quantité Totale:</p>
-                <div className="flex items-center gap-2">
-                    <button onClick={() => handleUpdateStock(-1)} className="p-1 w-8 h-8 rounded-full bg-secondary hover:bg-border text-muted font-bold transition">-</button>
-                    <span className="text-lg font-bold text-primary w-8 text-center">{card.quantity}</span>
-                    <button onClick={() => handleUpdateStock(1)} className="p-1 w-8 h-8 rounded-full bg-primary/10 hover:bg-primary/20 text-primary font-bold transition">+</button>
-                </div>
-            </div>
-            <div className="flex flex-col bg-background p-3 rounded-lg border border-border">
-                <label className="font-medium text-sm mb-2">Quantité à l&apos;échange (max {maxStock}) :</label>
-                <div className="flex items-center gap-3">
-                    <input type="number" min="0" max={maxStock} value={tradeQtyInput} onChange={(e) => setTradeQtyInput(Math.min(maxStock, Math.max(0, parseInt(e.target.value) || 0)))} className="w-20 p-2 border border-border rounded-lg text-center bg-surface font-bold text-foreground" />
-                    <button onClick={handleSaveTradeQty} disabled={isUpdatingTrade || tradeQtyInput === (card.quantityForTrade ?? 0) || tradeQtyInput > maxStock} className="bg-success hover:opacity-90 disabled:opacity-50 text-white px-4 py-2 rounded-lg text-sm font-bold transition grow">
-                        {isUpdatingTrade ? 'Sauvegarde...' : 'Définir l\'échange'}
-                    </button>
-                </div>
-            </div>
-        </div>
-    );
 };
 
 export default function CardDetailPage({ params }: CardDetailPageProps) {
@@ -152,8 +100,6 @@ export default function CardDetailPage({ params }: CardDetailPageProps) {
     if (loading) return <div className="p-10 text-center text-muted animate-pulse">Chargement des détails de la carte...</div>;
     if (!card) return <div className="p-10 text-center text-danger">Carte introuvable.</div>;
 
-    // --- CORRECTION DU BUG ICI ---
-    // On sécurise l'accès aux données : si scryfallData est null, on utilise les propriétés directes de 'card'
     const displayData = card.scryfallData 
         ? normalizeCardData(card.scryfallData as ScryfallRawData)
         : { 
@@ -166,7 +112,6 @@ export default function CardDetailPage({ params }: CardDetailPageProps) {
         };
 
     const { name, imageUrl, imageBackUrl, setName } = displayData;
-    // ----------------------------
 
     const isDoubleSided = !!imageBackUrl;
     const oracleId = (card.scryfallData as ScryfallRawData)?.oracle_id as string | undefined;
@@ -183,7 +128,7 @@ export default function CardDetailPage({ params }: CardDetailPageProps) {
                         onClick={() => setShowAllVersions(!showAllVersions)}
                         className="bg-secondary hover:bg-border text-foreground px-4 py-2 rounded-lg text-sm font-bold transition flex items-center gap-2"
                      >
-                        {showAllVersions ? 'Afficher les Détails' : 'Voir toutes les Editions'}
+                        {showAllVersions ? 'Afficher les Détails' : 'Voir toutes les Éditions'}
                      </button>
                 )}
             </div>
@@ -224,7 +169,10 @@ export default function CardDetailPage({ params }: CardDetailPageProps) {
 
                     {/* DROITE : DÉTAILS & ACTIONS */}
                     <div className="md:col-span-2 space-y-6">
-                        {isOwner && <QuantityManager card={card} />}
+                        {isOwner && (
+                            // Utilisation du nouveau composant
+                            <DualQuantityManager card={card} />
+                        )}
                         <CardMainDetails cardData={card} />
                     </div>
                 </div>
