@@ -1,4 +1,3 @@
-// app/card/[id]/page.tsx
 'use client';
 
 import { use, useEffect, useState, useMemo } from 'react';
@@ -21,18 +20,15 @@ type CardDetailPageProps = {
 
 // Composant local simple pour la gestion du stock
 const QuantityManager = ({ card }: { card: CardType }) => {
-    // On utilise le hook ici pour avoir accès aux fonctions d'update
     const { updateQuantity, removeCard, setTradeQuantity } = useCardCollection('collection'); 
     
     const maxStock = card.quantity;
     const [tradeQtyInput, setTradeQtyInput] = useState(card.quantityForTrade ?? 0);
     const [isUpdatingTrade, setIsUpdatingTrade] = useState(false);
 
-    // Synchronisation locale si la prop change (ex: après un update DB)
     // eslint-disable-next-line react-hooks/set-state-in-effect
     useEffect(() => setTradeQtyInput(card.quantityForTrade ?? 0), [card.quantityForTrade]);
     
-    // Sécurité : ne jamais dépasser le stock max
     // eslint-disable-next-line react-hooks/set-state-in-effect
     useEffect(() => { if (tradeQtyInput > maxStock) setTradeQtyInput(maxStock); }, [maxStock, tradeQtyInput]);
 
@@ -81,15 +77,12 @@ export default function CardDetailPage({ params }: CardDetailPageProps) {
     const cardId = unwrappedParams.id;
     const searchParams = useSearchParams();
     
-    // Récupération de l'URL de retour (si présente)
     const returnTo = searchParams.get('returnTo');
     const backLink = returnTo ? decodeURIComponent(returnTo) : '/collection';
     const backLabel = returnTo ? (returnTo.includes('user') ? 'Retour au profil' : 'Retour') : 'Retour à la collection';
 
-    // 1. CHARGEMENT TEMPS RÉEL (C'est la clé de la correction)
     const { cards: collectionCards, loading: collectionLoading } = useCardCollection('collection'); 
     
-    // On prépare une Map pour le composant VersionGrid (optimisation)
     const collectionMap = useMemo(() => {
         const map = new Map<string, CardType>();
         collectionCards.forEach(c => map.set(c.id, c));
@@ -101,36 +94,28 @@ export default function CardDetailPage({ params }: CardDetailPageProps) {
     const [isFlipped, setIsFlipped] = useState(false); 
     const [showAllVersions, setShowAllVersions] = useState(false);
 
-    // 2. USE EFFECT CORRIGÉ : Priorité aux données Live
     useEffect(() => {
         if (!user) { setLoading(false); return; }
 
-        // A. Est-ce que la carte est dans ma collection Live ?
         const liveCard = collectionCards.find(c => c.id === cardId);
 
         if (liveCard) {
-            // OUI : On utilise la donnée live (qui contient la quantité à jour)
             setCard(liveCard);
             setLoading(false);
         } else if (!collectionLoading) {
-            // NON : Si le chargement de la collection est fini et qu'elle n'y est pas,
-            // on cherche ailleurs (Wishlist ou API) juste pour l'affichage.
             const fetchFallback = async () => {
                 setLoading(true);
                 try {
-                    // Vérif Wishlist (One-shot fetch)
                     const snap = await getDoc(doc(db, 'users', user.uid, 'wishlist', cardId));
                     
                     if (snap.exists()) {
                         setCard({ id: snap.id, ...snap.data(), uid: user.uid } as CardType); 
                     } else {
-                        // Fallback Scryfall (API) si pas dans la DB
                         try {
                             const scryRes = await fetch(`https://api.scryfall.com/cards/${cardId}`);
                             if (scryRes.ok) {
                                 const scryData = await scryRes.json();
                                 const normalized = normalizeCardData(scryData);
-                                // On crée un objet "virtuel" pour l'affichage
                                 setCard({ ...normalized, quantity: 0, uid: '', wishlistId: undefined, isFoil: false, isSpecificVersion: false, quantityForTrade: 0 } as CardType);
                             } else {
                                 console.error("Carte introuvable sur Scryfall");
@@ -167,12 +152,26 @@ export default function CardDetailPage({ params }: CardDetailPageProps) {
     if (loading) return <div className="p-10 text-center text-muted animate-pulse">Chargement des détails de la carte...</div>;
     if (!card) return <div className="p-10 text-center text-danger">Carte introuvable.</div>;
 
-    const { name, imageUrl, imageBackUrl, setName } = normalizeCardData(card.scryfallData as ScryfallRawData);
+    // --- CORRECTION DU BUG ICI ---
+    // On sécurise l'accès aux données : si scryfallData est null, on utilise les propriétés directes de 'card'
+    const displayData = card.scryfallData 
+        ? normalizeCardData(card.scryfallData as ScryfallRawData)
+        : { 
+            name: card.name, 
+            imageUrl: card.imageUrl, 
+            imageBackUrl: card.imageBackUrl, 
+            setName: card.setName, 
+            setCode: card.setCode,
+            price: card.price
+        };
+
+    const { name, imageUrl, imageBackUrl, setName } = displayData;
+    // ----------------------------
+
     const isDoubleSided = !!imageBackUrl;
     const oracleId = (card.scryfallData as ScryfallRawData)?.oracle_id as string | undefined;
     const displayImage = isFlipped && imageBackUrl ? imageBackUrl : imageUrl;
     
-    // On vérifie si l'utilisateur est propriétaire via l'UID du contexte ou si la carte vient de la collection live
     const isOwner = (!!card.uid && user.uid === card.uid) || collectionMap.has(card.id); 
     
     return (
