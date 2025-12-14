@@ -1,105 +1,36 @@
+// components/ImportModal.tsx
 'use client';
 
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import Papa from 'papaparse';
 import { useAuth } from '@/lib/AuthContext';
-import { db } from '@/lib/firebase';
-import { doc, writeBatch, increment } from 'firebase/firestore';
 import toast from 'react-hot-toast';
+import { importCardsAction, ImportItemInput } from '@/app/actions/import';
 import AdContainer from './AdContainer'; 
-import { updateUserStats } from '@/app/actions/stats';
-import { checkWishlistMatch } from '@/app/actions/matching'; // <--- IMPORT
 
-type ManaboxRow = {
-  "Binder Name": string;
+// Types CSV attendus
+type CsvRow = {
   "Name": string;
   "Set code": string;
-  "Set name": string;
   "Collector number": string;
   "Foil": string;
-  "Rarity": string;
   "Quantity": string;
-  "ManaBox ID": string;
   "Scryfall ID": string; 
-  "Purchase price": string;
-  "Language": string;
-  "Condition": string;
-};
-
-interface ScryfallImageUris {
-    normal?: string;
-}
-interface ScryfallCardFace {
-    name: string;
-    image_uris?: ScryfallImageUris;
-}
-
-type ScryfallCard = {
-  id: string;
-  name: string;
-  set: string;
-  set_name: string;
-  collector_number: string;
-  prices?: { eur?: string; usd?: string };
-  image_uris?: ScryfallImageUris; 
-  card_faces?: ScryfallCardFace[];
-  [key: string]: unknown;
-};
-
-type ExistingCard = {
-  scryfallId?: string; 
-  id: string;
-  quantity: number;
-  foil?: boolean;
+  [key: string]: string; 
 };
 
 type ImportModalProps = {
   isOpen: boolean;
   onClose: () => void;
   targetCollection?: 'collection' | 'wishlist'; 
-  currentCollection?: ExistingCard[];
-  onGoBack: () => void; 
-  onCloseAll: () => void; 
-};
-
-// --- Fonctions utilitaires ---
-
-const chunkArray = <T,>(array: T[], size: number): T[][] => {
-    const chunks = [];
-    for (let i = 0; i < array.length; i += size) {
-      chunks.push(array.slice(i, i + size));
-    }
-    return chunks;
-};
-
-const getCardInfo = (scryfallCard: ScryfallCard) => {
-    let name = scryfallCard.name as string;
-    let imageUrl = scryfallCard.image_uris?.normal;
-    let imageBackUrl: string | null = null;
-    
-    const cardFaces = scryfallCard.card_faces;
-
-    if (cardFaces && cardFaces.length > 1) {
-        name = cardFaces[0].name;
-        if (!imageUrl && cardFaces[0].image_uris?.normal) {
-            imageUrl = cardFaces[0].image_uris.normal;
-        }
-        if (cardFaces[1]?.image_uris?.normal) {
-            imageBackUrl = cardFaces[1].image_uris.normal;
-        }
-    }
-    
-    if (!imageUrl) {
-        imageUrl = "https://cards.scryfall.io/large/front/a/6/a6984342-f723-4e80-8e69-902d287a915f.jpg";
-    }
-
-    return { name, imageUrl, imageBackUrl };
+  onGoBack?: () => void; 
+  onCloseAll?: () => void;
 };
 
 export default function ImportModal({ 
     isOpen, 
+    onClose,
     targetCollection = 'collection', 
-    currentCollection = [],
     onGoBack,
     onCloseAll
 }: ImportModalProps) {
@@ -108,29 +39,18 @@ export default function ImportModal({
   const [inputType, setInputType] = useState<'csv' | 'text'>('csv'); 
   const [textInput, setTextInput] = useState('');
   
-  const [data, setData] = useState<ManaboxRow[]>([]);
-  const [columns, setColumns] = useState<string[]>([]);
+  const [data, setData] = useState<CsvRow[]>([]);
   const [step, setStep] = useState<'upload' | 'preview' | 'importing'>('upload');
-  
-  const [progress, setProgress] = useState(0);
-  const [statusMsg, setStatusMsg] = useState('');
   const [importMode, setImportMode] = useState<'add' | 'sync'>('add'); 
-
-  const existingMap = useMemo(() => {
-    const map = new Map<string, ExistingCard>();
-    currentCollection.forEach(card => {
-        map.set(card.id, { id: card.id, quantity: card.quantity, foil: card.foil });
-    });
-    return map;
-  }, [currentCollection]);
 
   useEffect(() => {
     if (isOpen) {
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         setStep('upload');
         setData([]);
         setTextInput('');
-        setProgress(0);
         setInputType('csv');
+        setImportMode('add');
     }
   }, [isOpen]);
 
@@ -144,18 +64,22 @@ export default function ImportModal({
       delimiter: ",", 
       encoding: "UTF-8",
       complete: (results) => {
-        setColumns(results.meta.fields || []);
-        setData(results.data as ManaboxRow[]);
+        const fields = results.meta.fields || [];
+        if (!fields.includes("Name") && !fields.includes("Scryfall ID")) {
+            toast.error("Format CSV non reconnu (Manabox ou Deckbox requis)");
+            return;
+        }
+        setData(results.data as CsvRow[]);
         setStep('preview');
       },
-      error: (error) => toast.error("Erreur CSV : " + error.message)
+      error: (error) => toast.error("Erreur lecture CSV : " + error.message)
     });
   };
 
   const handleTextParse = () => {
     if (!textInput.trim()) return;
 
-    const rows: ManaboxRow[] = [];
+    const rows: CsvRow[] = [];
     const lines = textInput.split('\n');
     const regex = /^(\d+)\s+(.+?)\s+\((\w+)\)(?:\s+(\S+))?(?:\s+\*(F)\*)?/;
 
@@ -165,19 +89,20 @@ export default function ImportModal({
         const match = cleanLine.match(regex);
         if (match) {
             rows.push({
-                "Quantity": match[1], "Name": match[2], "Set code": match[3].toLowerCase(),
-                "Collector number": match[4] || '', "Foil": match[5] === 'F' ? "true" : "false",
-                "Scryfall ID": "", "Binder Name": "Import Texte", "Set name": "", "Rarity": "", 
-                "ManaBox ID": "", "Purchase price": "0", "Language": "en", "Condition": "Near Mint"
+                "Quantity": match[1],
+                "Name": match[2],
+                "Set code": match[3].toLowerCase(),
+                "Collector number": match[4] || '',
+                "Foil": match[5] === 'F' ? "true" : "false",
+                "Scryfall ID": ""
             });
         }
     });
 
     if (rows.length === 0) {
-        toast.error("Format de texte non reconnu.");
+        toast.error("Aucune ligne valide reconnue.");
         return;
     }
-    setColumns(["Name", "Set code", "Quantity", "Foil", "Collector number"]);
     setData(rows);
     setStep('preview');
   };
@@ -185,182 +110,51 @@ export default function ImportModal({
   const startImport = async () => {
     if (!user) return;
     setStep('importing');
-    setProgress(0);
 
-    const rowsToFetch: ManaboxRow[] = [];
-    const rowsToUpdateDirectly: ManaboxRow[] = [];
-    let skippedCount = 0; 
+    const cleanItems: ImportItemInput[] = data.map(row => ({
+        scryfallId: row["Scryfall ID"] || undefined,
+        name: row["Name"] || "Unknown",
+        set: row["Set code"] || "",
+        collectorNumber: row["Collector number"] || "",
+        quantity: parseInt(row["Quantity"]) || 1,
+        isFoil: row["Foil"]?.toLowerCase() === "true"
+    })).filter(item => item.name !== "Unknown" || item.scryfallId);
 
-    data.forEach(row => {
-        const scryfallId = row["Scryfall ID"];
-        const csvQty = parseInt(row["Quantity"]) || 1;
-        const csvFoil = row["Foil"] === "true";
-        const existing = scryfallId ? existingMap.get(scryfallId) : undefined;
+    if (cleanItems.length === 0) {
+        toast.error("Aucune donnée valide à importer.");
+        setStep('preview');
+        return;
+    }
 
-        if (existing) {
-            if (importMode === 'sync') {
-                const existingFoil = !!existing.foil;
-                if (existing.quantity === csvQty && existingFoil === csvFoil) {
-                    skippedCount++;
-                } else {
-                    rowsToUpdateDirectly.push(row);
-                }
-            } else {
-                if (csvQty > 0) rowsToUpdateDirectly.push(row);
-            }
+    try {
+        const result = await importCardsAction(
+            user.uid,
+            targetCollection,
+            importMode,
+            cleanItems
+        );
+
+        if (result.success) {
+            toast.success(`Opération terminée. ${result.count} cartes traitées.`);
+            if (onCloseAll) onCloseAll();
+            else onClose();
         } else {
-            rowsToFetch.push(row);
+            toast.error(`Erreur: ${result.error}`);
+            setStep('preview');
         }
-    });
 
-    let processedCount = skippedCount; 
-    let successCount = 0; 
-
-    if (rowsToUpdateDirectly.length > 0) {
-        setStatusMsg("Mise à jour rapide des cartes existantes...");
-        const updateChunks = chunkArray(rowsToUpdateDirectly, 400);
-
-        for (const chunk of updateChunks) {
-            const batch = writeBatch(db);
-            chunk.forEach(row => {
-                if (!row["Scryfall ID"]) return; 
-                
-                const collectionPath = targetCollection === 'wishlist' ? 'wishlist' : 'collection'; 
-                const cardRef = doc(db, 'users', user.uid, collectionPath, row["Scryfall ID"]);
-                const qty = parseInt(row["Quantity"]);
-                const isFoil = row["Foil"] === "true";
-                
-                if (importMode === 'sync') {
-                    batch.update(cardRef, { quantity: qty, isFoil: isFoil });
-                } else {
-                    batch.update(cardRef, { quantity: increment(qty), isFoil: isFoil, importedAt: new Date() });
-                }
-                successCount++;
-            });
-            await batch.commit();
-            processedCount += chunk.length;
-            setProgress(Math.round((processedCount / data.length) * 100));
-        }
+    } catch (e) {
+        console.error("Erreur client import:", e);
+        toast.error("Erreur de communication avec le serveur.");
+        setStep('preview');
     }
+  };
 
-    if (rowsToFetch.length > 0) {
-        setStatusMsg("Identification des cartes...");
-        const fetchChunks = chunkArray(rowsToFetch, 75);
-
-        for (const chunk of fetchChunks) {
-            try {
-                const identifiers = chunk.map(row => {
-                    if (row["Scryfall ID"]) return { id: row["Scryfall ID"] };
-                    if (row["Collector number"] && row["Set code"]) {
-                         return { name: row["Name"], set: row["Set code"], collector_number: row["Collector number"] }; 
-                    }
-                    return { name: row["Name"], set: row["Set code"] || 'any' }; 
-                });
-                
-                const response = await fetch('https://api.scryfall.com/cards/collection', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ identifiers })
-                });
-
-                const result = await response.json();
-                const foundCards: ScryfallCard[] = result.data || []; 
-                const batch = writeBatch(db);
-                let batchHasOps = false;
-                
-                foundCards.forEach(scryfallData => {
-                    const scryfallName = (scryfallData.name as string).split(' // ')[0].trim().toLowerCase();
-                    const scryfallSetCode = scryfallData.set ? (scryfallData.set as string).toLowerCase() : '';
-                    
-                    const matchingRow = chunk.find(r => 
-                        r["Scryfall ID"] === scryfallData.id || 
-                        (r["Name"].split(' // ')[0].trim().toLowerCase() === scryfallName && 
-                         r["Set code"]?.toLowerCase() === scryfallSetCode)
-                    );
-
-                    if (matchingRow) {
-                        const csvQty = parseInt(matchingRow["Quantity"]);
-                        const csvFoil = matchingRow["Foil"] === "true";
-                        
-                        const existing = existingMap.get(scryfallData.id);
-                        let shouldWrite = true;
-
-                        if (existing && importMode === 'sync') {
-                            const existingFoil = !!existing.foil;
-                            if (existing.quantity === csvQty && existingFoil === csvFoil) {
-                                shouldWrite = false;
-                                skippedCount++;
-                            }
-                        }
-
-                        if (shouldWrite) {
-                            const { name: cardName, imageUrl, imageBackUrl } = getCardInfo(scryfallData);
-                            
-                            const collectionPath = targetCollection === 'wishlist' ? 'wishlist' : 'collection'; 
-                            const cardRef = doc(db, 'users', user.uid, collectionPath, scryfallData.id);
-                            
-                            const cardData = {
-                                name: cardName, imageUrl, imageBackUrl,
-                                setName: scryfallData.set_name as string, setCode: scryfallData.set as string,
-                                scryfallId: scryfallData.id,
-                                price: parseFloat((scryfallData.prices as { eur?: string })?.eur || "0"),
-                                isFoil: csvFoil,
-                                importedAt: new Date(),
-                                scryfallData: scryfallData,
-                                wishlistId: targetCollection === 'wishlist' ? 'default' : null,
-                                ...(targetCollection === 'collection' && { quantityForTrade: 0 })
-                            };
-
-                            if (importMode === 'add') {
-                                 batch.set(cardRef, { ...cardData, quantity: increment(csvQty) }, { merge: true });
-                            } else {
-                                 batch.set(cardRef, { ...cardData, quantity: csvQty }, { merge: true });
-                            }
-                            successCount++;
-                            batchHasOps = true;
-                        }
-                    }
-                });
-
-                if (batchHasOps) {
-                    await batch.commit();
-                }
-                
-            } catch (error) {
-                console.error("Erreur Scryfall", error);
-            }
-            processedCount += chunk.length;
-            setProgress(Math.round((processedCount / data.length) * 100));
-            await new Promise(r => setTimeout(r, 100));
-        }
-    }
-
-    toast.success(`${successCount} cartes synchronisée(s) !`, { duration: 4000 });
-    
-    // --- GESTION DES ACTIONS POST-IMPORT ---
-    if (targetCollection === 'collection') {
-        // Recalcul des stats si import en collection
-        updateUserStats(user.uid).catch(e => console.error("Erreur update stats BG", e));
-    } 
-    else if (targetCollection === 'wishlist') {
-        // NOUVEAU : Scan des matchs pour la Wishlist
-        // On récupère les cartes ajoutées (simplifié via 'data')
-        const cardsToCheck = data.map(row => ({
-            id: row["Scryfall ID"] || '', // ID optionnel, le nom suffit pour la recherche
-            name: row["Name"],
-            isFoil: row["Foil"] === "true"
-        })).filter(c => c.name); // Sécurité
-
-        if (cardsToCheck.length > 0) {
-            checkWishlistMatch(user.uid, cardsToCheck).then(res => {
-                 if (res.matches && res.matches > 0) {
-                     toast(`🎉 ${res.matches} cartes trouvées chez vos amis !`, { icon: '🔔', duration: 5000 });
-                 }
-            });
-        }
-    }
-
-    onCloseAll();
+  const handleBackdropClick = (e: React.MouseEvent) => {
+      if (step !== 'importing') {
+          if (onGoBack) onGoBack();
+          else onClose();
+      }
   };
 
   if (!isOpen) return null;
@@ -368,30 +162,31 @@ export default function ImportModal({
   const targetLabel = targetCollection === 'collection' ? 'Collection' : 'Wishlist';
 
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 backdrop-blur-sm" onClick={() => step !== 'importing' && onGoBack()}>
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 backdrop-blur-sm" onClick={handleBackdropClick}>
       <div 
         className="bg-surface rounded-xl p-6 max-w-5xl w-full shadow-2xl border border-border flex flex-col max-h-[90vh]"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex-none flex justify-between items-center mb-4 border-b border-border pb-3">
             <div className="flex items-center gap-3">
-                {step !== 'importing' && (
+                {step !== 'importing' && onGoBack && (
                     <button onClick={onGoBack} className="text-muted hover:text-foreground text-xl p-1 rounded transition">←</button>
                 )}
                 <h2 className="text-xl font-bold text-foreground">
                     📥 Importer : {targetLabel}
                 </h2>
             </div>
-            {step !== 'importing' && (
+            {step !== 'importing' && onCloseAll && (
                 <button onClick={onCloseAll} className="text-muted hover:text-danger text-lg p-2">✕</button>
             )}
         </div>
 
         <div className="grow overflow-hidden flex flex-col min-h-0">
+            
             {step === 'upload' && (
                 <div className="flex flex-col h-full overflow-hidden">
                     <p className="text-sm text-muted mb-4 flex-none">
-                        Collez vos données ou importez un fichier CSV (Manabox, Deckbox).
+                        Formats supportés : Manabox (CSV), Deckbox (CSV), ou texte copié.
                     </p>
                     <div className="flex-none flex border-b border-border mb-4">
                         <button onClick={() => setInputType('csv')} className={`px-4 py-2 font-medium text-sm border-b-2 transition-colors ${inputType === 'csv' ? 'border-primary text-primary' : 'border-transparent text-muted'}`}>📄 Fichier CSV</button>
@@ -410,10 +205,9 @@ export default function ImportModal({
                                 value={textInput} 
                                 onChange={(e) => setTextInput(e.target.value)} 
                                 rows={15} 
-                                placeholder="Collez votre liste ici..." 
+                                placeholder="Ex: 4 Sol Ring (CMD) 100 *F*" 
                                 className="grow w-full p-4 rounded-lg border border-border bg-background text-foreground font-mono text-xs focus:ring-2 focus:ring-primary outline-none resize-none" 
                             />
-                            <p className="text-xs text-muted my-2 text-center">Ex: 4 Sol Ring (CMD) 100</p>
                             <button 
                                 onClick={handleTextParse} 
                                 disabled={!textInput.trim()} 
@@ -429,58 +223,82 @@ export default function ImportModal({
             {step === 'preview' && (
                 <div className="flex flex-col h-full overflow-hidden">
                     <p className="text-sm text-muted mb-4 flex-none">
-                        Vérifiez l&apos;aperçu et choisissez le mode d&apos;importation.
+                        {data.length} cartes détectées.
                     </p>
+                    
+                    {/* SÉLECTEUR DE MODE */}
                     <div className="flex-none grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-                        <div onClick={() => setImportMode('add')} className={`p-3 rounded-xl border-2 cursor-pointer transition flex flex-col gap-1 ${importMode === 'add' ? 'border-primary bg-primary/10' : 'border-border hover:border-primary'}`}>
+                        <div onClick={() => setImportMode('add')} className={`p-4 rounded-xl border-2 cursor-pointer transition flex flex-col gap-1 ${importMode === 'add' ? 'border-primary bg-primary/5' : 'border-border hover:border-primary/50'}`}>
                             <div className="flex items-center gap-2 font-bold text-primary text-sm">
-                                <span className={`w-4 h-4 rounded-full border flex items-center justify-center ${importMode === 'add' ? 'border-primary bg-primary' : 'border-muted'}`}>{importMode === 'add' && <span className="w-2 h-2 rounded-full bg-white"></span>}</span> Ajouter
+                                <span className={`w-4 h-4 rounded-full border flex items-center justify-center ${importMode === 'add' ? 'border-primary bg-primary' : 'border-muted'}`}>{importMode === 'add' && <span className="w-2 h-2 rounded-full bg-white"></span>}</span> 
+                                Mode Ajout (Add)
                             </div>
-                            <p className="text-[10px] text-muted ml-6">Ajoute (+1) aux quantités existantes.</p>
                         </div>
-                        <div onClick={() => setImportMode('sync')} className={`p-3 rounded-xl border-2 cursor-pointer transition flex flex-col gap-1 ${importMode === 'sync' ? 'border-purple-500 bg-purple-500/10' : 'border-border hover:border-purple-500'}`}>
-                            <div className="flex items-center gap-2 font-bold text-purple-700 dark:text-purple-300 text-sm">
-                                <span className={`w-4 h-4 rounded-full border flex items-center justify-center ${importMode === 'sync' ? 'border-purple-600 bg-purple-600' : 'border-muted'}`}>{importMode === 'sync' && <span className="w-2 h-2 rounded-full bg-white"></span>}</span> Synchroniser
+                        <div onClick={() => setImportMode('sync')} className={`p-4 rounded-xl border-2 cursor-pointer transition flex flex-col gap-1 ${importMode === 'sync' ? 'border-purple-600 bg-purple-500/5' : 'border-border hover:border-purple-500/50'}`}>
+                            <div className="flex items-center gap-2 font-bold text-purple-600 dark:text-purple-300 text-sm">
+                                <span className={`w-4 h-4 rounded-full border flex items-center justify-center ${importMode === 'sync' ? 'border-purple-600 bg-purple-600' : 'border-muted'}`}>{importMode === 'sync' && <span className="w-2 h-2 rounded-full bg-white"></span>}</span> 
+                                Mode Complétion (Smart Sync)
                             </div>
-                            <p className="text-[10px] text-muted ml-6">Remplace (=1) la quantité en base.</p>
                         </div>
+                    </div>
+
+                    {/* MESSAGE EXPLICATIF DYNAMIQUE */}
+                    <div className={`flex-none p-3 rounded-lg border mb-4 text-xs ${importMode === 'add' ? 'bg-primary/10 border-primary/20 text-primary' : 'bg-purple-500/10 border-purple-500/20 text-purple-600 dark:text-purple-300'}`}>
+                        {importMode === 'add' ? (
+                            <p><strong>ℹ️ Fonctionnement :</strong> Toutes les quantités du fichier seront <u>ajoutées</u> à votre stock existant. (Ex: Stock=2, Fichier=3 → Nouveau Stock=5).</p>
+                        ) : (
+                            <p><strong>ℹ️ Fonctionnement :</strong> Comble uniquement les manques pour atteindre la quantité du fichier. <br/>(Ex: Fichier=4, Stock=1 → Ajoute +3). <br/>(Ex: Fichier=4, Stock=10 → Ne fait rien). <strong>Aucune carte ne sera retirée.</strong></p>
+                        )}
                     </div>
                     
-                    <div className="flex-none flex justify-between items-center mb-2 px-1">
-                        <span className="text-sm font-semibold text-foreground">{data.length} cartes détectées</span>
-                        <button onClick={() => { setData([]); setStep('upload'); }} className="text-danger text-xs hover:underline">Retour</button>
-                    </div>
-                    <div className="grow overflow-auto min-h-0 border border-border rounded-lg bg-background">
+                    <div className="grow overflow-auto min-h-0 border border-border rounded-lg bg-background mb-4">
                         <table className="w-full text-xs text-left text-muted">
                             <thead className="text-foreground bg-secondary sticky top-0 z-10">
-                                <tr>{columns.slice(0,6).map((col, i) => <th key={i} className="px-4 py-2">{col}</th>)}</tr>
+                                <tr>
+                                    <th className="px-4 py-2">Nom</th>
+                                    <th className="px-4 py-2">Set</th>
+                                    <th className="px-4 py-2">Num</th>
+                                    <th className="px-4 py-2">Qté</th>
+                                    <th className="px-4 py-2">Foil</th>
+                                </tr>
                             </thead>
                             <tbody>
-                                {data.map((row, i) => (
+                                {data.slice(0, 100).map((row, i) => (
                                     <tr key={i} className="bg-surface border-b border-border">
-                                        {columns.slice(0,6).map((col, j) => <td key={j} className="px-4 py-1 truncate max-w-[150px] text-foreground">{row[col as keyof ManaboxRow]}</td>)}
+                                        <td className="px-4 py-1 truncate max-w-[150px] text-foreground">{row["Name"]}</td>
+                                        <td className="px-4 py-1">{row["Set code"]}</td>
+                                        <td className="px-4 py-1">{row["Collector number"]}</td>
+                                        <td className="px-4 py-1 font-bold">{row["Quantity"]}</td>
+                                        <td className="px-4 py-1">{row["Foil"]}</td>
                                     </tr>
                                 ))}
+                                {data.length > 100 && (
+                                    <tr>
+                                        <td colSpan={5} className="px-4 py-2 text-center italic">... et {data.length - 100} autres lignes</td>
+                                    </tr>
+                                )}
                             </tbody>
                         </table>
                     </div>
-                    <div className="flex-none pt-4">
-                        <button onClick={startImport} className={`w-full text-white font-bold py-3 rounded-xl shadow-lg transition transform hover:scale-[1.005] ${importMode === 'add' ? 'bg-primary hover:opacity-90' : 'bg-purple-600 hover:opacity-90'}`}>
-                            {importMode === 'add' ? '➕ Valider l\'Ajout' : '🔄 Valider la Synchronisation'}
+
+                    <div className="flex-none pt-2">
+                        <button 
+                            onClick={startImport} 
+                            className={`w-full text-white font-bold py-3 rounded-xl shadow-lg transition transform hover:scale-[1.005] ${importMode === 'add' ? 'bg-primary hover:opacity-90' : 'bg-purple-600 hover:opacity-90'}`}
+                        >
+                            {importMode === 'add' ? '➕ Lancer l\'Ajout' : '🔄 Lancer la Synchronisation'}
                         </button>
                     </div>
                 </div>
             )}
 
            {step === 'importing' && (
-                <div className="flex flex-col items-center justify-center h-full py-10">
-                    <div className="text-5xl font-bold text-primary mb-2">{progress}%</div>
-                    <p className="text-muted animate-pulse mb-6">{statusMsg}</p>
-                    
-                    <div className="w-full bg-secondary rounded-full h-4 overflow-hidden max-w-md mb-8">
-                        <div className="bg-primary h-full rounded-full transition-all duration-300 ease-out" style={{ width: `${progress}%` }}></div>
-                    </div>
-
+                <div className="flex flex-col items-center justify-center h-full py-10 text-center">
+                    <div className="w-16 h-16 border-4 border-primary border-t-transparent rounded-full animate-spin mb-6"></div>
+                    <h3 className="text-xl font-bold text-foreground mb-2">Importation en cours...</h3>
+                    <p className="text-muted text-sm max-w-md mb-8">
+                        Le serveur traite vos cartes. Vous pouvez fermer cette fenêtre, le processus continuera en arrière-plan.
+                    </p>
                     <div className="w-full max-w-md">
                         <AdContainer message="Sponsorisé" adSlotId="1234567890" />
                     </div>

@@ -1,3 +1,4 @@
+// app/collection/page.tsx
 'use client';
 
 import { useState, useMemo, useEffect } from 'react';
@@ -11,9 +12,9 @@ import ColumnSlider from '@/components/ColumnSlider';
 import DataTransferHubModal from '@/components/DataTransferHubModal'; 
 import ImportModal from '@/components/ImportModal';
 import ExportModal from '@/components/ExportModal';
-import { updateUserStats } from '@/app/actions/stats'; // Import Action
-
-type SortOption = 'name' | 'price_desc' | 'price_asc' | 'quantity' | 'date';
+import { updateUserStats } from '@/app/actions/stats';
+import { useColumnPreference } from '@/hooks/useColumnPreference';
+import { useSortPreference, SortOption } from '@/hooks/useSortPreference'; // <--- NOUVEL IMPORT
 
 const ITEMS_PER_PAGE = 50; 
 
@@ -39,9 +40,15 @@ export default function CollectionPage() {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [visibleCount, setVisibleCount] = useState(ITEMS_PER_PAGE);
   const [showFilters, setShowFilters] = useState(false);
-  const [columns, setColumns] = useState(5);
+  
+  // Persistance des Colonnes
+  const { columns, setColumns } = useColumnPreference('mw_cols_collection', 5);
+
   const [searchQuery, setSearchQuery] = useState('');
-  const [sortBy, setSortBy] = useState<SortOption>('date');
+  
+  // Persistance du Tri (Remplacement de useState)
+  const { sortBy, setSortBy } = useSortPreference('mw_sort_collection', 'date');
+
   const [filterSet, setFilterSet] = useState<string>('all');
   const [filterTrade, setFilterTrade] = useState(false);
   const [filterFoil, setFilterFoil] = useState(false);
@@ -52,23 +59,23 @@ export default function CollectionPage() {
     setIsHubOpen(false);
     setIsImportOpen(false);
     setIsExportOpen(false);
-  }
+  };
   
   const openHub = () => {
     setIsImportOpen(false);
     setIsExportOpen(false);
     setIsHubOpen(true);
-  }
+  };
   
   const handleSelectImport = () => {
     setIsHubOpen(false);
     setIsImportOpen(true);
-  }
+  };
   
   const handleSelectExport = () => {
     setIsHubOpen(false);
     setIsExportOpen(true);
-  }
+  };
 
   useEffect(() => {
     if (visibleCount !== ITEMS_PER_PAGE) {
@@ -130,7 +137,6 @@ export default function CollectionPage() {
       return Array.from(sets).sort();
   }, [cards]);
 
-  // Fonction trigger Update Stats
   const triggerStatsUpdate = () => {
       if (user?.uid) updateUserStats(user.uid).catch(e => console.error("Stats update error", e));
   };
@@ -140,7 +146,7 @@ export default function CollectionPage() {
     if (result === 'shouldDelete') {
       setCardToDelete(cardId);
     } else {
-        triggerStatsUpdate(); // Update si quantité change
+        triggerStatsUpdate();
     }
   };
 
@@ -171,9 +177,9 @@ export default function CollectionPage() {
   };
 
   const handleBulkDelete = async () => {
-      if (!confirm(`Supprimer ces ${selectedIds.length} cartes définitivement ?`)) return;
+      if (!confirm(`Supprimer ces ${selectedIds.length} cartes definitivement ?`)) return;
       await bulkRemoveCards(selectedIds);
-      triggerStatsUpdate(); // Update stats après suppression de masse
+      triggerStatsUpdate();
       setSelectedIds([]);
       setIsSelectMode(false);
   };
@@ -185,7 +191,6 @@ export default function CollectionPage() {
       setIsSelectMode(false);
   };
 
-  // Wrapper pour suppression unitaire
   const confirmDeleteSingle = async () => {
       if(cardToDelete) {
           await removeCard(cardToDelete);
@@ -210,7 +215,7 @@ export default function CollectionPage() {
             </h1>
             <div className="shrink-0 bg-primary text-primary-foreground px-3 py-1.5 rounded-lg shadow-sm text-right">
                 <span className="text-[10px] uppercase tracking-wide opacity-80 block">Total</span>
-                <span className="font-bold whitespace-nowrap">{totalPrice.toFixed(2)} €</span>
+                <span className="font-bold whitespace-nowrap">{totalPrice.toFixed(2)} EUR</span>
             </div>
         </div>
         
@@ -219,7 +224,7 @@ export default function CollectionPage() {
              onClick={() => { setIsSelectMode(!isSelectMode); setSelectedIds([]); }}
              className={`shrink-0 px-3 py-2 rounded-lg text-sm font-medium transition shadow-sm border flex items-center gap-2 whitespace-nowrap ${isSelectMode ? 'bg-primary text-primary-foreground border-primary' : 'bg-surface hover:bg-secondary text-foreground border-border'}`}
            >
-             {isSelectMode ? 'Annuler' : 'Sélectionner'}
+             {isSelectMode ? 'Annuler' : 'Selectionner'}
            </button>
 
            {!isSelectMode && (
@@ -228,7 +233,7 @@ export default function CollectionPage() {
                     onClick={() => setIsToolsOpen(true)}
                     className="shrink-0 bg-surface hover:bg-secondary text-foreground px-3 py-2 rounded-lg text-sm font-medium transition shadow-sm border border-border flex items-center gap-2 whitespace-nowrap"
                 >
-                    Gérer
+                    Gerer
                 </button>
 
                 <div className="shrink-0">
@@ -270,13 +275,13 @@ export default function CollectionPage() {
             <div className="min-w-[200px]">
                 <label className="block text-xs font-bold text-muted mb-1 uppercase">Edition</label>
                 <select value={filterSet} onChange={(e) => setFilterSet(e.target.value)} className="w-full p-2.5 rounded-lg border border-border bg-background text-foreground text-sm cursor-pointer">
-                    <option value="all">Toutes les éditions</option>
+                    <option value="all">Toutes les editions</option>
                     {availableSets.map(set => <option key={set} value={set}>{set}</option>)}
                 </select>
             </div>
             
             <div className="min-w-[150px]">
-                <label className="block text-xs font-bold text-muted mb-1 uppercase">Prix Min (€)</label>
+                <label className="block text-xs font-bold text-muted mb-1 uppercase">Prix Min (EUR)</label>
                 <input 
                     type="number"
                     min="0"
@@ -288,7 +293,7 @@ export default function CollectionPage() {
                 />
             </div>
             <div className="min-w-[150px]">
-                <label className="block text-xs font-bold text-muted mb-1 uppercase">Prix Max (€)</label>
+                <label className="block text-xs font-bold text-muted mb-1 uppercase">Prix Max (EUR)</label>
                 <input 
                     type="number"
                     min="0"
@@ -307,7 +312,7 @@ export default function CollectionPage() {
                     <option value="price_desc">Prix : Haut - Bas</option>
                     <option value="price_asc">Prix : Bas - Haut</option>
                     <option value="name">Nom : A - Z</option>
-                    <option value="quantity">Quantité</option>
+                    <option value="quantity">Quantite</option>
                 </select>
             </div>
 
@@ -322,7 +327,7 @@ export default function CollectionPage() {
                 </label>
                 <label className="flex items-center gap-2 cursor-pointer select-none">
                     <input type="checkbox" checked={filterTrade} onChange={(e) => setFilterTrade(e.target.checked)} className="w-4 h-4 text-success rounded border-border" />
-                    <span className="text-sm font-medium text-foreground">Échange</span>
+                    <span className="text-sm font-medium text-foreground">Echange</span>
                 </label>
             </div>
           </div>
@@ -334,15 +339,15 @@ export default function CollectionPage() {
                   {selectedIds.length} carte(s)
               </span>
               <button onClick={handleSelectAll} className="text-sm text-primary font-bold px-3 py-1 rounded hover:bg-primary/10 transition">
-                  {selectedIds.length === filteredAndSortedCards.length ? 'Désélectionner' : 'Tout sélectionner'}
+                  {selectedIds.length === filteredAndSortedCards.length ? 'Deselectionner' : 'Tout selectionner'}
               </button>
           </div>
       )}
 
       {filteredAndSortedCards.length === 0 ? (
         <div className="text-center py-20 bg-secondary/50 rounded-xl border-2 border-dashed border-border">
-          <p className="text-xl text-muted mb-4">Aucun résultat ne correspond à vos filtres.</p>
-          <button onClick={() => { setSearchQuery(''); setFilterSet('all'); setFilterTrade(false); setFilterFoil(false); setMinPriceFilter(''); setMaxPriceFilter(''); }} className="text-primary hover:underline">Réinitialiser les filtres</button>
+          <p className="text-xl text-muted mb-4">Aucun resultat ne correspond a vos filtres.</p>
+          <button onClick={() => { setSearchQuery(''); setFilterSet('all'); setFilterTrade(false); setFilterFoil(false); setMinPriceFilter(''); setMaxPriceFilter(''); }} className="text-primary hover:underline">Reinitialiser les filtres</button>
         </div>
       ) : (
         <>
@@ -363,7 +368,7 @@ export default function CollectionPage() {
                         onDecrement={() => handleDecrement(card.id, card.quantity)}
                         onEditPrice={(newPrice) => {
                             setCustomPrice(card.id, newPrice);
-                            triggerStatsUpdate(); // Changement de prix = Changement de stats
+                            triggerStatsUpdate();
                         }}
                         onToggleAttribute={(field, val) => {
                             toggleAttribute(card.id, field, val);
@@ -399,7 +404,7 @@ export default function CollectionPage() {
                   <span>Trade</span>
               </button>
               <button onClick={() => handleBulkTrade(false)} className="px-4 py-2 bg-secondary hover:bg-border text-foreground rounded-xl text-sm font-bold transition flex flex-col items-center leading-none gap-1">
-                  <span>Privé</span>
+                  <span>Prive</span>
               </button>
               <div className="w-px h-8 bg-border mx-1"></div>
               <button onClick={handleBulkDelete} className="px-4 py-2 bg-danger hover:bg-red-600 text-white rounded-xl text-sm font-bold transition flex flex-col items-center leading-none gap-1 shadow-md">
@@ -422,7 +427,6 @@ export default function CollectionPage() {
           onGoBack={openHub}       
           onCloseAll={closeAllModals}
           targetCollection="collection" 
-          currentCollection={cards.map(c => ({ id: c.id, quantity: c.quantity, foil: c.isFoil }))} 
       />
       
       <ExportModal
@@ -436,7 +440,7 @@ export default function CollectionPage() {
       />
 
       <CollectionToolsModal isOpen={isToolsOpen} onClose={() => setIsToolsOpen(false)} totalCards={cards.length} onRefreshPrices={refreshCollectionPrices} onBulkTrade={bulkSetTradeStatus} />
-      <ConfirmModal isOpen={!!cardToDelete} onClose={() => setCardToDelete(null)} onConfirm={confirmDeleteSingle} title="Retirer ?" message="Cette carte sera retirée de votre collection." />
+      <ConfirmModal isOpen={!!cardToDelete} onClose={() => setCardToDelete(null)} onConfirm={confirmDeleteSingle} title="Retirer ?" message="Cette carte sera retiree de votre collection." />
     </main>
   );
 }

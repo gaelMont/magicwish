@@ -17,6 +17,7 @@ service cloud.firestore {
     }
 
     function isFriend(userId) {
+      // Le scan fonctionne si l'utilisateur qui regarde est listé dans la sous-collection 'friends' du propriétaire
       return exists(/databases/$(database)/documents/users/$(userId)/friends/$(request.auth.uid));
     }
 
@@ -28,15 +29,13 @@ service cloud.firestore {
       allow write: if false; 
     }
 
-    // 2. FEEDBACK (CORRIGÉ)
-    // ✅ Admin : Peut tout faire (changer statut, supprimer)
-    // 👤 User : Peut seulement créer
+    // 2. FEEDBACK 
     match /app_feedback/{feedbackId} {
       allow read, update, delete: if isAdmin();
       allow create: if isAuthenticated() && request.resource.data.uid == request.auth.uid;
     }
 
-    // 3. PROFILS PUBLICS
+    // 3. PROFILS PUBLICS (Lecture pour tous les utilisateurs authentifiés)
     match /{path=**}/public_profile/{docId} {
       allow read: if isAuthenticated();
     }
@@ -52,18 +51,23 @@ service cloud.firestore {
 
     // 5. DONNÉES UTILISATEUR
     match /users/{userId} {
+      // CORRECTION CRITIQUE : Autorise la lecture/écriture du document parent /users/{userId}
+      allow read, write: if isOwner(userId); 
+
       match /public_profile/info {
         allow read: if isAuthenticated();
         allow write: if isOwner(userId);
       }
 
       match /collection/{cardId} {
-        allow read: if isOwner(userId) || isFriend(userId);
+        // Lecture autorisée uniquement par le propriétaire OU un ami
+        allow read: if isOwner(userId) || isFriend(userId); 
         allow write: if isOwner(userId);
       }
 
       match /wishlist/{cardId} {
-        allow read: if isOwner(userId) || isFriend(userId);
+        // Lecture autorisée uniquement par le propriétaire OU un ami
+        allow read: if isOwner(userId) || isFriend(userId); 
         allow write: if isOwner(userId);
       }
 
@@ -87,6 +91,12 @@ service cloud.firestore {
         allow write: if isAuthenticated() && request.resource.data.uid == request.auth.uid && request.auth.uid == senderId;
         allow delete: if isOwner(userId) || request.auth.uid == senderId;
       }
+      
+      match /notifications/{notifId} {
+        // Écriture par l'Admin pour le matching, lecture par le propriétaire
+        allow create, write, delete: if isAdmin(); 
+        allow read: if isOwner(userId); 
+      }
     }
 
     // 6. PROPOSITIONS D'ÉCHANGE
@@ -97,29 +107,23 @@ service cloud.firestore {
       
       allow delete: if isAdmin(); 
       
-      allow update: if isAdmin() || (
+      allow update: if isAdmin() 
+        || (
         isAuthenticated() 
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status'])
         && (
           (resource.data.senderUid == request.auth.uid && request.resource.data.status == 'cancelled') ||
-          (resource.data.receiverUid == request.auth.uid && request.resource.data.status in ['rejected', 'accepted'])
+          (resource.data.receiverUid == request.auth.uid && request.resource.data.status == 'rejected')
         )
       );
     }
 
     // 7. GROUPES / CERCLES DE JEU
     match /groups/{groupId} {
-      // Lecture : Uniquement les membres
+      // Règle très importante pour le scanner : la lecture des groupes doit être filtrée côté client
       allow read: if isAuthenticated() && request.auth.uid in resource.data.members;
-      
-      // Création : Tout le monde
       allow create: if isAuthenticated() && request.resource.data.ownerUid == request.auth.uid;
-      
-      // Modification : Uniquement les membres (pour la logique interne, sécurisée par les Actions Server)
-      // Mais pour être strict, on bloque l'écriture client directe sauf pour quitter
       allow update: if false; 
-      
-      // Suppression : Seul le propriétaire
       allow delete: if isAuthenticated() && resource.data.ownerUid == request.auth.uid;
     }
   }

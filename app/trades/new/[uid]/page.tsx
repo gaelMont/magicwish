@@ -1,3 +1,4 @@
+// app/trades/new/[uid]/page.tsx
 'use client';
 
 import { useState, use, useEffect, useTransition, useMemo } from 'react';
@@ -10,9 +11,22 @@ import { useRouter } from 'next/navigation';
 import toast from 'react-hot-toast';
 import { ScryfallRawData } from '@/lib/cardUtils';
 
-// --- TABLEAU DE SÉLECTION (PANIER) ---
-const TradeSelectionTable = ({ cards, onRemove, colorClass, emptyLabel }: { cards: CardType[], onRemove: (id: string) => void, colorClass: 'text-danger' | 'text-success', emptyLabel: string }) => {
+// --- TABLEAU DE SÉLECTION MODIFIABLE (AVEC PRIX) ---
+const TradeSelectionTable = ({ 
+    cards, 
+    onRemove, 
+    onUpdatePrice, 
+    colorClass, 
+    emptyLabel 
+}: { 
+    cards: CardType[], 
+    onRemove: (id: string) => void, 
+    onUpdatePrice: (id: string, newPrice: number) => void,
+    colorClass: 'text-danger' | 'text-success', 
+    emptyLabel: string 
+}) => {
     if (cards.length === 0) return <div className="flex-1 flex items-center justify-center border-b border-border bg-secondary/10 text-muted text-sm italic p-8">{emptyLabel}</div>;
+    
     return (
         <div className="flex-1 overflow-hidden flex flex-col bg-surface border-b border-border shadow-sm">
             <div className="overflow-y-auto custom-scrollbar flex-1">
@@ -21,25 +35,39 @@ const TradeSelectionTable = ({ cards, onRemove, colorClass, emptyLabel }: { card
                         <tr>
                             <th className="px-2 py-2 text-center w-10">Qté</th>
                             <th className="px-2 py-2">Nom</th>
-                            <th className="px-2 py-2 w-12 text-center">Set</th>
-                            <th className="px-2 py-2 w-10 text-center">N°</th>
+                            <th className="px-2 py-2 w-10 text-center">Set</th>
                             <th className="px-2 py-2 w-10 text-center">Foil</th>
-                            <th className="px-2 py-2 text-right w-16">Prix</th>
+                            <th className="px-2 py-2 text-right w-20">Prix/u</th>
                             <th className="px-2 py-2 w-8"></th>
                         </tr>
                     </thead>
                     <tbody className="divide-y divide-border">
                         {cards.map((card, i) => {
+                            const currentPrice = card.customPrice !== undefined ? card.customPrice : (card.price || 0);
                             const scryData = card.scryfallData as ScryfallRawData | undefined;
-                            const collectorNum = scryData?.collector_number || '?';
+                            
                             return (
                                 <tr key={`${card.id}-${i}`} className="hover:bg-secondary/50 transition-colors text-foreground">
                                     <td className={`px-2 py-1.5 text-center font-bold ${colorClass} bg-opacity-10`}>{card.quantity}</td>
                                     <td className="px-2 py-1.5 font-medium truncate max-w-[120px]" title={card.name}>{card.name}</td>
                                     <td className="px-2 py-1.5 text-center"><span className="text-[9px] font-mono bg-secondary text-muted px-1 rounded border border-border">{card.setCode?.toUpperCase()}</span></td>
-                                    <td className="px-2 py-1.5 text-center text-muted font-mono text-[10px]">{collectorNum}</td>
                                     <td className="px-2 py-1.5 text-center">{card.isFoil && <span className="text-[9px] font-bold text-amber-600 bg-amber-100 px-1 rounded">Foil</span>}</td>
-                                    <td className="px-2 py-1.5 text-right text-muted tabular-nums">{(card.customPrice ?? card.price ?? 0).toFixed(2)}€</td>
+                                    
+                                    {/* INPUT PRIX */}
+                                    <td className="px-2 py-1.5 text-right">
+                                        <div className="flex items-center justify-end gap-1">
+                                            <input 
+                                                type="number" 
+                                                min="0" 
+                                                step="0.01"
+                                                className="w-16 p-1 text-right bg-background border border-border rounded text-xs outline-none focus:border-primary"
+                                                value={currentPrice}
+                                                onChange={(e) => onUpdatePrice(card.id, parseFloat(e.target.value) || 0)}
+                                            />
+                                            <span className="text-muted">€</span>
+                                        </div>
+                                    </td>
+                                    
                                     <td className="px-2 py-1.5 text-center"><button onClick={() => onRemove(card.id)} className="text-muted hover:text-danger transition px-1 font-bold">✕</button></td>
                                 </tr>
                             );
@@ -60,7 +88,7 @@ const TradeSourceTable = ({
 }: { 
     cards: CardType[], 
     onAdd: (c: CardType) => void, 
-    buttonColorClass: 'text-danger' | 'text-success',
+    buttonColorClass: 'text-danger' | 'text-success' | 'text-blue-600',
     loading?: boolean
 }) => {
     if (loading) return <p className="text-xs text-muted text-center py-4">Chargement...</p>;
@@ -85,7 +113,8 @@ const TradeSourceTable = ({
                         const collectorNum = scryData?.collector_number || '?';
                         const tradeQty = card.quantityForTrade ?? 0;
                         return (
-                            <tr key={`${card.id}-${i}`} className="hover:bg-secondary/50 transition-colors text-foreground cursor-pointer group" onClick={() => onAdd(card)}>
+                            // AJOUT DE select-none ICI
+                            <tr key={`${card.id}-${i}`} className="hover:bg-secondary/50 transition-colors text-foreground cursor-pointer group select-none" onClick={() => onAdd(card)}>
                                 <td className="px-2 py-1.5 text-center text-muted font-mono">{tradeQty}</td>
                                 <td className="px-2 py-1.5 font-medium truncate max-w-[120px]" title={card.name}>{card.name}</td>
                                 <td className="px-2 py-1.5 text-center"><span className="text-[9px] font-mono bg-secondary text-muted px-1 rounded border border-border">{card.setCode?.toUpperCase()}</span></td>
@@ -110,8 +139,8 @@ export default function DirectTradePage({ params }: { params: Promise<{ uid: str
   const { user } = useAuth();
   const router = useRouter();
   const { proposeTrade } = useTradeSystem();
-  const [isPending, startTransition] = useTransition();
-
+  
+  // États
   const { cards: myCollection, loading: loadingMe } = useCardCollection('collection');
   const { cards: friendCollection, loading: loadingHim } = useCardCollection('collection', 'default', targetUid);
 
@@ -121,6 +150,7 @@ export default function DirectTradePage({ params }: { params: Promise<{ uid: str
   const [searchMe, setSearchMe] = useState('');
   const [searchHim, setSearchHim] = useState('');
 
+  // Chargement du nom de l'ami
   useEffect(() => {
     const fetchName = async () => {
         try {
@@ -131,22 +161,28 @@ export default function DirectTradePage({ params }: { params: Promise<{ uid: str
     if (targetUid) fetchName();
   }, [targetUid]);
 
+  // Actions
   const handleSelectCard = (card: CardType, listType: 'give' | 'receive') => {
     const setTarget = listType === 'give' ? setToGive : setToReceive;
     const targetList = listType === 'give' ? toGive : toReceive;
     const existing = targetList.find(c => c.id === card.id);
     const maxStock = (card.quantityForTrade ?? 0); 
-    const currentSelected = existing ? existing.quantity : 0;
 
-    if (currentSelected < maxStock) {
-        if (existing) {
+    if (existing) {
+        if (existing.quantity < maxStock) {
             setTarget(prev => prev.map(c => c.id === card.id ? { ...c, quantity: c.quantity + 1 } : c));
         } else {
-            setTarget(prev => [...prev, { ...card, quantity: 1 }]);
+            toast.error("Stock maximum atteint");
         }
     } else {
-        toast.error(`Stock maximum atteint (${maxStock}x)`);
+        // Initialiser avec le prix Scryfall par défaut dans customPrice pour être modifiable
+        setTarget(prev => [...prev, { ...card, quantity: 1, customPrice: card.price }]);
     }
+  };
+
+  const handleUpdatePrice = (cardId: string, newPrice: number, listType: 'give' | 'receive') => {
+      const setTarget = listType === 'give' ? setToGive : setToReceive;
+      setTarget(prev => prev.map(c => c.id === cardId ? { ...c, customPrice: newPrice } : c));
   };
 
   const handleRemoveCard = (cardId: string, listType: 'give' | 'receive') => {
@@ -154,24 +190,28 @@ export default function DirectTradePage({ params }: { params: Promise<{ uid: str
     setTarget(prev => prev.filter(c => c.id !== cardId));
   };
 
-  const handlePropose = () => {
+  const handlePropose = async () => {
     if (toGive.length === 0 && toReceive.length === 0) return;
-    startTransition(async () => {
-        const success = await proposeTrade(targetUid, targetName, toGive, toReceive);
-        if (success) router.push('/trades');
-    });
+    const success = await proposeTrade(targetUid, targetName, toGive, toReceive);
+    if (success) router.push('/trades'); 
   };
 
+  // Calculs
   const valGive = toGive.reduce((acc, c) => acc + (c.customPrice ?? c.price ?? 0) * c.quantity, 0);
   const valReceive = toReceive.reduce((acc, c) => acc + (c.customPrice ?? c.price ?? 0) * c.quantity, 0);
   const balance = valGive - valReceive;
 
+  // Filtrage
   const filteredMyCollection = useMemo(() => {
-      return myCollection.filter(c => (c.quantityForTrade ?? 0) > 0 && c.name.toLowerCase().includes(searchMe.toLowerCase())).slice(0, 50);
+      return myCollection
+        .filter(c => (c.quantityForTrade ?? 0) > 0 && c.name.toLowerCase().includes(searchMe.toLowerCase()))
+        .slice(0, 50);
   }, [myCollection, searchMe]);
 
   const filteredFriendCollection = useMemo(() => {
-      return friendCollection.filter(c => (c.quantityForTrade ?? 0) > 0 && c.name.toLowerCase().includes(searchHim.toLowerCase())).slice(0, 50);
+      return friendCollection
+        .filter(c => (c.quantityForTrade ?? 0) > 0 && c.name.toLowerCase().includes(searchHim.toLowerCase()))
+        .slice(0, 50);
   }, [friendCollection, searchHim]);
 
   if (!user) return <div className="p-10 text-center text-muted">Connexion requise.</div>;
@@ -179,77 +219,108 @@ export default function DirectTradePage({ params }: { params: Promise<{ uid: str
   return (
     <div className="container mx-auto p-4 h-[calc(100vh-64px)] flex flex-col">
         
+        {/* HEADER */}
         <div className="flex-none flex items-center gap-4 mb-4">
-            <button onClick={() => router.back()} className="text-muted hover:text-foreground bg-secondary px-3 py-1 rounded-lg text-sm transition">← Retour</button>
-            <h1 className="text-2xl font-bold truncate text-foreground">Échange avec <span className="text-primary">{targetName}</span></h1>
+            <button onClick={() => router.back()} className="text-gray-500 hover:text-gray-700 bg-gray-100 px-3 py-1 rounded-lg text-sm">
+                ← Retour
+            </button>
+            <h1 className="text-2xl font-bold truncate">
+                Échange avec <span className="text-blue-600">{targetName}</span>
+            </h1>
         </div>
 
-        <div className="grid lg:grid-cols-2 gap-4 grow overflow-hidden pb-24">
+        {/* GRILLE PRINCIPALE */}
+        <div className="grid lg:grid-cols-2 gap-6 grow overflow-hidden pb-24">
             
-            {/* GAUCHE : MOI */}
-            <div className="flex flex-col h-full bg-danger/5 rounded-xl border border-danger/20 overflow-hidden relative shadow-sm">
+            {/* COLONNE GAUCHE (MOI) */}
+            <div className="flex flex-col h-full bg-red-50/50 dark:bg-red-900/10 rounded-xl border border-red-100 dark:border-red-900 overflow-hidden relative shadow-sm">
+                <div className="p-4 pb-0 flex-none">
+                     <h2 className="font-bold text-red-600 mb-2">📤 Je donne (Ma Collection)</h2>
+                     <input 
+                        type="text" 
+                        placeholder="Filtrer ma collection..." 
+                        className="w-full p-2 mb-2 rounded border dark:bg-gray-800 dark:text-white dark:border-gray-600 text-sm"
+                        value={searchMe}
+                        onChange={e => setSearchMe(e.target.value)}
+                    />
+                </div>
                 
-                {/* 1. Sélection (Top) */}
-                <div className="flex-2 flex flex-col min-h-0 bg-surface">
-                    <div className="flex justify-between items-center p-2 bg-danger/10 border-b border-danger/20">
-                        <span className="text-xs font-bold text-danger uppercase">JE DONNE ({toGive.reduce((a,c)=>a+c.quantity,0)})</span>
-                        <span className="text-sm font-bold text-danger">{valGive.toFixed(2)} €</span>
-                    </div>
-                    <TradeSelectionTable cards={toGive} onRemove={(id) => handleRemoveCard(id, 'give')} colorClass="text-danger" emptyLabel="Sélectionnez vos cartes..." />
+                <TradeSelectionTable 
+                    cards={toGive} 
+                    onRemove={(id) => handleRemoveCard(id, 'give')} 
+                    onUpdatePrice={(id, p) => handleUpdatePrice(id, p, 'give')}
+                    colorClass="text-danger" 
+                    emptyLabel="Sélectionnez vos cartes..." 
+                />
+
+                <div className="flex-none bg-red-50 dark:bg-red-900/20 p-3 border-t border-red-100 dark:border-red-900 text-center">
+                    <span className="text-xs text-red-600 dark:text-red-400 font-bold uppercase">Total Donné</span>
+                    <div className="text-xl font-bold text-red-700 dark:text-red-300">{valGive.toFixed(2)} €</div>
                 </div>
 
-                {/* 2. Recherche (Middle) */}
-                <div className="p-3 flex-none border-t border-border bg-surface border-b">
-                    <div className="flex justify-between items-center mb-2">
-                        <h2 className="font-bold text-muted text-xs uppercase tracking-wide">Mon Classeur</h2>
-                        <span className="text-[10px] bg-secondary text-muted px-2 py-0.5 rounded-full">{myCollection.filter(c => (c.quantityForTrade ?? 0) > 0).length} dispo</span>
-                    </div>
-                    <input type="text" placeholder="Filtrer ma collection..." className="w-full p-2 rounded-lg border border-border bg-background text-foreground text-sm focus:ring-2 focus:ring-danger outline-none" value={searchMe} onChange={e => setSearchMe(e.target.value)} />
-                </div>
-                
-                {/* 3. Résultats (Bottom) */}
-                <TradeSourceTable cards={filteredMyCollection} onAdd={(c) => handleSelectCard(c, 'give')} buttonColorClass="text-danger" loading={loadingMe} />
+                <TradeSourceTable 
+                    cards={filteredMyCollection} 
+                    onAdd={(c) => handleSelectCard(c, 'give')} 
+                    buttonColorClass="text-danger" 
+                    loading={loadingMe} 
+                />
             </div>
 
-            {/* DROITE : AMI */}
-            <div className="flex flex-col h-full bg-success/5 rounded-xl border border-success/20 overflow-hidden relative shadow-sm">
-                
-                {/* 1. Sélection (Top) */}
-                <div className="flex-2 flex flex-col min-h-0 bg-surface">
-                    <div className="flex justify-between items-center p-2 bg-success/10 border-b border-success/20">
-                        <span className="text-xs font-bold text-success uppercase">JE REÇOIS ({toReceive.reduce((a,c)=>a+c.quantity,0)})</span>
-                        <span className="text-sm font-bold text-success">{valReceive.toFixed(2)} €</span>
-                    </div>
-                    <TradeSelectionTable cards={toReceive} onRemove={(id) => handleRemoveCard(id, 'receive')} colorClass="text-success" emptyLabel={`Sélectionnez les cartes de ${targetName}...`} />
+            {/* COLONNE DROITE (AMI) */}
+            <div className="flex flex-col h-full bg-blue-50/50 dark:bg-blue-900/10 rounded-xl border border-blue-100 dark:border-blue-900 overflow-hidden relative shadow-sm">
+                <div className="p-4 pb-0 flex-none">
+                    <h2 className="font-bold text-blue-600 mb-2">📥 Je reçois (Sa Collection)</h2>
+                    <input 
+                        type="text" 
+                        placeholder={`Filtrer chez ${targetName}...`}
+                        className="w-full p-2 mb-2 rounded border dark:bg-gray-800 dark:text-white dark:border-gray-600 text-sm"
+                        value={searchHim}
+                        onChange={e => setSearchHim(e.target.value)}
+                    />
                 </div>
 
-                {/* 2. Recherche (Middle) */}
-                <div className="p-3 flex-none border-t border-border bg-surface border-b">
-                    <div className="flex justify-between items-center mb-2">
-                        <h2 className="font-bold text-muted text-xs uppercase tracking-wide">Classeur de {targetName}</h2>
-                        <span className="text-[10px] bg-secondary text-muted px-2 py-0.5 rounded-full">{friendCollection.filter(c => (c.quantityForTrade ?? 0) > 0).length} dispo</span>
-                    </div>
-                    <input type="text" placeholder={`Filtrer chez ${targetName}...`} className="w-full p-2 rounded-lg border border-border bg-background text-foreground text-sm focus:ring-2 focus:ring-success outline-none" value={searchHim} onChange={e => setSearchHim(e.target.value)} />
+                <TradeSelectionTable 
+                    cards={toReceive} 
+                    onRemove={(id) => handleRemoveCard(id, 'receive')} 
+                    onUpdatePrice={(id, p) => handleUpdatePrice(id, p, 'receive')}
+                    colorClass="text-success" 
+                    emptyLabel="Sélectionnez les cartes de l'ami..." 
+                />
+
+                <div className="flex-none bg-blue-50 dark:bg-blue-900/20 p-3 border-t border-blue-100 dark:border-blue-900 text-center">
+                    <span className="text-xs text-blue-600 dark:text-blue-400 font-bold uppercase">Total Reçu</span>
+                    <div className="text-xl font-bold text-blue-700 dark:text-blue-300">{valReceive.toFixed(2)} €</div>
                 </div>
 
-                {/* 3. Résultats (Bottom) */}
-                <TradeSourceTable cards={filteredFriendCollection} onAdd={(c) => handleSelectCard(c, 'receive')} buttonColorClass="text-success" loading={loadingHim} />
+                <TradeSourceTable 
+                    cards={filteredFriendCollection} 
+                    onAdd={(c) => handleSelectCard(c, 'receive')} 
+                    buttonColorClass="text-blue-600" 
+                    loading={loadingHim} 
+                />
             </div>
         </div>
 
         {/* FOOTER */}
-        <div className="fixed bottom-0 left-0 right-0 h-20 bg-surface border-t border-border flex justify-between items-center px-6 z-40 shadow-sm">
-            <div className="flex-1 hidden sm:block"></div>
+        <div className="fixed bottom-0 left-0 right-0 h-20 bg-white dark:bg-gray-900 border-t dark:border-gray-800 flex items-center px-6 z-40 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)]">
+            <div className="flex-1"></div>
             <div className="flex-1 flex flex-col items-center justify-center">
-                <span className="text-[10px] text-muted font-bold uppercase tracking-widest">Balance Estimée</span>
-                <div className={`text-2xl font-black ${balance >= 0 ? 'text-success' : 'text-danger'}`}>{balance > 0 ? '+' : ''}{balance.toFixed(2)} €</div>
+                <span className="text-xs text-gray-400 font-bold uppercase tracking-widest">Balance Estimée</span>
+                <div className={`text-2xl font-black ${balance >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                    {balance > 0 ? '+' : ''}{balance.toFixed(2)} €
+                </div>
             </div>
             <div className="flex-1 flex justify-end">
-                <button onClick={handlePropose} disabled={toGive.length === 0 && toReceive.length === 0} className="btn-primary px-8 py-3 disabled:opacity-50 flex items-center gap-2">
-                    {isPending ? 'Envoi...' : 'Proposer'}
+                <button 
+                    onClick={handlePropose}
+                    disabled={toGive.length === 0 && toReceive.length === 0}
+                    className="bg-purple-600 hover:bg-purple-700 text-white px-8 py-3 rounded-xl font-bold disabled:opacity-50 transition shadow-lg transform active:scale-95"
+                >
+                    Proposer
                 </button>
             </div>
         </div>
+
     </div>
   );
 }

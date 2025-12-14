@@ -41,18 +41,16 @@ interface ServerCardPayload {
     isSpecificVersion: boolean;
     scryfallData: Record<string, unknown> | null;
     wishlistId: string | null;
-    // Note: quantityForTrade est omis s'il n'est pas requis pour la validation du trade
 }
 
 // Fonction utilitaire pour convertir les CardType du client vers le format attendu par le serveur (ServerCardPayload)
 const mapCardsForServer = (cards: CardType[]): ServerCardPayload[] => {
     return cards.map(c => {
-        // Construction d'un objet propre
         const payload: ServerCardPayload = {
             id: c.id,
             name: c.name,
             imageUrl: c.imageUrl,
-            imageBackUrl: c.imageBackUrl || null,
+            imageBackUrl: c.imageBackUrl ?? null,
             quantity: c.quantity,
             price: c.price ?? 0,
             customPrice: c.customPrice,
@@ -64,7 +62,6 @@ const mapCardsForServer = (cards: CardType[]): ServerCardPayload[] => {
             wishlistId: c.wishlistId ?? null,
         };
         
-        // Nettoyage des champs non définis
         if (payload.customPrice === undefined) delete payload.customPrice;
 
         return payload;
@@ -114,18 +111,15 @@ export function useTradeSystem() {
     const toastId = toast.loading("Envoi de la proposition...");
 
     try {
-      // Préparation des données pour la Server Action
       const payload = {
           senderUid: user.uid,
           senderName: username || user.displayName || 'Inconnu',
           receiverUid,
           receiverName,
-          // Utilisation du mapping strict
           itemsGiven: mapCardsForServer(toGive),
           itemsReceived: mapCardsForServer(toReceive)
       };
 
-      // Définition stricte de la réponse attendue de proposeTradeAction
       const result = await proposeTradeAction(payload) as { 
           success: boolean; 
           error?: string; 
@@ -167,18 +161,15 @@ export function useTradeSystem() {
     const toastId = toast.loading("Validation sécurisée en cours...");
 
     try {
-        // Les données de l'objet trade sont déjà des tableaux de CardType, mais pour l'appel Server Action, 
-        // on doit les assurer qu'elles sont sérialisables. On utilise le mapping ici.
         const cleanGiven = mapCardsForServer(trade.itemsGiven);
         const cleanReceived = mapCardsForServer(trade.itemsReceived);
         
-        // Définition stricte de la réponse attendue de executeServerTrade
         const result = await executeServerTrade(
             trade.id, 
             trade.senderUid,
             user.uid, 
-            cleanGiven, // Passage des données propres
-            cleanReceived // Passage des données propres
+            cleanGiven, 
+            cleanReceived 
         ) as { success: boolean; error?: string; };
 
         if (result.success) {

@@ -1,13 +1,13 @@
 // components/wishlist/SingleWishlistView.tsx
 'use client';
 
-import { useState } from 'react';
 import { useAuth } from '@/lib/AuthContext';
 import { useCardCollection, CardType } from '@/hooks/useCardCollection';
 import MagicCard from '@/components/MagicCard';
 import toast from 'react-hot-toast';
 import { moveCardFromWishlistToCollection } from '@/lib/services/collectionService'; 
 import ColumnSlider from '@/components/ColumnSlider';
+import { useColumnPreference } from '@/hooks/useColumnPreference'; // Import
 
 type Props = {
     listId: string;
@@ -18,7 +18,8 @@ export default function SingleWishlistView({ listId, listName }: Props) {
     const { cards, loading, updateQuantity, removeCard, toggleAttribute, totalPrice } = useCardCollection('wishlist', listId);
     const { user } = useAuth();
     
-    const [columns, setColumns] = useState(5);
+    // Utilisation du hook
+    const { columns, setColumns } = useColumnPreference('mw_cols_wishlist_single', 5);
 
     const moveToCollection = async (card: CardType) => {
         if (!user) return;
@@ -72,6 +73,7 @@ export default function SingleWishlistView({ listId, listName }: Props) {
                             }}
                             onMove={() => moveToCollection(card)}
                             onToggleAttribute={(field, val) => toggleAttribute(card.id, field, val)}
+                            returnTo="/wishlist" 
                         />
                     ))}
                 </div>

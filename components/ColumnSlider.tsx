@@ -8,7 +8,7 @@ type Props = {
     max?: number;
 };
 
-export default function ColumnSlider({ columns, setColumns, min = 2, max = 10 }: Props) {
+export default function ColumnSlider({ columns, setColumns, min = 2, max = 8 }: Props) {
     return (
         <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2 bg-surface border border-border px-3 py-2 rounded-lg shadow-sm">
             <span className="text-[10px] uppercase font-bold text-muted whitespace-nowrap">

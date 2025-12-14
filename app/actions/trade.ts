@@ -1,10 +1,11 @@
+// app/actions/trade.ts
 'use server';
 
 import { getAdminFirestore } from '@/lib/firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
 import { z } from 'zod'; 
 import { TradeExecutionSchema, ValidatedCard, CardSchema } from '@/lib/validators';
-import { updateUserStats } from '@/app/actions/stats'; // <--- IMPORT
+import { updateUserStats } from '@/app/actions/stats';
 
 interface ServerCardPayload {
     id: string;
@@ -22,14 +23,26 @@ interface ServerCardPayload {
     wishlistId: string | null;
 }
 
+// C'est ici que la magie opère pour l'historique
 const createCardData = (card: ValidatedCard) => {
+    // Le prix négocié devient le prix d'achat (purchasePrice)
+    // S'il n'y a pas de prix négocié (customPrice), on prend le prix du marché (price)
+    const transactionPrice = card.customPrice !== undefined ? card.customPrice : (card.price || 0);
+
     return {
         name: card.name,
         imageUrl: card.imageUrl,
         imageBackUrl: card.imageBackUrl || null,
         setName: card.setName || '',
         setCode: card.setCode || '',
+        
+        // 1. On garde le prix Scryfall comme référence de valeur
         price: card.price || 0,
+        
+        // 2. On enregistre le prix de l'échange comme historique d'achat
+        purchasePrice: transactionPrice,
+        
+        // 3. On ne met PAS de customPrice pour l'affichage collection (on veut voir le prix Scryfall par défaut)
         quantity: card.quantity, 
         isFoil: card.isFoil || false,
         isSpecificVersion: card.isSpecificVersion || false,
@@ -40,7 +53,7 @@ const createCardData = (card: ValidatedCard) => {
     };
 };
 
-// --- ACTION 1 : ÉCHANGE P2P ---
+// --- ACTION 1 : ÉCHANGE P2P AVEC VALIDATION STATUS ---
 export async function executeServerTrade(
     tradeId: string,
     senderUid: string,
@@ -77,66 +90,60 @@ export async function executeServerTrade(
                 throw new Error("Cet échange n'est plus en attente.");
             }
 
-            const senderStockSnaps = [];
-            for (const card of itemsGiven) {
-                const ref = db.doc(`users/${senderUid}/collection/${card.id}`);
-                const snap = await t.get(ref);
-                senderStockSnaps.push({ ref, card, snap });
-            }
+            // LECTURES
+            const senderStockSnaps = await Promise.all(itemsGiven.map(c => t.get(db.doc(`users/${senderUid}/collection/${c.id}`))));
+            const receiverStockSnaps = await Promise.all(itemsReceived.map(c => t.get(db.doc(`users/${receiverUid}/collection/${c.id}`))));
+            
+            const senderDestSnaps = await Promise.all(itemsReceived.map(c => t.get(db.doc(`users/${senderUid}/collection/${c.id}`))));
+            const receiverDestSnaps = await Promise.all(itemsGiven.map(c => t.get(db.doc(`users/${receiverUid}/collection/${c.id}`))));
 
-            const receiverStockSnaps = [];
-            for (const card of itemsReceived) {
-                const ref = db.doc(`users/${receiverUid}/collection/${card.id}`);
-                const snap = await t.get(ref);
-                receiverStockSnaps.push({ ref, card, snap });
-            }
-
-            const senderDestSnaps = [];
-            for (const card of itemsReceived) {
-                const ref = db.doc(`users/${senderUid}/collection/${card.id}`);
-                const snap = await t.get(ref);
-                senderDestSnaps.push({ ref, card, snap });
-            }
-
-            const receiverDestSnaps = [];
-            for (const card of itemsGiven) {
-                const ref = db.doc(`users/${receiverUid}/collection/${card.id}`);
-                const snap = await t.get(ref);
-                receiverDestSnaps.push({ ref, card, snap });
-            }
-
+            // ÉCRITURES
             t.update(tradeRef, { status: 'completed', completedAt: FieldValue.serverTimestamp() });
 
-            for (const item of senderStockSnaps) {
-                if (!item.snap.exists || (item.snap.data()?.quantity || 0) < item.card.quantity) throw new Error(`Erreur stock expéditeur: ${item.card.name}`);
-                if (item.snap.data()?.quantity === item.card.quantity) t.delete(item.ref);
-                else t.update(item.ref, { quantity: FieldValue.increment(-item.card.quantity) });
-            }
+            // Débit Expéditeur
+            itemsGiven.forEach((card, i) => {
+                const snap = senderStockSnaps[i];
+                if (!snap.exists || (snap.data()?.quantity || 0) < card.quantity) throw new Error(`Stock expéditeur insuffisant: ${card.name}`);
+                if (snap.data()?.quantity === card.quantity) t.delete(snap.ref);
+                else t.update(snap.ref, { quantity: FieldValue.increment(-card.quantity) });
+            });
 
-            for (const item of receiverStockSnaps) {
-                if (!item.snap.exists || (item.snap.data()?.quantity || 0) < item.card.quantity) throw new Error(`Erreur stock receveur: ${item.card.name}`);
-                if (item.snap.data()?.quantity === item.card.quantity) t.delete(item.ref);
-                else t.update(item.ref, { quantity: FieldValue.increment(-item.card.quantity) });
-            }
+            // Débit Receveur
+            itemsReceived.forEach((card, i) => {
+                const snap = receiverStockSnaps[i];
+                if (!snap.exists || (snap.data()?.quantity || 0) < card.quantity) throw new Error(`Stock receveur insuffisant: ${card.name}`);
+                if (snap.data()?.quantity === card.quantity) t.delete(snap.ref);
+                else t.update(snap.ref, { quantity: FieldValue.increment(-card.quantity) });
+            });
 
-            for (const item of senderDestSnaps) {
-                const wishRef = db.doc(`users/${senderUid}/wishlist/${item.card.id}`);
-                if (item.snap.exists) t.update(item.ref, { quantity: FieldValue.increment(item.card.quantity) });
-                else t.set(item.ref, createCardData(item.card));
-                t.delete(wishRef); 
-            }
-
-            for (const item of receiverDestSnaps) {
-                const wishRef = db.doc(`users/${receiverUid}/wishlist/${item.card.id}`);
-                if (item.snap.exists) t.update(item.ref, { quantity: FieldValue.increment(item.card.quantity) });
-                else t.set(item.ref, createCardData(item.card));
+            // Crédit Expéditeur
+            itemsReceived.forEach((card, i) => {
+                const snap = senderDestSnaps[i];
+                const wishRef = db.doc(`users/${senderUid}/wishlist/${card.id}`);
+                
+                if (snap.exists) {
+                    t.update(snap.ref, { quantity: FieldValue.increment(card.quantity) });
+                } else {
+                    t.set(snap.ref, createCardData(card));
+                }
                 t.delete(wishRef);
-            }
+            });
+
+            // Crédit Receveur
+            itemsGiven.forEach((card, i) => {
+                const snap = receiverDestSnaps[i];
+                const wishRef = db.doc(`users/${receiverUid}/wishlist/${card.id}`);
+                
+                if (snap.exists) {
+                    t.update(snap.ref, { quantity: FieldValue.increment(card.quantity) });
+                } else {
+                    t.set(snap.ref, createCardData(card));
+                }
+                t.delete(wishRef);
+            });
         });
 
-        // --- OPTIMISATION : Mise à jour asynchrone des stats ---
-        Promise.all([updateUserStats(senderUid), updateUserStats(receiverUid)]).catch(err => console.error("Stats update failed", err));
-
+        Promise.all([updateUserStats(senderUid), updateUserStats(receiverUid)]).catch(console.error);
         return { success: true };
 
     } catch (error: unknown) {
@@ -147,7 +154,7 @@ export async function executeServerTrade(
     }
 }
 
-// --- ACTION 2 : ÉCHANGE MANUEL ---
+// --- ACTION 2 : ÉCHANGE MANUEL (SOLO) ---
 export async function executeManualTrade(
     userId: string,
     itemsGivenRaw: ServerCardPayload[], 
@@ -166,37 +173,30 @@ export async function executeManualTrade(
         const itemsReceived = parsedReceived.data as ValidatedCard[];
 
         await db.runTransaction(async (t) => {
-            const stockSnaps = [];
-            for (const card of itemsGiven) {
-                const ref = db.doc(`users/${userId}/collection/${card.id}`);
-                const snap = await t.get(ref);
-                stockSnaps.push({ ref, card, snap });
-            }
+            const stockSnaps = await Promise.all(itemsGiven.map(c => t.get(db.doc(`users/${userId}/collection/${c.id}`))));
+            const destSnaps = await Promise.all(itemsReceived.map(c => t.get(db.doc(`users/${userId}/collection/${c.id}`))));
 
-            const destSnaps = [];
-            for (const card of itemsReceived) {
-                const ref = db.doc(`users/${userId}/collection/${card.id}`);
-                const snap = await t.get(ref);
-                destSnaps.push({ ref, card, snap });
-            }
+            itemsGiven.forEach((card, i) => {
+                const snap = stockSnaps[i];
+                if (!snap.exists || (snap.data()?.quantity || 0) < card.quantity) throw new Error(`Stock insuffisant: ${card.name}`);
+                if (snap.data()?.quantity === card.quantity) t.delete(snap.ref);
+                else t.update(snap.ref, { quantity: FieldValue.increment(-card.quantity) });
+            });
 
-            for (const item of stockSnaps) {
-                if (!item.snap.exists || (item.snap.data()?.quantity || 0) < item.card.quantity) throw new Error(`Stock insuffisant: ${item.card.name}`);
-                if (item.snap.data()?.quantity === item.card.quantity) t.delete(item.ref);
-                else t.update(item.ref, { quantity: FieldValue.increment(-item.card.quantity) });
-            }
-
-            for (const item of destSnaps) {
-                const wishRef = db.doc(`users/${userId}/wishlist/${item.card.id}`);
-                if (item.snap.exists) t.update(item.ref, { quantity: FieldValue.increment(item.card.quantity) });
-                else t.set(item.ref, createCardData(item.card));
+            itemsReceived.forEach((card, i) => {
+                const snap = destSnaps[i];
+                const wishRef = db.doc(`users/${userId}/wishlist/${card.id}`);
+                
+                if (snap.exists) {
+                    t.update(snap.ref, { quantity: FieldValue.increment(card.quantity) });
+                } else {
+                    t.set(snap.ref, createCardData(card));
+                }
                 t.delete(wishRef);
-            }
+            });
         });
 
-        // --- OPTIMISATION : Mise à jour stats ---
-        updateUserStats(userId).catch(err => console.error("Stats update failed", err));
-
+        updateUserStats(userId).catch(console.error);
         return { success: true };
 
     } catch (error: unknown) {

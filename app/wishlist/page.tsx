@@ -18,17 +18,19 @@ export default function WishlistPage() {
   const [selectedListId, setSelectedListId] = useState<string>('default');
   const [newListName, setNewListName] = useState('');
 
-  // États pour les modales
   const [isHubOpen, setIsHubOpen] = useState(false);
   const [isImportOpen, setIsImportOpen] = useState(false);
   const [isExportOpen, setIsExportOpen] = useState(false);
+  
+  // On charge les cartes uniquement pour l'export maintenant
+  const { cards: selectedListCards } = useCardCollection('wishlist', selectedListId); 
 
-  // Charger les cartes de la liste actuellement sélectionnée pour l'Export/Import
-  // NOTE: On utilise selectedListId pour cibler la liste pour l'export/import.
-  const { cards: selectedListCards } = useCardCollection('wishlist', selectedListId);
+  const currentListName = useMemo(() => {
+    return lists.find(l => l.id === selectedListId)?.name || 'Liste principale';
+  }, [lists, selectedListId]);
 
   if (!user) return <p className="p-10 text-center text-muted">Veuillez vous connecter.</p>;
-
+  
   const handleCreate = (e: React.FormEvent) => {
     e.preventDefault();
     if(newListName.trim()) {
@@ -37,40 +39,31 @@ export default function WishlistPage() {
     }
   };
 
-  // --- Fonctions de navigation modale ---
   const closeAllModals = () => {
     setIsHubOpen(false);
     setIsImportOpen(false);
     setIsExportOpen(false);
-  }
+  };
   
   const openHub = () => {
     setIsImportOpen(false);
     setIsExportOpen(false);
     setIsHubOpen(true);
-  }
+  };
   
   const handleSelectImport = () => {
     setIsHubOpen(false);
     setIsImportOpen(true);
-  }
+  };
   
   const handleSelectExport = () => {
     setIsHubOpen(false);
     setIsExportOpen(true);
-  }
-
-  // Trouve le nom de la liste pour l'export
-  // eslint-disable-next-line react-hooks/rules-of-hooks
-  const currentListName = useMemo(() => {
-    return lists.find(l => l.id === selectedListId)?.name || 'Liste principale';
-  }, [lists, selectedListId]);
-
+  };
 
   return (
     <main className="container mx-auto p-4 flex flex-col md:flex-row gap-8 min-h-[85vh]">
       
-      {/* SIDEBAR */}
       <aside className="w-full md:w-72 flex-none space-y-6">
         <div className="bg-surface p-5 rounded-xl shadow-sm border border-border sticky top-24">
             <h3 className="font-bold mb-4 text-foreground flex items-center gap-2 border-b border-border pb-2">
@@ -82,7 +75,6 @@ export default function WishlistPage() {
             ) : (
                 <div className="flex flex-col gap-1 max-h-[60vh] overflow-y-auto pr-1 custom-scrollbar">
                     
-                    {/* BOUTON IMPORTER/EXPORTER UNIFIÉ */}
                     <button 
                         onClick={() => setIsHubOpen(true)}
                         className="btn-primary text-sm whitespace-nowrap mb-3 w-full"
@@ -90,7 +82,6 @@ export default function WishlistPage() {
                         Importer/Exporter
                     </button>
                     
-                    {/* BOUTON VUE GLOBALE */}
                     <button
                         onClick={() => setSelectedListId('GLOBAL_VIEW')}
                         className={`text-left px-3 py-2.5 rounded-lg text-sm transition-all duration-200 flex items-center gap-2 mb-2 ${
@@ -99,7 +90,7 @@ export default function WishlistPage() {
                             : 'bg-purple-50 text-purple-700 hover:bg-purple-100 dark:bg-purple-900/40 dark:text-purple-200'
                         }`}
                     >
-                        <span>🌍</span> Tout voir (Fusionné)
+                        <span>🌍</span> Tout voir (Fusionne)
                     </button>
 
                     <div className="border-t border-border my-2"></div>
@@ -139,7 +130,6 @@ export default function WishlistPage() {
                 </div>
             )}
 
-            {/* Formulaire Création */}
             <form onSubmit={handleCreate} className="mt-6 pt-4 border-t border-border">
                 <div className="flex gap-2">
                     <input 
@@ -172,8 +162,6 @@ export default function WishlistPage() {
           )}
       </section>
       
-      {/* --- MODALES --- */}
-      
       <DataTransferHubModal 
         isOpen={isHubOpen}
         onClose={closeAllModals}
@@ -188,7 +176,7 @@ export default function WishlistPage() {
           onGoBack={openHub}       
           onCloseAll={closeAllModals}
           targetCollection="wishlist" 
-          currentCollection={selectedListCards.map(c => ({ id: c.id, quantity: c.quantity, foil: c.isFoil }))} 
+          // Suppression de currentCollection ici aussi
       />
       
       <ExportModal

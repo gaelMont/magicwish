@@ -9,7 +9,8 @@ import MagicCard from '@/components/MagicCard';
 import { db } from '@/lib/firebase';
 import { collection, getDocs } from 'firebase/firestore';
 import toast from 'react-hot-toast';
-import ColumnSlider from '@/components/ColumnSlider'; // <--- IMPORT
+import ColumnSlider from '@/components/ColumnSlider';
+import { useColumnPreference } from '@/hooks/useColumnPreference'; // Import
 
 type Props = {
     lists: WishlistMeta[];
@@ -20,7 +21,8 @@ export default function GlobalWishlistView({ lists }: Props) {
     const [allCards, setAllCards] = useState<(CardType & { sourceListName: string })[]>([]);
     const [loading, setLoading] = useState(true);
     
-    const [columns, setColumns] = useState(5); // <--- ÉTAT LOCAL
+    // Utilisation du hook
+    const { columns, setColumns } = useColumnPreference('mw_cols_wishlist_global', 5);
 
     useEffect(() => {
         if (!user || lists.length === 0) return;
@@ -84,7 +86,6 @@ export default function GlobalWishlistView({ lists }: Props) {
                 </div>
                 
                 <div className="flex items-center gap-4">
-                    {/* SLIDER AJOUTÉ ICI */}
                     <ColumnSlider columns={columns} setColumns={setColumns} />
 
                     <div className="text-right">
@@ -108,7 +109,11 @@ export default function GlobalWishlistView({ lists }: Props) {
                             <div className="absolute top-0 right-0 z-30 bg-black/70 text-white text-[10px] px-2 py-1 rounded-bl-lg backdrop-blur-sm pointer-events-none">
                                 {card.sourceListName}
                             </div>
-                            <MagicCard {...card} isWishlist={false} />
+                            <MagicCard 
+                                {...card} 
+                                isWishlist={false} 
+                                returnTo="/wishlist" 
+                            />
                         </div>
                     ))}
                 </div>

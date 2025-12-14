@@ -1,3 +1,4 @@
+// app/page.tsx
 'use client';
 
 import { useAuth } from '@/lib/AuthContext';
@@ -106,9 +107,12 @@ export default function DashboardPage() {
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
         
-        {/* CARTE ECHANGES */}
-        <Link href="/trades" className={`${cardStyle} 
-            ${incomingTrades.length > 0 ? 'bg-orange-50 border-orange-300 dark:bg-orange-900/20 dark:border-orange-800' : ''}`}>
+        {/* CARTE ECHANGES (Redirection intelligente) */}
+        <Link 
+            href={incomingTrades.length > 0 ? "/trades?tab=requests" : "/trades"} 
+            className={`${cardStyle} 
+            ${incomingTrades.length > 0 ? 'bg-orange-50 border-orange-300 dark:bg-orange-900/20 dark:border-orange-800' : ''}`}
+        >
             <div className="flex justify-between items-start mb-2">
                 <span className={`font-bold text-lg group-hover:text-primary transition-colors ${incomingTrades.length > 0 ? 'text-orange-700 dark:text-orange-400' : 'text-foreground'}`}>
                     Échanges

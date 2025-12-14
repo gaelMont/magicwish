@@ -1,3 +1,4 @@
+// components/MagicCard.tsx
 'use client';
 
 import { useState, useEffect, memo } from 'react';
@@ -52,18 +53,21 @@ function MagicCard(props: MagicCardProps) {
   
   const [isFlipped, setIsFlipped] = useState(false);
   const [isEditingPrice, setIsEditingPrice] = useState(false);
-  const [tempPrice, setTempPrice] = useState(customPrice?.toString() || price?.toString() || "0");
+  
+  const displayPriceSource = (isTradeView || allowPriceEdit) && customPrice !== undefined ? customPrice : (price || 0);
+  const [tempPrice, setTempPrice] = useState(displayPriceSource.toString());
 
   useEffect(() => {
     if (!isEditingPrice) {
-        const newVal = customPrice?.toString() || price?.toString() || "0";
+        const newVal = (isTradeView || allowPriceEdit) && customPrice !== undefined ? customPrice : (price || 0);
         // eslint-disable-next-line react-hooks/set-state-in-effect
-        setTempPrice(prev => (prev !== newVal ? newVal : prev));
+        setTempPrice(newVal.toString());
     }
-  }, [customPrice, price, isEditingPrice]);
+  }, [customPrice, price, isEditingPrice, isTradeView, allowPriceEdit]);
 
-  const effectivePrice = customPrice !== undefined ? customPrice : (price || 0);
   const tradeQty = quantityForTrade ?? 0;
+  const hasPrice = displayPriceSource > 0;
+  const displayPriceString = hasPrice ? `${displayPriceSource.toFixed(2)} €` : "N/A";
 
   const handleSavePrice = () => {
       if (onEditPrice) {
@@ -79,29 +83,26 @@ function MagicCard(props: MagicCardProps) {
           onSelect();
           return;
       } 
-      
       if (isTradeView) {
          if (imageBackUrl) setIsFlipped(!isFlipped);
          return;
       }
-      
       if (props.id) {
           const url = returnTo 
             ? `/card/${props.id}?returnTo=${encodeURIComponent(returnTo)}`
             : `/card/${props.id}`;
-          
           router.push(url);
           return;
       }
-
       if (imageBackUrl) {
           setIsFlipped(!isFlipped);
       }
   };
 
+  // --- VUE LISTE (Pour les echanges) ---
   if (isTradeView) {
       return (
-        <div className="flex items-center gap-3 bg-surface p-2 rounded-lg border border-border content-visibility-auto transition-colors">
+        <div className="flex items-center gap-3 bg-surface p-2 rounded-lg border border-border content-visibility-auto transition-colors select-none">
             <div className="w-10 h-14 bg-secondary rounded overflow-hidden shrink-0 relative group cursor-pointer" onClick={() => setIsFlipped(!isFlipped)}>
                  <img src={currentImage} className="w-full h-full object-cover" alt={name} loading="lazy" />
             </div>
@@ -123,9 +124,9 @@ function MagicCard(props: MagicCardProps) {
                 ) : (
                     <div 
                         className={`font-medium text-sm ${customPrice ? 'text-orange-600' : 'text-foreground'} ${allowPriceEdit ? 'cursor-pointer hover:text-primary' : ''}`}
-                        onClick={() => { if (allowPriceEdit) { setTempPrice(effectivePrice.toString()); setIsEditingPrice(true); }}}
+                        onClick={() => { if (allowPriceEdit) { setTempPrice(displayPriceSource.toString()); setIsEditingPrice(true); }}}
                     >
-                        {effectivePrice.toFixed(2)} €
+                        {displayPriceSource.toFixed(2)} EUR
                     </div>
                 )}
             </div>
@@ -133,10 +134,11 @@ function MagicCard(props: MagicCardProps) {
       );
   }
 
+  // --- VUE GRILLE (Collection) ---
   return (
     <div 
         onClick={handleCardClick}
-        className={`relative group flex flex-col rounded-xl overflow-hidden p-3 gap-2 h-full content-visibility-auto
+        className={`relative group flex flex-col rounded-xl overflow-hidden p-2 gap-1.5 h-full content-visibility-auto select-none
         bg-surface border transition-all duration-200 shadow-sm hover:shadow-md
         ${isSelected ? 'border-primary ring-1 ring-primary bg-primary/5' : 'border-border hover:border-primary'}
         ${isSelectMode || !isTradeView ? 'cursor-pointer' : ''} 
@@ -150,6 +152,7 @@ function MagicCard(props: MagicCardProps) {
           </div>
       )}
 
+      {/* IMAGE */}
       <div className="relative w-full aspect-[2.5/3.5] bg-secondary rounded-lg overflow-hidden shrink-0">
         <img
           src={currentImage || CARD_BACK_URL}
@@ -164,18 +167,19 @@ function MagicCard(props: MagicCardProps) {
         )}
       </div>
       
-      <div className="flex-1 flex flex-col min-w-0 pt-1">
+      {/* INFOS */}
+      <div className="flex-1 flex flex-col min-w-0">
         <div className="flex justify-between items-start mb-0.5">
-            <h3 className="font-semibold text-sm leading-tight text-foreground truncate grow" title={name}>{name}</h3>
+            <h3 className="font-semibold text-xs leading-tight text-foreground truncate grow" title={name}>{name}</h3>
         </div>
-        <p className="text-[11px] text-muted truncate mb-2">{setName}</p>
+        <p className="text-[10px] text-muted truncate mb-1">{setName}</p>
 
-        <div className={`flex flex-wrap gap-1 mb-2 ${isSelectMode ? 'pointer-events-none opacity-50' : ''}`}>
-            
+        {/* TAGS */}
+        <div className={`flex flex-wrap gap-1 mb-auto ${isSelectMode ? 'pointer-events-none opacity-50' : ''}`}>
             {onToggleAttribute ? (
                 <button 
                     onClick={(e) => { e.stopPropagation(); onToggleAttribute('isFoil', !!isFoil); }}
-                    className={`text-[10px] px-2 py-1 rounded border transition-colors font-medium flex-1 text-center ${
+                    className={`text-[9px] px-1.5 py-0.5 rounded border transition-colors font-medium flex-1 text-center ${
                         isFoil ? 'bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-900/30 dark:text-amber-400 dark:border-amber-800' : 'bg-secondary text-muted border-transparent hover:bg-border'
                     }`}
                 >
@@ -186,7 +190,7 @@ function MagicCard(props: MagicCardProps) {
             {isWishlist && onToggleAttribute && (
                 <button 
                     onClick={(e) => { e.stopPropagation(); onToggleAttribute('isSpecificVersion', !!isSpecificVersion); }}
-                    className={`text-[10px] px-2 py-1 rounded border transition-colors font-medium flex-1 text-center ${
+                    className={`text-[9px] px-1.5 py-0.5 rounded border transition-colors font-medium flex-1 text-center ${
                         isSpecificVersion ? 'bg-primary/10 text-primary border-primary/30' : 'bg-secondary text-muted border-transparent'
                     }`}
                 >
@@ -197,54 +201,60 @@ function MagicCard(props: MagicCardProps) {
             {isWishlist && !readOnly && !isSelectMode && onMove && (
                 <button 
                     onClick={(e) => { e.stopPropagation(); onMove(); }}
-                    className="text-[10px] px-2 py-1 rounded border transition-colors font-bold flex-1 text-center bg-surface text-success border-success/30 hover:bg-success/5"
-                    title="J'ai reçu cette carte"
+                    className="text-[9px] px-1.5 py-0.5 rounded border transition-colors font-bold flex-1 text-center bg-surface text-success border-success/30 hover:bg-success/5"
+                    title="J'ai recu cette carte"
                 >
-                    Acheté
+                    Achete
                 </button>
             )}
         </div>
         
-        <div className={`mt-auto flex justify-between items-center border-t border-border pt-2 ${isSelectMode ? 'pointer-events-none opacity-50' : ''}`}>
+        {/* FOOTER : CORRECTION FLEXBOX (Plus robuste pour les petits espaces) */}
+        <div className={`mt-2 border-t border-border pt-1.5 flex justify-between items-center min-h-[26px] ${isSelectMode ? 'pointer-events-none opacity-50' : ''}`}>
             
-            <div className="flex items-center gap-1">
-                {!readOnly && <button onClick={(e) => {e.stopPropagation(); onDecrement?.()}} className="w-5 h-5 rounded bg-secondary hover:bg-border text-muted hover:text-foreground flex items-center justify-center text-xs font-bold transition" title="Diminuer stock">-</button>}
-                <span className={`text-sm ${readOnly ? 'font-bold text-foreground' : 'w-4 text-center text-foreground'}`}>{quantity}</span>
-                {!readOnly && <button onClick={(e) => {e.stopPropagation(); onIncrement?.()}} className="w-5 h-5 rounded bg-primary/10 hover:bg-primary/20 text-primary border border-primary/30 flex items-center justify-center text-xs font-bold transition" title="Augmenter stock">+</button>}
+            {/* 1. QUANTITE (GAUCHE) */}
+            <div className="flex-1 flex justify-start items-center min-w-0">
+                <div className="flex items-center bg-secondary rounded-[4px] p-[1px] border border-border h-[20px]">
+                    {!readOnly && <button onClick={(e) => {e.stopPropagation(); onDecrement?.()}} className="w-3.5 h-full hover:bg-border text-muted hover:text-foreground rounded-[2px] flex items-center justify-center text-[10px] font-bold transition leading-none">-</button>}
+                    <span className={`text-[10px] leading-none flex items-center justify-center h-full px-1 font-bold text-foreground min-w-[12px]`}>{quantity}</span>
+                    {!readOnly && <button onClick={(e) => {e.stopPropagation(); onIncrement?.()}} className="w-3.5 h-full bg-primary/10 hover:bg-primary/20 text-primary rounded-[2px] flex items-center justify-center text-[10px] font-bold transition leading-none">+</button>}
+                </div>
             </div>
 
-            {!isWishlist && !readOnly && !isSelectMode && (
-                <div className="flex items-center gap-1 mx-1 grow justify-center">
-                    <button 
-                        onClick={(e) => {e.stopPropagation(); onDecrementTrade?.()}} 
-                        disabled={tradeQty <= 0}
-                        className="w-5 h-5 rounded bg-danger/10 hover:bg-danger/20 text-danger/80 flex items-center justify-center text-xs font-bold transition disabled:opacity-30" 
-                        title="Diminuer stock échange"
-                    >
-                        -
-                    </button>
-                    <span 
-                        className="text-xs font-bold text-success bg-success/10 px-2 py-0.5 rounded-full" 
-                        title={`${tradeQty} exemplaire(s) disponible(s) pour l'échange.`}
-                    >
-                        {tradeQty} / {quantity} Trade
-                    </span>
-                    <button 
-                        onClick={(e) => {e.stopPropagation(); onIncrementTrade?.()}} 
-                        disabled={tradeQty >= quantity}
-                        className="w-5 h-5 rounded bg-success/10 hover:bg-success/20 text-success/80 flex items-center justify-center text-xs font-bold transition disabled:opacity-30" 
-                        title="Augmenter stock échange"
-                    >
-                        +
-                    </button>
-                </div>
-            )}
+            {/* 2. TRADE (CENTRE) - Flex Shrinkable mais priorité au contenu */}
+            <div className="shrink-0 flex justify-center mx-1">
+                {!isWishlist && !readOnly && !isSelectMode && (
+                    <div className="flex items-center bg-success/10 border border-success/20 rounded-[4px] p-[1px] h-[20px]">
+                        <button 
+                            onClick={(e) => {e.stopPropagation(); onDecrementTrade?.()}} 
+                            disabled={tradeQty <= 0}
+                            className="w-3.5 h-full hover:bg-success/20 text-success/70 hover:text-success rounded-[2px] flex items-center justify-center text-[10px] font-bold transition leading-none disabled:opacity-30" 
+                        >
+                            -
+                        </button>
+                        
+                        <span className="text-[10px] leading-none flex items-center justify-center h-full px-1 font-bold text-success min-w-[12px]">
+                            {tradeQty}
+                        </span>
+
+                        <button 
+                            onClick={(e) => {e.stopPropagation(); onIncrementTrade?.()}} 
+                            disabled={tradeQty >= quantity}
+                            className="w-3.5 h-full hover:bg-success/20 text-success/70 hover:text-success rounded-[2px] flex items-center justify-center text-[10px] font-bold transition leading-none disabled:opacity-30" 
+                        >
+                            +
+                        </button>
+                    </div>
+                )}
+            </div>
+
+            {/* 3. PRIX (DROITE) */}
+            <div className="flex-1 flex justify-end items-center min-w-0">
+                <p className={`font-bold text-[10px] whitespace-nowrap leading-none ${!hasPrice ? 'text-muted italic' : 'text-foreground'}`}>
+                    {displayPriceString}
+                </p>
+            </div>
           
-          <div className="text-right leading-none shrink-0">
-             <p className={`font-bold text-sm ${customPrice ? 'text-orange-600' : 'text-foreground'}`}>
-                 {(effectivePrice * quantity).toFixed(2)} €
-             </p>
-          </div>
         </div>
       </div>
     </div>
