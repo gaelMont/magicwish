@@ -1,17 +1,25 @@
 'use client';
 
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import Webcam from 'react-webcam';
-import Tesseract from 'tesseract.js';
 import toast from 'react-hot-toast';
-import axios, { AxiosError } from 'axios';
+import axios from 'axios';
 import { useAuth } from '@/lib/AuthContext';
 import { importCardsAction } from '@/app/actions/import';
-import { useRouter } from 'next/navigation';
-import Link from 'next/link';
-import { useWishlists } from '@/hooks/useWishlists';
 
-// --- TYPES POUR L'IA (Types stricts) ---
+// --- CONFIGURATION ---
+const ROBOFLOW_MODEL_ID = "mtg-card-scanner/2";
+const ROBOFLOW_API_KEY = "PZfOfzlDY9nLXVzVHRcJ";
+
+// --- TYPES ---
+type CardHash = {
+    h: string;  
+    n: string;  
+    s: string;  
+    cn: string; 
+    id: string; 
+};
+
 type RoboflowPrediction = {
     x: number;
     y: number;
@@ -25,75 +33,87 @@ type RoboflowResponse = {
     predictions: RoboflowPrediction[];
 };
 
-// --- CONFIGURATION ROBOFLOW ---
-const ROBOFLOW_MODEL_ID = "mtg-card-scanner/2"; 
-const ROBOFLOW_API_KEY = "PZfOfzlDY9nLXVzVHRcJ"; 
+// Fonction pour calculer la distance de Hamming (Différence entre 2 hashes)
+const hammingDistance = (hash1: string, hash2: string) => {
+    // CORRECTION : Utilisation de const
+    const val1 = BigInt('0x' + hash1);
+    const val2 = BigInt('0x' + hash2);
+    let xor = val1 ^ val2;
+    let distance = 0;
+    while (xor > 0n) {
+        distance += Number(xor & 1n);
+        xor >>= 1n;
+    }
+    return distance;
+};
 
-type ScannedItem = {
-    id: string;
-    text: string;
+// Algorithme dHash
+const computeBrowserDHash = (imgData: ImageData): string => {
+    const size = 9; 
+    let hash = '';
+    const data = imgData.data;
+
+    for (let y = 0; y < size - 1; y++) {
+        for (let x = 0; x < size - 1; x++) {
+            const i = (y * size + x) * 4;
+            const j = (y * size + (x + 1)) * 4;
+            const left = (data[i] + data[i+1] + data[i+2]) / 3;
+            const right = (data[j] + data[j+1] + data[j+2]) / 3;
+            hash += (left > right ? '1' : '0');
+        }
+    }
+    return BigInt('0b' + hash).toString(16);
 };
 
 export default function ScanPage() {
     const { user } = useAuth();
-    const router = useRouter();
-    const { lists } = useWishlists();
-
     const webcamRef = useRef<Webcam>(null);
-    const canvasRef = useRef<HTMLCanvasElement>(null); 
-    const [cameraReady, setCameraReady] = useState(false);
     
+    // États
+    const [dbHashes, setDbHashes] = useState<CardHash[]>([]);
+    const [dbLoading, setDbLoading] = useState(true);
     const [isProcessing, setIsProcessing] = useState(false);
-    const [progress, setProgress] = useState(0);
-    const [statusText, setStatusText] = useState("Prêt à scanner");
-    const [debugMode, setDebugMode] = useState(false);
+    const [statusText, setStatusText] = useState("Chargement DB...");
+    const [scannedCards, setScannedCards] = useState<CardHash[]>([]);
+    const [debugImage, setDebugImage] = useState<string | null>(null);
 
-    const [scannedItems, setScannedItems] = useState<ScannedItem[]>([]);
-    
-    // TYPAGE STRICT DE L'ÉTAT
-    const [destination, setDestination] = useState<'collection' | 'wishlist'>('collection');
-    
-    const [targetListId, setTargetListId] = useState('default');
-    const [isImporting, setIsImporting] = useState(false);
+    useEffect(() => {
+        fetch('/card-hashes.json')
+            .then(res => res.json())
+            .then(data => {
+                setDbHashes(data);
+                setDbLoading(false);
+                setStatusText("Prêt à scanner");
+            })
+            .catch(err => {
+                console.error("Erreur chargement DB:", err);
+                setStatusText("Erreur chargement base de données");
+            });
+    }, []);
 
-    const videoConstraints = {
-        width: 1920,
-        height: 1080,
-        facingMode: "environment"
-    };
-
-    const captureAndProcess = useCallback(async () => {
-        if (!webcamRef.current || isProcessing) return;
+    const captureAndIdentify = useCallback(async () => {
+        if (!webcamRef.current || isProcessing || dbHashes.length === 0) return;
         
         const imageSrc = webcamRef.current.getScreenshot();
         if (!imageSrc) return;
 
         setIsProcessing(true);
-        setStatusText("Analyse IA (Roboflow)...");
-        setProgress(10);
+        setStatusText("Détection IA...");
 
         try {
+            // A. ROBOFLOW
             const roboflowUrl = `https://detect.roboflow.com/${ROBOFLOW_MODEL_ID}?api_key=${ROBOFLOW_API_KEY}`;
-            
+            // CORRECTION : Typage de la réponse Axios
             const response = await axios.post<RoboflowResponse>(roboflowUrl, imageSrc, {
                 headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
             });
 
             const predictions = response.data.predictions;
-            if (!predictions || predictions.length === 0) {
-                throw new Error("Aucune carte détectée. Essayez un fond uni.");
-            }
+            if (!predictions || predictions.length === 0) throw new Error("Aucune carte vue.");
+            
+            const box = predictions[0];
 
-            const cardBox = predictions[0];
-
-            if (cardBox.confidence < 0.4) {
-                throw new Error("Détection incertaine. Rapprochez-vous.");
-            }
-
-            // --- DÉCOUPE ---
-            setStatusText("Découpe du titre...");
-            setProgress(30);
-
+            // B. EXTRACTION
             const image = new Image();
             image.src = imageSrc;
             await new Promise((resolve) => { image.onload = resolve; });
@@ -102,268 +122,137 @@ export default function ScanPage() {
             const ctx = canvas.getContext('2d');
             if (!ctx) return;
 
-            const boxX = cardBox.x - (cardBox.width / 2);
-            const boxY = cardBox.y - (cardBox.height / 2);
+            canvas.width = 9; 
+            canvas.height = 8;
+
+            const x = box.x - box.width / 2;
+            const y = box.y - box.height / 2;
+
+            ctx.drawImage(image, x, y, box.width, box.height, 0, 0, 9, 8);
             
-            const marginX = cardBox.width * 0.05;
+            setDebugImage(canvas.toDataURL());
+
+            // C. CALCUL DU HASH
+            const imgData = ctx.getImageData(0, 0, 9, 8);
+            const currentHash = computeBrowserDHash(imgData);
+
+            // D. RECHERCHE
+            setStatusText("Identification...");
             
-            const cropX = boxX + marginX;
-            const cropY = boxY + (cardBox.height * 0.035); 
-            const cropW = cardBox.width - (marginX * 2);
-            const cropH = cardBox.height * 0.11; 
+            let bestMatch: CardHash | null = null;
+            let minDistance = 100; 
 
-            canvas.width = cropW;
-            canvas.height = cropH;
-
-            ctx.drawImage(image, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
-
-            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-            const data = imageData.data;
-            
-            for (let i = 0; i < data.length; i += 4) {
-                const r = data[i];
-                const g = data[i + 1];
-                const b = data[i + 2];
-                const gray = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-                const val = gray > 110 ? 255 : 0; 
-                data[i] = data[i+1] = data[i+2] = val;
-            }
-            ctx.putImageData(imageData, 0, 0);
-
-            if (debugMode && canvasRef.current) {
-                const debugCtx = canvasRef.current.getContext('2d');
-                if (debugCtx) {
-                    canvasRef.current.width = cropW;
-                    canvasRef.current.height = cropH;
-                    debugCtx.putImageData(imageData, 0, 0);
+            for (const item of dbHashes) {
+                const dist = hammingDistance(currentHash, item.h);
+                if (dist < minDistance) {
+                    minDistance = dist;
+                    bestMatch = item;
                 }
+                if (dist === 0) break;
             }
 
-            // --- OCR ---
-            setStatusText("Lecture du texte...");
-            setProgress(60);
-            
-            const processedImage = canvas.toDataURL('image/jpeg');
-            const ocrResult = await Tesseract.recognize(
-                processedImage,
-                'eng',
-                { logger: m => { if (m.status === 'recognizing text') setProgress(60 + Math.round(m.progress * 40)); } }
-            );
-
-            const rawText = ocrResult.data.text;
-            const cleanText = rawText.replace(/[^a-zA-Z0-9',\s-]/g, '').trim();
-
-            if (cleanText.length > 2) {
-                const isDuplicate = scannedItems.length > 0 && scannedItems[0].text === cleanText;
-                
-                if (!isDuplicate) {
-                    setScannedItems(prev => [{ id: Date.now().toString(), text: cleanText }, ...prev]);
-                    toast.success(`Trouvé : ${cleanText}`);
-                } else {
-                    toast("Déjà scanné !", { icon: '⚠️' });
-                }
+            if (bestMatch && minDistance <= 12) {
+                toast.success(`Trouvé : ${bestMatch.n} (${minDistance})`);
+                // CORRECTION : bestMatch est typé, TypeScript est content
+                setScannedCards(prev => [bestMatch!, ...prev]);
             } else {
-                toast.error("Texte illisible. Vérifiez l'éclairage.");
+                toast.error(`Carte inconnue (Dist: ${minDistance})`);
             }
 
-        } catch (error: unknown) {
-            console.error(error);
-            
-            if (axios.isAxiosError(error)) {
-                const axiosErr = error as AxiosError;
-                if (axiosErr.response?.status === 401) toast.error("Clé API Roboflow invalide.");
-                else if (axiosErr.response?.status === 403) toast.error("Accès Roboflow refusé (Vérifiez votre plan).");
-                else toast.error("Erreur réseau Roboflow");
-            } else if (error instanceof Error) {
-                toast.error(error.message);
-            } else {
-                toast.error("Erreur technique inconnue");
-            }
+        // CORRECTION : Typage de l'erreur catch
+        } catch (e: unknown) {
+            console.error(e);
+            let message = "Erreur technique";
+            if (e instanceof Error) message = e.message;
+            toast.error(message);
         } finally {
             setIsProcessing(false);
-            setStatusText("Prêt à scanner");
-            setProgress(0);
+            setStatusText("Prêt");
         }
-    }, [isProcessing, debugMode, scannedItems, lists]); 
+    }, [dbHashes, isProcessing]);
 
-    const updateItem = (id: string, newVal: string) => {
-        setScannedItems(prev => prev.map(item => item.id === id ? { ...item, text: newVal } : item));
-    };
-    
-    const removeItem = (id: string) => {
-        setScannedItems(prev => prev.filter(item => item.id !== id));
-    };
-
-    const handleFinalImport = async () => {
-        if (!user || scannedItems.length === 0) return;
+    const handleImport = async () => {
+        if(!user || scannedCards.length === 0) return;
+        const toastId = toast.loading("Ajout...");
         
-        setIsImporting(true);
-        const toastId = toast.loading("Importation vers Scryfall...");
+        const payload = scannedCards.map(c => ({
+            scryfallId: c.id,
+            name: c.n,
+            set: c.s,
+            collectorNumber: c.cn,
+            quantity: 1,
+            isFoil: false
+        }));
 
-        try {
-            const payload = scannedItems.map(item => ({
-                name: item.text,
-                set: '', 
-                collectorNumber: '',
-                quantity: 1,
-                isFoil: false
-            }));
-
-            const res = await importCardsAction(
-                user.uid,
-                destination,
-                'add',
-                payload,
-                targetListId
-            );
-
-            if (res.success) {
-                toast.success(`${res.count} cartes importées !`, { id: toastId });
-                setScannedItems([]); 
-                router.push(destination === 'collection' ? '/collection' : '/wishlist');
-            } else {
-                toast.error(res.error || "Erreur partielle", { id: toastId });
-            }
-
-        } catch (e) {
-            console.error(e);
-            toast.error("Erreur serveur", { id: toastId });
-        } finally {
-            setIsImporting(false);
-        }
+        await importCardsAction(user.uid, 'collection', 'add', payload);
+        toast.success("Terminé !", { id: toastId });
+        setScannedCards([]);
     };
 
     if (!user) return <div className="p-10 text-center">Connexion requise.</div>;
 
     return (
-        <main className="flex flex-col h-[calc(100vh-64px)] bg-black md:bg-zinc-900">
-            
-            <div className="relative w-full h-[45vh] md:h-[500px] bg-black overflow-hidden flex-shrink-0 md:max-w-3xl md:mx-auto md:mt-4 md:rounded-2xl shadow-2xl border-b border-zinc-800">
+        <div className="flex flex-col h-[calc(100vh-64px)] bg-black">
+            {/* CAMÉRA */}
+            <div className="relative h-1/2 bg-zinc-900">
                 <Webcam
                     ref={webcamRef}
                     audio={false}
                     screenshotFormat="image/jpeg"
-                    videoConstraints={videoConstraints}
-                    className="absolute inset-0 w-full h-full object-cover opacity-80"
-                    onUserMedia={() => setCameraReady(true)}
+                    videoConstraints={{ facingMode: "environment" }}
+                    className="w-full h-full object-cover opacity-80"
+                    onUserMedia={() => setDbLoading(false)}
                 />
-
-                <div className="absolute inset-0 pointer-events-none flex flex-col items-center justify-center">
-                    {isProcessing ? (
-                        <div className="bg-black/60 backdrop-blur-md px-6 py-3 rounded-full flex flex-col items-center gap-2 border border-blue-500/50">
-                            <div className="text-blue-400 font-bold text-sm animate-pulse">{statusText}</div>
-                            <div className="w-32 h-1.5 bg-gray-700 rounded-full overflow-hidden">
-                                <div className="h-full bg-blue-500 transition-all duration-300" style={{ width: `${progress}%` }}></div>
-                            </div>
-                        </div>
-                    ) : (
-                        <div className="bg-black/40 px-4 py-2 rounded-full text-white/70 text-xs border border-white/10">
-                            Prenez la carte en photo (même de travers)
-                        </div>
-                    )}
-                </div>
-
-                <Link href="/" className="absolute top-4 left-4 bg-black/40 text-white p-2 rounded-full hover:bg-black/60 backdrop-blur-sm z-20">✕</Link>
                 
-                <div className="absolute top-4 right-4 z-20 pointer-events-auto">
-                    <button 
-                        onClick={() => setDebugMode(!debugMode)}
-                        className={`px-3 py-1.5 rounded-full text-[10px] font-bold border transition ${debugMode ? 'bg-green-500/20 text-green-400 border-green-500' : 'bg-black/40 text-gray-400 border-gray-600'}`}
-                    >
-                        DEBUG: {debugMode ? 'ON' : 'OFF'}
-                    </button>
+                <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+                    <div className="text-white font-bold bg-black/50 px-4 py-2 rounded-full mb-4 backdrop-blur-sm">
+                        {statusText}
+                    </div>
+                    {dbLoading && <div className="text-xs text-yellow-400">Téléchargement base de données...</div>}
                 </div>
 
-                <div className="absolute bottom-6 left-0 right-0 flex justify-center z-20 pointer-events-auto">
-                    <button
-                        onClick={captureAndProcess}
-                        disabled={isProcessing || !cameraReady}
-                        className="w-20 h-20 rounded-full border-4 border-white/80 bg-white/10 flex items-center justify-center hover:bg-white/20 active:scale-95 transition disabled:opacity-50 disabled:scale-100"
-                    >
-                        <div className="w-16 h-16 bg-white rounded-full shadow-[0_0_15px_rgba(255,255,255,0.5)]"></div>
-                    </button>
-                </div>
-
-                {debugMode && (
-                    <div className="absolute bottom-4 left-4 bg-black/80 border border-green-500 p-1 rounded z-30 pointer-events-none">
-                        <p className="text-[9px] text-green-500 mb-1 font-mono">VISION ROBOT (TITRE)</p>
-                        <canvas ref={canvasRef} className="h-12 w-auto bg-white/10" />
+                {debugImage && (
+                    <div className="absolute bottom-4 left-4 border border-green-500 bg-black">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img src={debugImage} alt="debug" className="w-16 h-16 object-contain" style={{imageRendering: 'pixelated'}} />
+                        <div className="text-[8px] text-green-500 bg-black px-1">HASH VIEW</div>
                     </div>
                 )}
-            </div>
 
-            <div className="flex-1 bg-zinc-900 flex flex-col overflow-hidden md:max-w-3xl md:mx-auto md:w-full">
-                
-                <div className="p-3 bg-zinc-800 border-b border-zinc-700 flex flex-wrap gap-2 justify-between items-center shadow-lg z-10">
-                    <span className="font-bold text-white text-sm flex items-center gap-2">
-                        <span className="bg-blue-600 text-xs px-2 py-0.5 rounded-full">{scannedItems.length}</span> Cartes
-                    </span>
-                    <div className="flex gap-2">
-                        <select 
-                            value={destination} 
-                            // CORRECTION ICI : CAST EXPLICITE AU LIEU DE ANY
-                            onChange={(e) => setDestination(e.target.value as 'collection' | 'wishlist')}
-                            className="bg-zinc-700 text-white text-xs p-2 rounded outline-none border border-zinc-600 focus:border-blue-500"
-                        >
-                            <option value="collection">Collection</option>
-                            <option value="wishlist">Wishlist</option>
-                        </select>
-                        {destination === 'wishlist' && (
-                            <select
-                                value={targetListId}
-                                onChange={(e) => setTargetListId(e.target.value)}
-                                className="bg-zinc-700 text-white text-xs p-2 rounded outline-none border border-zinc-600 max-w-[100px]"
-                            >
-                                {lists.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
-                            </select>
-                        )}
-                    </div>
-                </div>
-
-                <div className="flex-1 overflow-y-auto p-2 space-y-2 bg-zinc-950/50">
-                    {scannedItems.length === 0 ? (
-                        <div className="h-full flex flex-col items-center justify-center text-zinc-600 space-y-2 opacity-50">
-                            <span className="text-4xl">🎴</span>
-                            <p className="text-sm font-medium">La liste est vide.</p>
-                        </div>
-                    ) : (
-                        scannedItems.map((item) => (
-                            <div key={item.id} className="flex items-center gap-2 bg-zinc-800 p-2 rounded-lg border border-zinc-700 animate-in slide-in-from-top-2">
-                                <span className="text-green-500 text-xs">✓</span>
-                                <input 
-                                    type="text" 
-                                    value={item.text} 
-                                    onChange={(e) => updateItem(item.id, e.target.value)}
-                                    className="flex-1 bg-transparent text-white text-sm font-bold outline-none border-b border-transparent focus:border-blue-500 focus:bg-zinc-900/50 px-1 py-1"
-                                />
-                                <button 
-                                    onClick={() => removeItem(item.id)}
-                                    className="text-zinc-500 hover:text-red-400 p-2 transition"
-                                >
-                                    ✕
-                                </button>
-                            </div>
-                        ))
-                    )}
-                </div>
-
-                <div className="p-4 bg-zinc-900 border-t border-zinc-800">
-                    <button 
-                        onClick={handleFinalImport}
-                        disabled={isImporting || scannedItems.length === 0}
-                        className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3.5 rounded-xl shadow-lg shadow-blue-900/20 transition disabled:opacity-50 disabled:cursor-not-allowed flex justify-center items-center gap-2"
+                <div className="absolute bottom-6 left-0 right-0 flex justify-center pointer-events-auto">
+                    <button
+                        onClick={captureAndIdentify}
+                        disabled={isProcessing || dbLoading}
+                        className="w-20 h-20 rounded-full border-4 border-white bg-white/20 flex items-center justify-center active:scale-95 transition disabled:opacity-50"
                     >
-                        {isImporting ? (
-                            <>
-                                <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
-                                Recherche Scryfall...
-                            </>
-                        ) : (
-                            `Valider et Ajouter (${scannedItems.length})`
-                        )}
+                        <div className="w-16 h-16 bg-white rounded-full"></div>
                     </button>
                 </div>
             </div>
-        </main>
+
+            {/* LISTE */}
+            <div className="flex-1 bg-zinc-900 p-4 overflow-y-auto">
+                <div className="flex justify-between items-center mb-2">
+                    <h2 className="text-white font-bold">Cartes détectées ({scannedCards.length})</h2>
+                    {scannedCards.length > 0 && (
+                        <button onClick={handleImport} className="bg-blue-600 text-white px-4 py-1 rounded text-sm font-bold">
+                            Valider tout
+                        </button>
+                    )}
+                </div>
+                
+                <div className="space-y-2">
+                    {scannedCards.map((card, i) => (
+                        <div key={i} className="bg-zinc-800 p-3 rounded flex justify-between items-center animate-in slide-in-from-left-2">
+                            <div>
+                                <div className="text-white font-bold">{card.n}</div>
+                                <div className="text-xs text-zinc-400">{card.s.toUpperCase()} #{card.cn}</div>
+                            </div>
+                            <button onClick={() => setScannedCards(p => p.filter((_, idx) => idx !== i))} className="text-red-500 px-2">✕</button>
+                        </div>
+                    ))}
+                </div>
+            </div>
+        </div>
     );
 }
