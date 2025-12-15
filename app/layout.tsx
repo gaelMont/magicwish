@@ -8,6 +8,7 @@ import Header from '@/components/Header';
 import { Toaster } from 'react-hot-toast';
 import UsernameSetupModal from '@/components/UsernameSetupModal'; 
 import Script from 'next/script'; 
+import { Suspense } from 'react'; // <--- IMPORTANT : Import de Suspense
 
 const inter = Inter({ subsets: ['latin'] });
 
@@ -52,7 +53,7 @@ export default function RootLayout({
           />
           <Script
             // Deuxième extrait : Démarre le CMP
-            id="cmp-starter-script"   // <--- CORRECTION next/script ID
+            id="cmp-starter-script"   
             strategy="beforeInteractive"
             dangerouslySetInnerHTML={{
               __html: `
@@ -87,7 +88,12 @@ export default function RootLayout({
             disableTransitionOnChange 
         >
           <AuthProvider>
-            <Header />
+            
+            {/* CORRECTION DU BUILD : On enveloppe le Header qui utilise useSearchParams */}
+            <Suspense fallback={<div className="h-16 w-full bg-white dark:bg-zinc-950 border-b border-zinc-200 dark:border-zinc-800" />}>
+               <Header />
+            </Suspense>
+
             {children}
             <UsernameSetupModal />
             <Toaster position="bottom-right" />
