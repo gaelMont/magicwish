@@ -1,32 +1,48 @@
-// hooks/useSortPreference.ts
-'use client';
+// hooks/useSortPreference.ts (Mise à jour essentielle pour corriger les erreurs de type)
 
-import { useState, useEffect } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 
-// On exporte le type pour l'utiliser dans la page
-export type SortOption = 'name' | 'price_desc' | 'price_asc' | 'quantity' | 'date';
+// Définition complète des options de tri
+export type SortOption = 
+    | 'date' // Ancienne valeur (gardée pour la compatibilité)
+    | 'quantity' 
+    | 'price_desc' 
+    | 'price_asc'
+    | 'name' // Ancienne valeur (gardée pour la compatibilité)
+    | 'date_desc' 
+    | 'date_asc'
+    | 'name_asc'
+    | 'name_desc';
 
-export function useSortPreference(storageKey: string, defaultValue: SortOption) {
-  const [sortBy, setSortByState] = useState<SortOption>(defaultValue);
-  const [isLoaded, setIsLoaded] = useState(false);
+const useSortPreference = (key: string, defaultValue: SortOption = 'date_desc') => {
+    // La valeur par défaut doit être une nouvelle valeur valide
+    const [sort, setSort] = useState<SortOption>(() => {
+        if (typeof window === 'undefined') {
+            return defaultValue;
+        }
+        try {
+            const storedValue = localStorage.getItem(key);
+            if (storedValue) {
+                // S'assurer que la valeur stockée est assignable au type SortOption
+                return storedValue as SortOption; 
+            }
+            return defaultValue;
+        } catch (error) {
+            console.error("Error reading localStorage key:", key, error);
+            return defaultValue;
+        }
+    });
 
-  useEffect(() => {
-    // Lecture au montage (client uniquement)
-    const saved = localStorage.getItem(storageKey);
-    if (saved) {
-       // Sécurité : on vérifie que la valeur est un tri valide
-       if (['name', 'price_desc', 'price_asc', 'quantity', 'date'].includes(saved)) {
-         // eslint-disable-next-line react-hooks/set-state-in-effect
-         setSortByState(saved as SortOption);
-       }
-    }
-    setIsLoaded(true);
-  }, [storageKey]);
+    // Mise à jour de localStorage lorsque l'état change
+    useEffect(() => {
+        try {
+            localStorage.setItem(key, sort);
+        } catch (error) {
+            console.error("Error setting localStorage key:", key, error);
+        }
+    }, [key, sort]);
 
-  const setSortBy = (val: SortOption) => {
-    setSortByState(val);
-    localStorage.setItem(storageKey, val);
-  };
+    return { sortBy: sort, setSortBy: setSort };
+};
 
-  return { sortBy, setSortBy, isLoaded };
-}
+export { useSortPreference };

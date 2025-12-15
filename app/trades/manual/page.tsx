@@ -207,6 +207,7 @@ export default function ManualTradePage() {
           const res = await fetch(`/api/search?q=${remoteSearch}`); 
           const data = await res.json();
           setSearchResults(data.data || []);
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
       } catch (e) { toast.error("Erreur recherche"); }
       finally { setIsSearching(false); }
   };

@@ -5,6 +5,7 @@ import { useAuth } from '@/lib/AuthContext';
 import { useCardCollection, CardType } from '@/hooks/useCardCollection';
 import { useTradeSystem } from '@/hooks/useTradeSystem';
 import Link from 'next/link';
+import Image from 'next/image';
 import { useState, useEffect } from 'react';
 import { db } from '@/lib/firebase';
 import { collection, query, orderBy, limit, getDocs } from 'firebase/firestore';
@@ -166,7 +167,7 @@ export default function DashboardPage() {
                       recentCards.map((card) => (
                           <div key={card.id} className="flex items-center gap-4 p-3 border-b border-border last:border-0 hover:bg-secondary/50 transition">
                               <div className="w-10 h-14 bg-secondary rounded overflow-hidden shrink-0">
-                                  <img src={card.imageUrl} className="w-full h-full object-cover" alt="" />
+                                  <Image src={card.imageUrl} width={40} height={56} className="w-full h-full object-cover" alt={card.name} />
                               </div>
                               <div className="grow">
                                   <p className="font-semibold text-sm text-foreground">{card.name}</p>

@@ -40,8 +40,9 @@ const aggregateCards = (cards: CardType[]) => {
 const CompactCardTable = ({ cards, title, colorClass, emptyLabel }: { cards: CardType[], title: string, colorClass: string, emptyLabel: string }) => (
     <div className="flex flex-col h-full bg-surface border border-border rounded-lg overflow-hidden shadow-sm">
         <div className={`p-3 border-b border-border ${colorClass} bg-opacity-10 bg-current flex justify-between items-center`}>
-            <h4 className="text-xs font-bold uppercase">{title}</h4>
-            <span className="bg-surface px-2 py-0.5 rounded text-xs font-bold shadow-sm border border-border">
+            {/* CORRECTION 1: Force le titre H4 en blanc (text-white) */}
+            <h4 className={`text-xs font-bold uppercase text-white`}>{title}</h4>
+            <span className="bg-white text-foreground px-2 py-0.5 rounded text-xs font-bold shadow-sm border border-border">
                 {cards.reduce((acc, c) => acc + c.quantity, 0)}
             </span>
         </div>
@@ -54,7 +55,8 @@ const CompactCardTable = ({ cards, title, colorClass, emptyLabel }: { cards: Car
             ) : (
                 <div className="overflow-y-auto custom-scrollbar grow">
                     <table className="w-full text-xs text-left border-collapse">
-                        <thead className="bg-secondary text-muted sticky top-0 z-10 font-semibold uppercase tracking-wider">
+                        {/* CORRECTION 2: Définit le fond du THEAD en couleur principale (primary) et le texte en blanc (text-white) pour assurer le contraste */}
+                        <thead className="bg-primary text-white sticky top-0 z-10 font-semibold uppercase tracking-wider">
                             <tr>
                                 <th className="px-2 py-2 text-center w-8">Qté</th>
                                 <th className="px-2 py-2">Nom</th>
@@ -217,7 +219,9 @@ const HistoryCard = ({ trade, currentUid }: { trade: TradeRequest, currentUid: s
     const givenCards = isSender ? trade.itemsGiven : trade.itemsReceived;
     const receivedCards = isSender ? trade.itemsReceived : trade.itemsGiven;
     
-    // Calcul avec customPrice
+    const aggregatedGiven = useMemo(() => aggregateCards(givenCards), [givenCards]);
+    const aggregatedReceived = useMemo(() => aggregateCards(receivedCards), [receivedCards]);
+
     const valGiven = givenCards.reduce((acc, c) => acc + (c.customPrice ?? c.price ?? 0) * c.quantity, 0);
     const valReceived = receivedCards.reduce((acc, c) => acc + (c.customPrice ?? c.price ?? 0) * c.quantity, 0);
 
@@ -246,11 +250,11 @@ const HistoryCard = ({ trade, currentUid }: { trade: TradeRequest, currentUid: s
                 <div className="flex items-center gap-6 text-sm w-full md:w-auto justify-between md:justify-end">
                     <div className="text-right">
                         <p className="text-muted text-[10px] uppercase font-bold">Donné</p>
-                        <p className="font-medium text-danger">{givenCards.length} cartes (~{valGiven.toFixed(2)}€)</p>
+                        <p className="font-medium text-danger">{givenCards.reduce((acc, c) => acc + c.quantity, 0)} cartes (~{valGiven.toFixed(2)}€)</p>
                     </div>
                     <div className="text-right">
                         <p className="text-muted text-[10px] uppercase font-bold">Reçu</p>
-                        <p className="font-medium text-success">{receivedCards.length} cartes (~{valReceived.toFixed(2)}€)</p>
+                        <p className="font-medium text-success">{receivedCards.reduce((acc, c) => acc + c.quantity, 0)} cartes (~{valReceived.toFixed(2)}€)</p>
                     </div>
                     <div className={`text-muted transform transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`}>▼</div>
                 </div>
@@ -258,8 +262,8 @@ const HistoryCard = ({ trade, currentUid }: { trade: TradeRequest, currentUid: s
 
             {isOpen && (
                 <div className="border-t border-border p-4 bg-background/50 grid md:grid-cols-2 gap-6 animate-in fade-in slide-in-from-top-1">
-                    <CompactCardTable cards={givenCards} title="Cartes Données" colorClass="text-danger" emptyLabel="-" />
-                    <CompactCardTable cards={receivedCards} title="Cartes Reçues" colorClass="text-success" emptyLabel="-" />
+                    <CompactCardTable cards={aggregatedGiven} title="Cartes Données" colorClass="text-danger" emptyLabel="-" />
+                    <CompactCardTable cards={aggregatedReceived} title="Cartes Reçues" colorClass="text-success" emptyLabel="-" />
                 </div>
             )}
         </div>
@@ -293,11 +297,22 @@ export default function TradeHistoryPage() {
         let receivedData: TradeRequest[] = [];
 
         const updateMerged = () => {
-            const merged = [...sentData, ...receivedData].sort((a, b) => {
+            const seenTradeIds = new Set<string>();
+            const merged: TradeRequest[] = [];
+            
+            [...sentData, ...receivedData].forEach(trade => {
+                if (!seenTradeIds.has(trade.id)) {
+                    merged.push(trade);
+                    seenTradeIds.add(trade.id);
+                }
+            });
+            
+            merged.sort((a, b) => {
                 const timeA = a.createdAt?.seconds || 0;
                 const timeB = b.createdAt?.seconds || 0;
                 return timeB - timeA;
             });
+            
             setHistory(merged);
             setLoading(false);
         };

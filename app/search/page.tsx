@@ -1,15 +1,21 @@
+// app/search/page.tsx
 'use client';
 
 import { useState, useMemo } from 'react';
 import { useAuth } from '@/lib/AuthContext';
 import { db } from '@/lib/firebase';
-import { doc, setDoc, increment, serverTimestamp } from 'firebase/firestore';
-import { ScryfallRawData } from '@/lib/cardUtils';
+import { doc, setDoc, increment, serverTimestamp, writeBatch } from 'firebase/firestore';
+import { ScryfallRawData, normalizeCardData } from '@/lib/cardUtils';
 import { CardType } from '@/hooks/useCardCollection';
 import { useWishlists } from '@/hooks/useWishlists';
+import { useColumnPreference } from '@/hooks/useColumnPreference';
+import { useSortPreference, SortOption } from '@/hooks/useSortPreference';
 import CardVersionPickerModal from '@/components/CardVersionPickerModal';
 import toast from 'react-hot-toast';
 import { checkWishlistMatch } from '@/app/actions/matching'; 
+import MagicCard from '@/components/MagicCard';
+import SearchToolbar from '@/components/search/SearchToolbar'; 
+import CardListFilterBar from '@/components/common/CardListFilterBar'; 
 
 export default function SearchPage() {
   const { user } = useAuth();
@@ -20,27 +26,37 @@ export default function SearchPage() {
   const [isSearching, setIsSearching] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
 
+  // --- ÉTATS FILTRES & TRI ---
+  const { columns, setColumns } = useColumnPreference('mw_cols_search', 5);
+  const { sortBy, setSortBy } = useSortPreference('mw_sort_search', 'name_asc' as SortOption);
+  
+  const [filterSet, setFilterSet] = useState<string>('all');
+  const [filterFoil, setFilterFoil] = useState(false); 
+  const [minPriceFilter, setMinPriceFilter] = useState<string>('');
+  const [maxPriceFilter, setMaxPriceFilter] = useState<string>('');
+  const [filterCMC, setFilterCMC] = useState<string>('');
+  const [filterColors, setFilterColors] = useState<string[]>([]);
+
+  // --- SÉLECTION & MODALE ---
+  const [isSelectMode, setIsSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [modalOpen, setModalOpen] = useState(false);
   const [selectedBaseCard, setSelectedBaseCard] = useState<ScryfallRawData | null>(null);
   const [targetDestination, setTargetDestination] = useState<'collection' | 'wishlist'>('collection');
 
-  const handleSearch = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSearch = async () => {
     if (!query.trim()) return;
-
     setIsSearching(true);
     setHasSearched(true);
     setResults([]);
+    setIsSelectMode(false);
+    setSelectedIds([]);
 
     try {
         const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
         const data = await res.json();
-        
-        if (data.data) {
-            setResults(data.data);
-        } else {
-            toast.error("Aucune carte trouvée.");
-        }
+        if (data.data) setResults(data.data);
+        else toast.error("Aucune carte trouvée.");
     } catch (error) {
         console.error(error);
         toast.error("Erreur de recherche.");
@@ -49,171 +65,167 @@ export default function SearchPage() {
     }
   };
 
-  const openPicker = (card: ScryfallRawData, destination: 'collection' | 'wishlist') => {
-      setSelectedBaseCard(card);
-      setTargetDestination(destination);
-      setModalOpen(true);
-  };
+  const filteredCards = useMemo(() => {
+      // 1. Conversion
+      let processed: CardType[] = results.map(raw => ({
+          ...normalizeCardData(raw),
+          id: raw.id,
+          quantity: 0, 
+          isFoil: false,
+          isSpecificVersion: false,
+          quantityForTrade: 0,
+          scryfallData: raw
+      } as CardType));
 
+      // 2. Filtrage Local
+      if (filterSet !== 'all') processed = processed.filter(c => c.setName === filterSet);
+      
+      if (minPriceFilter || maxPriceFilter) {
+          const min = parseFloat(minPriceFilter);
+          const max = parseFloat(maxPriceFilter);
+          processed = processed.filter(c => {
+              const p = c.price || 0;
+              return (isNaN(min) || p >= min) && (isNaN(max) || p <= max);
+          });
+      }
+
+      if (filterCMC) {
+          const targetCMC = parseFloat(filterCMC);
+          if (!isNaN(targetCMC)) processed = processed.filter(c => c.cmc === targetCMC);
+      }
+
+      // **LOGIQUE COULEUR RESTRICTIVE**
+      if (filterColors.length > 0) {
+          processed = processed.filter(c => {
+              if (!c.colors || c.colors.length === 0) return filterColors.includes('C');
+              return c.colors.every(color => filterColors.includes(color));
+          });
+      }
+
+      // 3. Tri
+      processed.sort((a, b) => {
+          const priceA = a.price || 0;
+          const priceB = b.price || 0;
+          switch (sortBy) {
+              case 'name_asc': return a.name.localeCompare(b.name);
+              case 'price_desc': return priceB - priceA;
+              case 'price_asc': return priceA - priceB;
+              default: return 0;
+          }
+      });
+
+      return processed;
+  }, [results, filterSet, minPriceFilter, maxPriceFilter, sortBy, filterCMC, filterColors]);
+
+  const openPicker = (card: ScryfallRawData, destination: 'collection' | 'wishlist') => {
+      setSelectedBaseCard(card); setTargetDestination(destination); setModalOpen(true);
+  };
+  const toggleSelection = (id: string) => setSelectedIds(p => p.includes(id) ? p.filter(x => x !== id) : [...p, id]);
+  const handleSelectAll = () => setSelectedIds(selectedIds.length === filteredCards.length ? [] : filteredCards.map(c => c.id));
+  
   const handleConfirmAdd = async (card: CardType, targetListId: string = 'default') => {
       if (!user) return;
-
-      const destLabel = targetDestination === 'collection' ? 'Collection' : 'Wishlist';
-      const toastId = toast.loading(`Ajout à : ${destLabel}...`);
-      
+      const toastId = toast.loading("Ajout...");
       try {
-          let collectionPath = 'collection';
-          if (targetDestination === 'wishlist') {
-              if (targetListId === 'default') {
-                  collectionPath = 'wishlist';
-              } else {
-                  collectionPath = `wishlists_data/${targetListId}/cards`;
-              }
-          }
+          let path = targetDestination === 'collection' ? 'collection' : 'wishlist';
+          if (targetDestination === 'wishlist' && targetListId !== 'default') path = `wishlists_data/${targetListId}/cards`;
+          else if (targetDestination === 'collection' && targetListId !== 'default') path = `collections_data/${targetListId}/cards`;
 
-          const cardRef = doc(db, 'users', user.uid, collectionPath, card.id);
-
-          const dataToSave = {
-              ...card,
-              imageBackUrl: card.imageBackUrl || null,
-              addedAt: serverTimestamp(),
-              wishlistId: targetDestination === 'wishlist' ? targetListId : null, 
-              isForTrade: false 
-          };
-
-          await setDoc(cardRef, {
-              ...dataToSave,
-              quantity: increment(card.quantity)
+          await setDoc(doc(db, 'users', user.uid, path, card.id), {
+              ...card, uid: user.uid, wishlistId: targetDestination === 'wishlist' ? targetListId : null,
+              addedAt: serverTimestamp(), imageBackUrl: card.imageBackUrl || null, quantity: increment(card.quantity)
           }, { merge: true });
-
-          toast.success(`Ajouté avec succès !`, { id: toastId });
-
-          // --- DÉCLENCHEUR SCAN WISHLIST ---
+          
+          toast.success("Ajouté !", { id: toastId });
           if (targetDestination === 'wishlist') {
-              checkWishlistMatch(user.uid, [{ 
-                  id: card.id, 
-                  name: card.name, 
-                  isFoil: !!card.isFoil 
-              }]).then(res => {
-                  if (res.matches && res.matches > 0) {
-                      toast(`🎉 ${res.matches} ami(s) possèdent cette carte !`, { icon: '🔔', duration: 5000 });
-                  }
-              });
+              checkWishlistMatch(user.uid, [{ id: card.id, name: card.name, isFoil: !!card.isFoil }])
+                .then(res => { if ((res?.matches ?? 0) > 0) toast(`Match trouvé avec ${res?.matches ?? 0} ami(s)!`, { icon: '🔔' }); });
           }
-
-      } catch (error) {
-          console.error(error);
-          toast.error("Erreur lors de l'ajout", { id: toastId });
-      }
+      } catch (e) { console.error(e); toast.error("Erreur", { id: toastId }); }
   };
 
-  const uniqueResults = useMemo(() => {
-    const seen = new Set();
-    return results.filter(c => {
-        const name = c.name.split(' // ')[0];
-        if (seen.has(name)) return false;
-        seen.add(name);
-        return true;
-    });
-  }, [results]);
+  const handleBulkAdd = async (dest: 'collection' | 'wishlist') => {
+      if (!user || selectedIds.length === 0) return;
+      const batch = writeBatch(db);
+      const cards = filteredCards.filter(c => selectedIds.includes(c.id));
+      const path = dest === 'collection' ? 'collection' : 'wishlist';
+      
+      cards.forEach(c => batch.set(doc(db, 'users', user.uid, path, c.id), {
+          ...c, uid: user.uid, quantity: increment(1), addedAt: serverTimestamp(), 
+          wishlistId: dest === 'wishlist' ? 'default' : null
+      }, { merge: true }));
+      
+      await batch.commit();
+      toast.success("Import terminé !");
+      setIsSelectMode(false); setSelectedIds([]);
+  };
 
   return (
-    <main className="container mx-auto p-4 max-w-5xl min-h-[85vh]">
-      
+    <main className="container mx-auto p-4 max-w-5xl min-h-[85vh] relative pb-24">
       <div className="text-center mb-8 pt-4">
-          <h1 className="text-3xl font-bold text-primary mb-2">
-              Centre de Recherche
-          </h1>
-          <p className="text-muted">
-              Trouvez n&apos;importe quelle carte et ajoutez-la à votre Collection ou votre Wishlist.
-          </p>
+          <h1 className="text-3xl font-bold text-primary mb-2">Recherche</h1>
       </div>
 
-      <div className="max-w-2xl mx-auto mb-10 sticky top-4 z-20">
-          <form onSubmit={handleSearch} className="relative shadow-lg rounded-full">
-              <input 
-                  type="text" 
-                  className="w-full p-4 pl-6 pr-14 rounded-full border border-border bg-surface text-foreground focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none transition text-lg"
-                  placeholder="Nom de la carte (ex: Black Lotus, Sol Ring...)"
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  autoFocus
-              />
-              <button 
-                  type="submit"
-                  disabled={isSearching || !query.trim()}
-                  className="absolute right-2 top-2 bottom-2 bg-primary hover:opacity-90 text-primary-foreground rounded-full w-12 flex items-center justify-center transition disabled:opacity-50"
-              >
-                  {isSearching ? '...' : 'Go'}
+      {results.length > 0 && (
+          <SearchToolbar isSelectMode={isSelectMode} setIsSelectMode={setIsSelectMode} totalResults={filteredCards.length} />
+      )}
+
+      <CardListFilterBar 
+          context="search"
+          cards={filteredCards} 
+          searchQuery={query} setSearchQuery={setQuery} onSearch={handleSearch}
+          sortBy={sortBy} setSortBy={setSortBy}
+          filterSet={filterSet} setFilterSet={setFilterSet}
+          filterTrade={false} setFilterTrade={() => {}}
+          filterFoil={filterFoil} setFilterFoil={setFilterFoil}
+          minPriceFilter={minPriceFilter} setMinPriceFilter={setMinPriceFilter}
+          maxPriceFilter={maxPriceFilter} setMaxPriceFilter={setMaxPriceFilter}
+          filterCMC={filterCMC} setFilterCMC={setFilterCMC}
+          filterColors={filterColors} setFilterColors={setFilterColors}
+          columns={columns} setColumns={setColumns}
+      />
+
+      {isSelectMode && (
+          <div className="mb-4 flex items-center justify-between bg-primary/10 p-3 rounded-lg border border-primary/30">
+              <span className="font-bold text-primary pl-2">{selectedIds.length} carte(s)</span>
+              <button onClick={handleSelectAll} className="text-sm text-primary font-bold px-3 py-1 rounded hover:bg-primary/10 transition">
+                  {selectedIds.length === filteredCards.length ? 'Tout désélectionner' : 'Tout sélectionner'}
               </button>
-          </form>
-      </div>
-
-      {isSearching ? (
-          <div className="text-center py-20">
-              <div className="inline-block w-8 h-8 border-4 border-primary border-t-transparent rounded-full animate-spin mb-4"></div>
-              <p className="text-muted">Recherche en cours...</p>
-          </div>
-      ) : uniqueResults.length > 0 ? (
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-              {uniqueResults.map((card) => (
-                  <div key={card.id} className="bg-surface rounded-xl shadow-sm border border-border overflow-hidden flex flex-col group hover:shadow-md transition">
-                      <div className="relative aspect-[2.5/3.5] bg-secondary overflow-hidden">
-                          {card.image_uris?.normal ? (
-                              <img src={card.image_uris.normal} alt={card.name} className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110" loading="lazy" />
-                          ) : (
-                             <div className="flex items-center justify-center h-full text-muted text-xs">Pas d&apos;image</div>
-                          )}
-                          
-                          <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center gap-3 p-4">
-                              <button 
-                                  onClick={() => openPicker(card, 'collection')}
-                                  className="w-full bg-primary hover:opacity-90 text-primary-foreground font-bold py-2 rounded-lg text-sm shadow-lg transform translate-y-4 group-hover:translate-y-0 transition-transform duration-300"
-                              >
-                                  + Collection
-                              </button>
-                              <button 
-                                  onClick={() => openPicker(card, 'wishlist')}
-                                  className="w-full bg-surface text-primary font-bold py-2 rounded-lg text-sm shadow-lg transform translate-y-4 group-hover:translate-y-0 transition-transform duration-300 delay-75"
-                              >
-                                  + Wishlist
-                              </button>
-                          </div>
-                      </div>
-
-                      <div className="p-3">
-                          <h3 className="font-bold text-foreground truncate" title={card.name}>{card.name}</h3>
-                          <p className="text-xs text-muted">{card.set_name}</p>
-                      </div>
-                  </div>
-              ))}
-          </div>
-      ) : hasSearched ? (
-          <div className="text-center py-20 bg-secondary/50 rounded-2xl border-2 border-dashed border-border">
-              <p className="text-xl text-muted">Aucun résultat trouvé.</p>
-          </div>
-      ) : (
-          <div className="grid md:grid-cols-2 gap-4 max-w-3xl mx-auto opacity-50 hover:opacity-100 transition-opacity">
-               <div className="p-6 border-2 border-dashed border-border rounded-xl text-center">
-                   <span className="text-4xl mb-2 block font-bold text-muted">COLLECTION</span>
-                   <h3 className="font-bold text-foreground">Compléter ma Collection</h3>
-               </div>
-               <div className="p-6 border-2 border-dashed border-border rounded-xl text-center">
-                   <span className="text-4xl mb-2 block font-bold text-muted">WISHLIST</span>
-                   <h3 className="font-bold text-foreground">Remplir ma Wishlist</h3>
-               </div>
           </div>
       )}
 
-      <CardVersionPickerModal 
-          isOpen={modalOpen}
-          onClose={() => setModalOpen(false)}
-          baseCard={selectedBaseCard}
-          onConfirm={handleConfirmAdd}
-          destination={targetDestination}
-          availableLists={lists}
-      />
+      {isSearching ? (
+          <div className="text-center py-20"><div className="inline-block w-8 h-8 border-4 border-primary border-t-transparent rounded-full animate-spin mb-4"></div><p className="text-muted">Recherche...</p></div>
+      ) : results.length > 0 ? (
+          <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
+              <div className="grid gap-4" style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}>
+                  {filteredCards.map((card) => (
+                      <div key={card.id} className="relative group">
+                          <MagicCard
+                              {...card} readOnly={true} isSelectMode={isSelectMode}
+                              isSelected={selectedIds.includes(card.id)} onSelect={() => toggleSelection(card.id)}
+                          />
+                          {!isSelectMode && (
+                              <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center gap-2 p-4 rounded-xl z-20">
+                                  <button onClick={() => openPicker(card.scryfallData as ScryfallRawData, 'collection')} className="w-full bg-primary text-primary-foreground font-bold py-2 rounded-lg text-xs shadow-lg transform translate-y-4 group-hover:translate-y-0 transition">+ Collection</button>
+                                  <button onClick={() => openPicker(card.scryfallData as ScryfallRawData, 'wishlist')} className="w-full bg-surface text-foreground font-bold py-2 rounded-lg text-xs shadow-lg transform translate-y-4 group-hover:translate-y-0 transition delay-75">+ Wishlist</button>
+                              </div>
+                          )}
+                      </div>
+                  ))}
+              </div>
+          </div>
+      ) : hasSearched && <div className="text-center py-20 bg-secondary/50 rounded-2xl border-2 border-dashed border-border"><p className="text-xl text-muted">Aucun résultat.</p></div>}
 
+      {isSelectMode && selectedIds.length > 0 && (
+          <div className="fixed bottom-6 left-4 right-4 md:left-1/2 md:right-auto md:-translate-x-1/2 bg-surface shadow-2xl border border-border p-2 rounded-2xl flex items-center justify-around gap-2 z-50 animate-in slide-in-from-bottom-6">
+              <button onClick={() => handleBulkAdd('collection')} className="px-6 py-3 bg-primary text-primary-foreground rounded-xl text-sm font-bold shadow-md">+ Collection</button>
+              <div className="w-px h-8 bg-border mx-1"></div>
+              <button onClick={() => handleBulkAdd('wishlist')} className="px-6 py-3 bg-purple-600 text-white rounded-xl text-sm font-bold shadow-md">+ Wishlist</button>
+          </div>
+      )}
+
+      <CardVersionPickerModal isOpen={modalOpen} onClose={() => setModalOpen(false)} baseCard={selectedBaseCard} onConfirm={handleConfirmAdd} destination={targetDestination} availableLists={lists} />
     </main>
   );
 }

@@ -1,3 +1,4 @@
+// app/groups/page.tsx
 'use client';
 
 import { useState, useEffect } from 'react';
@@ -239,9 +240,20 @@ export default function GroupsPage() {
                                         )}
                                         
                                         {member.uid !== user.uid && (
-                                            <a href={`/trades/new/${member.uid}`} className="ml-2 text-xs bg-success/10 text-success px-2 py-1 rounded hover:bg-success/20 font-bold transition">
-                                                Voir
-                                            </a>
+                                            <div className="ml-2 flex gap-2">
+                                                <a 
+                                                    href={`/user/${member.uid}`} // <-- CORRECTION ICI
+                                                    className="text-xs bg-secondary text-foreground px-2 py-1 rounded hover:bg-border font-bold transition"
+                                                >
+                                                    Voir
+                                                </a>
+                                                <a 
+                                                    href={`/trades/new/${member.uid}`} 
+                                                    className="text-xs bg-success/10 text-success px-2 py-1 rounded hover:bg-success/20 font-bold transition"
+                                                >
+                                                    Échanger
+                                                </a>
+                                            </div>
                                         )}
                                     </div>
                                 );

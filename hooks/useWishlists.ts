@@ -1,9 +1,9 @@
 // hooks/useWishlists.ts
 import { useState, useEffect } from 'react';
 import { db } from '@/lib/firebase';
-import { collection, onSnapshot, addDoc, doc, serverTimestamp, setDoc } from 'firebase/firestore';
+import { collection, onSnapshot, addDoc, deleteDoc, doc, serverTimestamp, setDoc, updateDoc } from 'firebase/firestore';
 import { useAuth } from '@/lib/AuthContext';
-import { deleteWishlistAction } from '@/app/actions/wishlist'; // <--- IMPORT
+import { deleteWishlistAction } from '@/app/actions/wishlist'; 
 import toast from 'react-hot-toast';
 
 export type WishlistMeta = {
@@ -64,6 +64,22 @@ export function useWishlists() {
     }
   };
 
+  const renameList = async (listId: string, newName: string) => {
+    if (!user || listId === 'default') {
+        toast.error("Impossible de renommer la liste principale.");
+        return;
+    }
+    
+    try {
+        const listRef = doc(db, 'users', user.uid, 'wishlists_meta', listId);
+        await updateDoc(listRef, { name: newName });
+        toast.success("Liste renommée");
+    } catch (err) {
+        console.error(err);
+        toast.error("Erreur lors du renommage");
+    }
+  };
+
   const deleteList = async (listId: string) => {
     if (!user || listId === 'default') return; 
     if (!confirm("Supprimer cette liste et toutes ses cartes ?")) return;
@@ -71,7 +87,6 @@ export function useWishlists() {
     const toastId = toast.loading("Suppression en cours...");
 
     try {
-        // Appel de la Server Action pour nettoyage complet
         const result = await deleteWishlistAction(user.uid, listId);
 
         if (result.success) {
@@ -87,5 +102,5 @@ export function useWishlists() {
     }
   };
 
-  return { lists, loading, createList, deleteList };
+  return { lists, loading, createList, renameList, deleteList };
 }

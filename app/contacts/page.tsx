@@ -1,3 +1,4 @@
+// app/contacts/page.tsx
 'use client';
 
 import { useState, useEffect } from 'react';
@@ -135,8 +136,18 @@ export default function ContactsPage() {
                                 </div>
                             </div>
                             <div className="flex items-center gap-2 opacity-100 md:opacity-0 group-hover:opacity-100 transition-opacity">
-                                <Link href={`/user/${friend.uid}`} className="text-xs bg-secondary text-foreground px-3 py-1.5 rounded hover:bg-border transition font-medium">Voir</Link>
-                                <Link href={`/trades/new/${friend.uid}`} className="text-xs bg-primary/10 text-primary px-3 py-1.5 rounded hover:bg-primary/20 transition font-medium flex items-center gap-1">Echanger</Link>
+                                <Link 
+                                    href={`/user/${friend.uid}`} // <-- CORRECTION ICI
+                                    className="text-xs bg-secondary text-foreground px-3 py-1.5 rounded hover:bg-border transition font-medium"
+                                >
+                                    Voir
+                                </Link>
+                                <Link 
+                                    href={`/trades/new/${friend.uid}`} 
+                                    className="text-xs bg-primary/10 text-primary px-3 py-1.5 rounded hover:bg-primary/20 transition font-medium flex items-center gap-1"
+                                >
+                                    Échanger
+                                </Link>
                                 <button onClick={() => removeFriend(friend.uid)} className="text-danger hover:text-red-700 text-xs px-2 py-1">X</button>
                             </div>
                         </div>

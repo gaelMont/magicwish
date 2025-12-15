@@ -8,7 +8,6 @@ import toast from 'react-hot-toast';
 import { importCardsAction, ImportItemInput } from '@/app/actions/import';
 import AdContainer from './AdContainer'; 
 
-// Types CSV attendus
 type CsvRow = {
   "Name": string;
   "Set code": string;
@@ -23,6 +22,8 @@ type ImportModalProps = {
   isOpen: boolean;
   onClose: () => void;
   targetCollection?: 'collection' | 'wishlist'; 
+  // NOUVEAU PROP OPTIONNEL
+  listId?: string;
   onGoBack?: () => void; 
   onCloseAll?: () => void;
 };
@@ -30,7 +31,9 @@ type ImportModalProps = {
 export default function ImportModal({ 
     isOpen, 
     onClose,
-    targetCollection = 'collection', 
+    targetCollection = 'collection',
+    // Valeur par défaut 'default'
+    listId = 'default',
     onGoBack,
     onCloseAll
 }: ImportModalProps) {
@@ -81,11 +84,14 @@ export default function ImportModal({
 
     const rows: CsvRow[] = [];
     const lines = textInput.split('\n');
-    const regex = /^(\d+)\s+(.+?)\s+\((\w+)\)(?:\s+(\S+))?(?:\s+\*(F)\*)?/;
+    
+    // Regex adaptée pour "1x Nom (SET) Num"
+    const regex = /^(\d+)x?\s+(.+?)\s+\(([a-zA-Z0-9]+)\)\s+(\S+)(?:\s+\*(F)\*)?/i;
 
     lines.forEach(line => {
         const cleanLine = line.trim();
         if (!cleanLine) return;
+        
         const match = cleanLine.match(regex);
         if (match) {
             rows.push({
@@ -131,7 +137,8 @@ export default function ImportModal({
             user.uid,
             targetCollection,
             importMode,
-            cleanItems
+            cleanItems,
+            listId // TRANSMISSION DE L'ID
         );
 
         if (result.success) {
@@ -150,7 +157,7 @@ export default function ImportModal({
     }
   };
 
-  const handleBackdropClick = (e: React.MouseEvent) => {
+  const handleBackdropClick = () => {
       if (step !== 'importing') {
           if (onGoBack) onGoBack();
           else onClose();
@@ -173,7 +180,7 @@ export default function ImportModal({
                     <button onClick={onGoBack} className="text-muted hover:text-foreground text-xl p-1 rounded transition">←</button>
                 )}
                 <h2 className="text-xl font-bold text-foreground">
-                    📥 Importer : {targetLabel}
+                    Importer : {targetLabel} {listId !== 'default' && <span className="text-xs font-normal text-muted ml-2">({listId})</span>}
                 </h2>
             </div>
             {step !== 'importing' && onCloseAll && (
@@ -182,21 +189,20 @@ export default function ImportModal({
         </div>
 
         <div className="grow overflow-hidden flex flex-col min-h-0">
-            
             {step === 'upload' && (
                 <div className="flex flex-col h-full overflow-hidden">
                     <p className="text-sm text-muted mb-4 flex-none">
                         Formats supportés : Manabox (CSV), Deckbox (CSV), ou texte copié.
                     </p>
                     <div className="flex-none flex border-b border-border mb-4">
-                        <button onClick={() => setInputType('csv')} className={`px-4 py-2 font-medium text-sm border-b-2 transition-colors ${inputType === 'csv' ? 'border-primary text-primary' : 'border-transparent text-muted'}`}>📄 Fichier CSV</button>
-                        <button onClick={() => setInputType('text')} className={`px-4 py-2 font-medium text-sm border-b-2 transition-colors ${inputType === 'text' ? 'border-primary text-primary' : 'border-transparent text-muted'}`}>📝 Coller Texte</button>
+                        <button onClick={() => setInputType('csv')} className={`px-4 py-2 font-medium text-sm border-b-2 transition-colors ${inputType === 'csv' ? 'border-primary text-primary' : 'border-transparent text-muted'}`}>Fichier CSV</button>
+                        <button onClick={() => setInputType('text')} className={`px-4 py-2 font-medium text-sm border-b-2 transition-colors ${inputType === 'text' ? 'border-primary text-primary' : 'border-transparent text-muted'}`}>Coller Texte</button>
                     </div>
                     
                     {inputType === 'csv' ? (
                         <div className="grow p-12 border-2 border-dashed border-border rounded-xl text-center hover:bg-secondary transition relative cursor-pointer group flex flex-col items-center justify-center">
                             <input type="file" accept=".csv" onChange={handleFileUpload} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-50" />
-                            <div className="text-6xl mb-4 group-hover:scale-110 transition-transform">📂</div>
+                            <div className="text-6xl mb-4 text-muted">[CSV]</div>
                             <p className="font-bold text-lg text-foreground">Déposer un fichier CSV</p>
                         </div>
                     ) : (
@@ -205,7 +211,7 @@ export default function ImportModal({
                                 value={textInput} 
                                 onChange={(e) => setTextInput(e.target.value)} 
                                 rows={15} 
-                                placeholder="Ex: 4 Sol Ring (CMD) 100 *F*" 
+                                placeholder="Ex: 1x Sol Ring (CMD) 100 *F*" 
                                 className="grow w-full p-4 rounded-lg border border-border bg-background text-foreground font-mono text-xs focus:ring-2 focus:ring-primary outline-none resize-none" 
                             />
                             <button 
@@ -225,8 +231,6 @@ export default function ImportModal({
                     <p className="text-sm text-muted mb-4 flex-none">
                         {data.length} cartes détectées.
                     </p>
-                    
-                    {/* SÉLECTEUR DE MODE */}
                     <div className="flex-none grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
                         <div onClick={() => setImportMode('add')} className={`p-4 rounded-xl border-2 cursor-pointer transition flex flex-col gap-1 ${importMode === 'add' ? 'border-primary bg-primary/5' : 'border-border hover:border-primary/50'}`}>
                             <div className="flex items-center gap-2 font-bold text-primary text-sm">
@@ -241,16 +245,6 @@ export default function ImportModal({
                             </div>
                         </div>
                     </div>
-
-                    {/* MESSAGE EXPLICATIF DYNAMIQUE */}
-                    <div className={`flex-none p-3 rounded-lg border mb-4 text-xs ${importMode === 'add' ? 'bg-primary/10 border-primary/20 text-primary' : 'bg-purple-500/10 border-purple-500/20 text-purple-600 dark:text-purple-300'}`}>
-                        {importMode === 'add' ? (
-                            <p><strong>ℹ️ Fonctionnement :</strong> Toutes les quantités du fichier seront <u>ajoutées</u> à votre stock existant. (Ex: Stock=2, Fichier=3 → Nouveau Stock=5).</p>
-                        ) : (
-                            <p><strong>ℹ️ Fonctionnement :</strong> Comble uniquement les manques pour atteindre la quantité du fichier. <br/>(Ex: Fichier=4, Stock=1 → Ajoute +3). <br/>(Ex: Fichier=4, Stock=10 → Ne fait rien). <strong>Aucune carte ne sera retirée.</strong></p>
-                        )}
-                    </div>
-                    
                     <div className="grow overflow-auto min-h-0 border border-border rounded-lg bg-background mb-4">
                         <table className="w-full text-xs text-left text-muted">
                             <thead className="text-foreground bg-secondary sticky top-0 z-10">
@@ -272,21 +266,12 @@ export default function ImportModal({
                                         <td className="px-4 py-1">{row["Foil"]}</td>
                                     </tr>
                                 ))}
-                                {data.length > 100 && (
-                                    <tr>
-                                        <td colSpan={5} className="px-4 py-2 text-center italic">... et {data.length - 100} autres lignes</td>
-                                    </tr>
-                                )}
                             </tbody>
                         </table>
                     </div>
-
                     <div className="flex-none pt-2">
-                        <button 
-                            onClick={startImport} 
-                            className={`w-full text-white font-bold py-3 rounded-xl shadow-lg transition transform hover:scale-[1.005] ${importMode === 'add' ? 'bg-primary hover:opacity-90' : 'bg-purple-600 hover:opacity-90'}`}
-                        >
-                            {importMode === 'add' ? '➕ Lancer l\'Ajout' : '🔄 Lancer la Synchronisation'}
+                        <button onClick={startImport} className="w-full text-white font-bold py-3 rounded-xl shadow-lg bg-primary hover:opacity-90">
+                            {importMode === 'add' ? 'Valider l\'Ajout' : 'Valider la Synchronisation'}
                         </button>
                     </div>
                 </div>
@@ -296,9 +281,7 @@ export default function ImportModal({
                 <div className="flex flex-col items-center justify-center h-full py-10 text-center">
                     <div className="w-16 h-16 border-4 border-primary border-t-transparent rounded-full animate-spin mb-6"></div>
                     <h3 className="text-xl font-bold text-foreground mb-2">Importation en cours...</h3>
-                    <p className="text-muted text-sm max-w-md mb-8">
-                        Le serveur traite vos cartes. Vous pouvez fermer cette fenêtre, le processus continuera en arrière-plan.
-                    </p>
+                    <p className="text-muted text-sm max-w-md mb-8">Ne fermez pas cette fenêtre.</p>
                     <div className="w-full max-w-md">
                         <AdContainer message="Sponsorisé" adSlotId="1234567890" />
                     </div>

@@ -1,12 +1,33 @@
 // hooks/useCardCollection.ts
 import { useState, useEffect, useMemo } from 'react';
 import { db } from '@/lib/firebase';
-import { collection, onSnapshot, doc, updateDoc, deleteDoc, increment, writeBatch } from 'firebase/firestore';
+import { collection, onSnapshot, doc, updateDoc, deleteDoc, increment, writeBatch, DocumentData } from 'firebase/firestore';
 import { useAuth } from '@/lib/AuthContext';
 import toast from 'react-hot-toast';
 import { updateUserStats } from '@/app/actions/stats';
 import { checkAutoMatch, removeAutoMatchNotification } from '@/app/actions/matching';
 import { refreshUserCollectionPrices } from '@/app/actions/collection'; 
+
+interface FirestoreCardData extends DocumentData {
+    name?: string;
+    imageUrl?: string;
+    imageBackUrl?: string;
+    quantity?: number;
+    price?: number;
+    purchasePrice?: number;
+    customPrice?: number;
+    setName?: string;
+    setCode?: string;
+    isFoil?: boolean;
+    isSpecificVersion?: boolean;
+    quantityForTrade?: number;
+    isForTrade?: boolean;
+    lastPriceUpdate?: { toDate: () => Date } | Date;
+    scryfallData?: Record<string, unknown>;
+    
+    cmc?: number;
+    colors?: string[];
+}
 
 export type CardType = {
   uid?: string;
@@ -15,29 +36,23 @@ export type CardType = {
   imageUrl: string;
   imageBackUrl: string | null;
   quantity: number;
-  
-  price?: number;         // Prix du marché (Scryfall)
-  purchasePrice?: number; // NOUVEAU : Prix d'achat/échange (Historique)
-  customPrice?: number;   // Prix temporaire ou forcé
-
+  price?: number;         
+  purchasePrice?: number; 
+  customPrice?: number;   
   setName: string;
   setCode: string;
   wishlistId?: string | null;
-  
   isFoil: boolean;             
   isSpecificVersion: boolean;
   quantityForTrade: number; 
   isForTrade?: boolean; 
-  
+  cmc?: number;
+  colors?: string[];
   lastPriceUpdate?: Date | null; 
   scryfallData?: Record<string, unknown> | null;
 };
 
-export function useCardCollection(
-    target: 'collection' | 'wishlist', 
-    listId: string = 'default',
-    targetUid?: string
-) {
+export function useCardCollection(target: 'collection' | 'wishlist', listId: string = 'default', targetUid?: string) {
   const { user, loading: authLoading } = useAuth();
   const [cards, setCards] = useState<CardType[]>([]);
   const [loading, setLoading] = useState(true);
@@ -45,21 +60,18 @@ export function useCardCollection(
   const effectiveUid = targetUid || user?.uid;
   const isOwner = !!user && user.uid === effectiveUid; 
 
-  // --- LECTURE TEMPS RÉEL ---
   useEffect(() => {
     if (!effectiveUid || authLoading) {
-        if (!authLoading && !effectiveUid) {
-            setLoading(false);
-            setCards([]);
-        }
+        if (!authLoading && !effectiveUid) { setLoading(false); setCards([]); }
         return;
     }
     setLoading(true);
 
     let collectionPath = '';
     if (target === 'collection') {
-        collectionPath = `users/${effectiveUid}/collection`;
-    } else {
+        if (listId === 'default') collectionPath = `users/${effectiveUid}/collection`; 
+        else collectionPath = `users/${effectiveUid}/collections_data/${listId}/cards`;
+    } else { 
         if (listId === 'default') collectionPath = `users/${effectiveUid}/wishlist`;
         else collectionPath = `users/${effectiveUid}/wishlists_data/${listId}/cards`;
     }
@@ -68,54 +80,67 @@ export function useCardCollection(
     
     const unsubscribe = onSnapshot(colRef, (snapshot) => {
       const items = snapshot.docs.map((doc) => {
-        const data = doc.data();
+        const data = doc.data() as FirestoreCardData;
         
         let lastUpdate: Date | null = null;
-        if (data.lastPriceUpdate && typeof data.lastPriceUpdate.toDate === 'function') {
-            lastUpdate = data.lastPriceUpdate.toDate();
+        if (data.lastPriceUpdate && typeof (data.lastPriceUpdate as { toDate: () => Date }).toDate === 'function') {
+            lastUpdate = (data.lastPriceUpdate as { toDate: () => Date }).toDate();
         } else if (data.lastPriceUpdate instanceof Date) {
             lastUpdate = data.lastPriceUpdate;
         }
 
+        // --- FALLBACK ROBUSTE ---
+        let finalColors = Array.isArray(data.colors) ? data.colors : undefined;
+        let finalCmc = typeof data.cmc === 'number' ? data.cmc : undefined;
+        
+        if (data.scryfallData) {
+             // eslint-disable-next-line @typescript-eslint/no-explicit-any
+             const sd = data.scryfallData as any;
+             
+             if (finalCmc === undefined && typeof sd.cmc === 'number') finalCmc = sd.cmc;
+
+             if (!finalColors) {
+                 if (Array.isArray(sd.color_identity)) {
+                     finalColors = sd.color_identity;
+                 } else if (Array.isArray(sd.colors)) {
+                     finalColors = sd.colors;
+                 }
+             }
+        }
+        
+        if (finalColors && finalColors.length === 0 && Array.isArray(data.colors) && data.colors.length > 0) {
+            finalColors = data.colors;
+        }
+        // -----------------------
+
         return {
             id: doc.id,
             uid: effectiveUid,
-            wishlistId: listId === 'default' ? null : listId,
-            
-            name: (data.name as string) || 'Carte Inconnue',
-            imageUrl: (data.imageUrl as string) || '',
-            imageBackUrl: (data.imageBackUrl as string) ?? null,
-            
+            wishlistId: target === 'wishlist' ? (listId === 'default' ? null : listId) : null,
+            name: data.name || 'Carte Inconnue',
+            imageUrl: data.imageUrl || '',
+            imageBackUrl: data.imageBackUrl ?? null,
             quantity: typeof data.quantity === 'number' ? data.quantity : 1,
-            
             price: typeof data.price === 'number' ? data.price : 0,
-            
-            // ICI : Lecture du nouveau champ purchasePrice
             purchasePrice: typeof data.purchasePrice === 'number' ? data.purchasePrice : undefined,
-            
             customPrice: typeof data.customPrice === 'number' ? data.customPrice : undefined,
-
-            setName: (data.setName as string) || '',
-            setCode: (data.setCode as string) || '',
-            
+            setName: data.setName || '',
+            setCode: data.setCode || '',
             isFoil: !!data.isFoil,
             isSpecificVersion: !!data.isSpecificVersion,
             quantityForTrade: typeof data.quantityForTrade === 'number' ? data.quantityForTrade : 0,
             isForTrade: !!data.isForTrade,
-            
+            cmc: finalCmc,
+            colors: finalColors,
             lastPriceUpdate: lastUpdate,
-            scryfallData: (data.scryfallData as Record<string, unknown>) || null
+            scryfallData: data.scryfallData || null
         } as CardType;
       });
       
-      // On filtre les cartes à 0
       const validItems = items.filter(card => card.quantity > 0);
-
       setCards(validItems);
       setLoading(false);
-    }, (error) => {
-        console.error(`Erreur inattendue`, error);
-    });
+    }, (error) => { console.error(error); setLoading(false); });
     
     return () => unsubscribe();
   }, [effectiveUid, target, listId, authLoading]);
@@ -123,21 +148,23 @@ export function useCardCollection(
   // --- ACTIONS ---
 
   const triggerStatsUpdate = () => {
-      if (user?.uid && isOwner && target === 'collection') {
-          updateUserStats(user.uid).catch(e => console.error("Erreur Stats BG", e));
+      if (user?.uid && isOwner && target === 'collection' && listId === 'default') {
+          updateUserStats(user.uid).catch(console.error);
       }
   };
 
   const getDocRef = (cardId: string) => {
       if (!isOwner || !effectiveUid) return null;
       let path = '';
-      if (target === 'collection') path = `users/${effectiveUid}/collection`;
+      if (target === 'collection') {
+           if (listId === 'default') path = `users/${effectiveUid}/collection`;
+           else path = `users/${effectiveUid}/collections_data/${listId}/cards`;
+      }
       else if (listId === 'default') path = `users/${effectiveUid}/wishlist`;
       else path = `users/${effectiveUid}/wishlists_data/${listId}/cards`;
       return doc(db, path, cardId);
   };
 
-  // Modification du prix d'achat (Historique) - NOUVEAU
   const setPurchasePrice = async (cardId: string, price: number) => {
       if (!isOwner) return;
       const ref = getDocRef(cardId);
@@ -203,7 +230,7 @@ export function useCardCollection(
       await updateDoc(ref, { quantity: increment(amount) });
       triggerStatsUpdate();
       return 'updated';
-    } catch (err) { return 'error'; }
+    } catch { return 'error'; }
   };
 
   const removeCard = async (cardId: string) => {
@@ -237,6 +264,7 @@ export function useCardCollection(
 
   const bulkSetTradeStatus = async (action: 'excess' | 'all' | 'reset', threshold: number = 4) => {
       if (!isOwner || !user || cards.length === 0) return;
+      
       const batch = writeBatch(db);
       let opCount = 0;
       const cardsToScan: { id: string, name: string, isFoil: boolean }[] = [];
@@ -245,6 +273,7 @@ export function useCardCollection(
       cards.forEach(card => {
           let shouldUpdate = false;
           let newTradeQty = 0; 
+          
           if (action === 'reset') {
               if (card.quantityForTrade > 0) { shouldUpdate = true; newTradeQty = 0; }
           } else if (action === 'all') {
@@ -253,6 +282,7 @@ export function useCardCollection(
               const tradeableQty = Math.max(0, card.quantity - threshold);
               if (card.quantityForTrade !== tradeableQty) { shouldUpdate = true; newTradeQty = tradeableQty; }
           }
+
           if (shouldUpdate) {
               const ref = getDocRef(card.id);
               if (ref) {

@@ -27,6 +27,9 @@
   --muted: #a1a1aa; /* Zinc-400 */
   --danger: #ef4444; /* Red-500 */
   --success: #10b981; /* Emerald-500 */
+  
+  /* NOUVEAU: Vert Vif personnalisé */
+  --success-vif: #48c99f;
 }
 
 .dark {
@@ -45,6 +48,9 @@
 
   --secondary: #1e1b4b; /* Indigo-950 */
   --secondary-foreground: #a5b4fc;
+  
+  /* NOUVEAU: Vert Vif personnalisé (Assombrissement pour le thème sombre si nécessaire) */
+  --success-vif: #37a380; /* Un peu plus sombre que #48c99f pour le contraste */
 }
 
 /* --- CONFIGURATION TAILWIND --- */
@@ -68,6 +74,9 @@
   --color-muted: var(--muted);
   --color-danger: var(--danger);
   --color-success: var(--success);
+  
+  /* NOUVEAU MAPPING: bg-success-vif */
+  --color-success-vif: var(--success-vif);
 
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);

@@ -1,3 +1,4 @@
+// app/stats/page.tsx
 'use client';
 
 import { useState, useEffect, useMemo, useCallback } from 'react';
@@ -5,7 +6,8 @@ import { useAuth } from '@/lib/AuthContext';
 import { db } from '@/lib/firebase';
 import { collection, getDocs, query, where, doc, getDoc } from 'firebase/firestore';
 import { useFriends } from '@/hooks/useFriends';
-import { updateUserStats } from '@/app/actions/stats'; // Import de l'action serveur
+import { updateUserStats } from '@/app/actions/stats';
+import Image from 'next/image';
 
 // --- TYPES STRICTS ---
 
@@ -38,17 +40,31 @@ interface FirestoreStats {
 
 // --- COMPOSANTS DE PRÉSENTATION ---
 
-const StatCard = ({ title, winner, value, colorClass }: { title: string, winner?: StatProfile, value: string, colorClass: string }) => (
+const StatCard = ({ 
+    title, 
+    winner, 
+    value, 
+    colorClass,
+    valueColor // Nouvelle prop pour forcer la couleur du texte
+}: { 
+    title: string, 
+    winner?: StatProfile, 
+    value: string, 
+    colorClass: string,
+    valueColor: string 
+}) => (
     <div className={`bg-surface border-l-4 ${colorClass} rounded-xl p-4 shadow-sm flex flex-col justify-between h-full`}>
         <div>
             <h3 className="text-xs font-bold text-muted uppercase tracking-wider mb-2">{title}</h3>
             {winner ? (
                 <div className="flex items-center gap-3 mb-2">
-                    <div className="w-10 h-10 rounded-full bg-secondary overflow-hidden shrink-0 border border-border">
+                    <div className="w-10 h-10 rounded-full bg-secondary overflow-hidden shrink-0 border border-border relative">
                         {winner.photoURL ? (
-                            <img src={winner.photoURL} alt={winner.username} className="w-full h-full object-cover" />
+                            <Image src={winner.photoURL} alt={winner.username} fill className="object-cover" />
                         ) : (
-                            <div className="w-full h-full flex items-center justify-center font-bold text-muted">{winner.username[0].toUpperCase()}</div>
+                            <div className="w-full h-full flex items-center justify-center font-bold text-muted text-xs">
+                                {winner.username[0]?.toUpperCase()}
+                            </div>
                         )}
                     </div>
                     <div className="min-w-0">
@@ -61,7 +77,7 @@ const StatCard = ({ title, winner, value, colorClass }: { title: string, winner?
             )}
         </div>
         <div className="text-right">
-            <span className={`text-2xl font-black ${colorClass.replace('border-', 'text-')}`}>
+            <span className={`text-2xl font-black ${valueColor}`}>
                 {winner ? value : '-'}
             </span>
         </div>
@@ -76,14 +92,27 @@ const LeaderboardRow = ({ rank, profile }: { rank: number, profile: StatProfile 
 
     return (
         <div className="flex items-center gap-4 p-3 border-b border-border last:border-0 hover:bg-secondary/20 transition">
-            <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm border ${rankStyle}`}>
+            <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm border shrink-0 ${rankStyle}`}>
                 {rank}
             </div>
+            
+            <div className="w-10 h-10 rounded-full bg-secondary overflow-hidden shrink-0 border border-border relative">
+                {profile.photoURL ? (
+                    <Image src={profile.photoURL} alt={profile.username} fill className="object-cover" />
+                ) : (
+                    <div className="w-full h-full flex items-center justify-center font-bold text-muted text-xs">
+                        {profile.username[0]?.toUpperCase()}
+                    </div>
+                )}
+            </div>
+
             <div className="grow min-w-0">
                 <p className="font-bold text-foreground truncate">{profile.displayName}</p>
-                <div className="flex gap-2 text-xs text-muted">
+                <div className="flex gap-2 text-xs text-muted items-center">
+                    <span>@{profile.username}</span>
+                    <span className="w-1 h-1 bg-muted rounded-full"></span>
                     <span>{profile.totalCards} cartes</span>
-                    <span>•</span>
+                    <span className="w-1 h-1 bg-muted rounded-full"></span>
                     <span>{profile.foilCount} Foils</span>
                 </div>
             </div>
@@ -288,25 +317,29 @@ export default function StatsPage() {
                             title="Grand Trésorier" 
                             winner={topValue} 
                             value={`${topValue?.totalValue.toFixed(0)} €`} 
-                            colorClass="border-yellow-500 text-yellow-600 bg-yellow-50 dark:bg-yellow-900/10" 
+                            colorClass="border-yellow-500 bg-yellow-50 dark:bg-yellow-900/10" 
+                            valueColor="text-yellow-600 dark:text-yellow-400"
                         />
                         <StatCard 
                             title="Archiviste Suprême" 
                             winner={topUnique} 
                             value={`${topUnique?.uniqueCards} Uniques`} 
-                            colorClass="border-blue-500 text-blue-600 bg-blue-50 dark:bg-blue-900/10" 
+                            colorClass="border-blue-500 bg-blue-50 dark:bg-blue-900/10"
+                            valueColor="text-blue-600 dark:text-blue-400"
                         />
                         <StatCard 
                             title="Seigneur des Gobelins" 
                             winner={topFoil} 
                             value={`${topFoil?.foilCount} Foils`} 
-                            colorClass="border-purple-500 text-purple-600 bg-purple-50 dark:bg-purple-900/10" 
+                            colorClass="border-purple-500 bg-purple-50 dark:bg-purple-900/10"
+                            valueColor="text-purple-600 dark:text-purple-400"
                         />
                         <StatCard 
                             title="La Baleine" 
                             winner={topWhale} 
                             value={`${topWhale?.avgPrice.toFixed(2)} € / carte`} 
-                            colorClass="border-green-500 text-green-600 bg-green-50 dark:bg-green-900/10" 
+                            colorClass="border-green-500 bg-green-50 dark:bg-green-900/10"
+                            valueColor="text-green-600 dark:text-green-400"
                         />
                     </div>
 

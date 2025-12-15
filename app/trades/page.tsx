@@ -6,7 +6,8 @@ import { useAuth } from '@/lib/AuthContext';
 import { useTradeMatcher, TradeProposal } from '@/hooks/useTradeMatcher';
 import { useTradeSystem, TradeRequest } from '@/hooks/useTradeSystem';
 import Link from 'next/link';
-import { useCardCollection, CardType } from '@/hooks/useCardCollection'; 
+import Image from 'next/image';
+import { CardType } from '@/hooks/useCardCollection'; 
 import AdContainer from '@/components/AdContainer';
 import { ScryfallRawData } from '@/lib/cardUtils';
 import { useSearchParams } from 'next/navigation';
@@ -219,7 +220,7 @@ const TradeRowProposal = ({ proposal, onProposalSent }: { proposal: TradeProposa
             <div className="bg-secondary/30 p-4 border-b border-border flex flex-col sm:flex-row justify-between items-center gap-4 select-none">
                 <div className="flex items-center gap-3">
                     <div className="w-10 h-10 rounded-full bg-linear-to-br from-primary to-purple-600 flex items-center justify-center text-white font-bold overflow-hidden shadow-sm">
-                        {proposal.friend.photoURL ? <img src={proposal.friend.photoURL} alt="" className="w-full h-full object-cover"/> : proposal.friend.username[0].toUpperCase()}
+                        {proposal.friend.photoURL ? <Image src={proposal.friend.photoURL} alt="" width={40} height={40} className="w-full h-full object-cover"/> : proposal.friend.username[0].toUpperCase()}
                     </div>
                     <div>
                         <h2 className="text-xl font-bold text-foreground">Match avec {proposal.friend.displayName}</h2>

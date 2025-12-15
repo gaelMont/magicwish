@@ -9,11 +9,12 @@ import { useCardCollection, CardType } from '@/hooks/useCardCollection';
 import { normalizeCardData, ScryfallRawData } from '@/lib/cardUtils'; 
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
+import Image from 'next/image';
 
 // Imports des composants séparés
 import CardMainDetails from '@/components/card-page/CardMainDetails';
 import CardVersionsGrid from '@/components/card-page/CardVersionsGrid';
-import DualQuantityManager from '@/components/card-page/DualQuantityManager'; // <--- IMPORT DU NOUVEAU COMPOSANT
+import DualQuantityManager from '@/components/card-page/DualQuantityManager'; 
 
 type CardDetailPageProps = {
     params: Promise<{ id: string }>;
@@ -31,6 +32,7 @@ export default function CardDetailPage({ params }: CardDetailPageProps) {
 
     const { cards: collectionCards, loading: collectionLoading } = useCardCollection('collection'); 
     
+    // Map pour accès rapide
     const collectionMap = useMemo(() => {
         const map = new Map<string, CardType>();
         collectionCards.forEach(c => map.set(c.id, c));
@@ -42,6 +44,7 @@ export default function CardDetailPage({ params }: CardDetailPageProps) {
     const [isFlipped, setIsFlipped] = useState(false); 
     const [showAllVersions, setShowAllVersions] = useState(false);
 
+    // Initialisation
     useEffect(() => {
         if (!user) { setLoading(false); return; }
 
@@ -96,6 +99,30 @@ export default function CardDetailPage({ params }: CardDetailPageProps) {
         setIsFlipped(false); 
     };
 
+    // --- CORRECTION : DÉPLACEMENT DES HOOKS AVANT LES RETOURS CONDITIONNELS ---
+
+    // Calcul sécurisé de scryfallId (gère le cas où card est null)
+    const scryfallId = card ? ((card.scryfallData as ScryfallRawData)?.id || card.id) : null;
+
+    // Calcul de isOwner (Hook useMemo)
+    const isOwner = useMemo(() => {
+        if (!user || !card) return false;
+        
+        if (!!card.uid && user.uid === card.uid) return true;
+        if (collectionMap.has(card.id)) return true;
+        
+        // Recherche avancée par ID Scryfall
+        if (scryfallId) {
+            return Array.from(collectionMap.values()).some(c => {
+                const cScryId = (c.scryfallData as ScryfallRawData)?.id;
+                return cScryId === scryfallId;
+            });
+        }
+        return false;
+    }, [user, card, collectionMap, scryfallId]);
+
+    // --- MAINTENANT ON PEUT FAIRE LES RETOURS CONDITIONNELS ---
+
     if (!user) return <div className="p-10 text-center text-muted">Connectez-vous pour voir les détails.</div>;
     if (loading) return <div className="p-10 text-center text-muted animate-pulse">Chargement des détails de la carte...</div>;
     if (!card) return <div className="p-10 text-center text-danger">Carte introuvable.</div>;
@@ -116,8 +143,6 @@ export default function CardDetailPage({ params }: CardDetailPageProps) {
     const isDoubleSided = !!imageBackUrl;
     const oracleId = (card.scryfallData as ScryfallRawData)?.oracle_id as string | undefined;
     const displayImage = isFlipped && imageBackUrl ? imageBackUrl : imageUrl;
-    
-    const isOwner = (!!card.uid && user.uid === card.uid) || collectionMap.has(card.id); 
     
     return (
         <main className="container mx-auto p-4 max-w-6xl min-h-[80vh]">
@@ -150,7 +175,7 @@ export default function CardDetailPage({ params }: CardDetailPageProps) {
                             className="w-full max-w-sm aspect-[2.5/3.5] rounded-xl overflow-hidden shadow-2xl ring-4 ring-primary/20 cursor-pointer"
                             onClick={() => isDoubleSided && setIsFlipped(!isFlipped)}
                         >
-                            <img src={displayImage} alt={name} className="w-full h-full object-cover" />
+                            <Image src={displayImage} alt={name} className="w-full h-full object-cover" width={500} height={700} />
                         </div>
                         {isDoubleSided && (
                             <button onClick={() => setIsFlipped(!isFlipped)} className="mt-4 text-sm text-primary hover:underline font-medium">
@@ -160,7 +185,7 @@ export default function CardDetailPage({ params }: CardDetailPageProps) {
                         <div className="mt-4 text-center">
                             <p className="text-lg font-semibold text-foreground">{setName}</p>
                             {isOwner ? (
-                                <p className="text-sm text-muted">Quantité totale : {card.quantity} | Échange : <span className="font-bold text-success">{card.quantityForTrade ?? 0}</span></p>
+                                <p className="text-xs text-success font-bold mt-1">Vous possédez cette carte</p>
                             ) : (
                                 <p className="text-sm text-muted italic">Vous ne possédez pas cette carte.</p>
                             )}
@@ -170,7 +195,6 @@ export default function CardDetailPage({ params }: CardDetailPageProps) {
                     {/* DROITE : DÉTAILS & ACTIONS */}
                     <div className="md:col-span-2 space-y-6">
                         {isOwner && (
-                            // Utilisation du nouveau composant
                             <DualQuantityManager card={card} />
                         )}
                         <CardMainDetails cardData={card} />

@@ -76,7 +76,6 @@ export default function DualQuantityManager({ card, onUpdate }: Props) {
             if (newQty === 0 && targetDoc) {
                 if (confirm(`Retirer la version ${isTargetFoil ? 'Foil' : 'Normal'} de la collection ?`)) {
                     await deleteDoc(doc(db, 'users', user.uid, 'collection', targetDoc.id));
-                    // Nettoyage notifs si on supprime
                     removeAutoMatchNotification(user.uid, [targetDoc.id]);
                     
                     if (isTargetFoil) setFoilDoc(null);
@@ -88,7 +87,6 @@ export default function DualQuantityManager({ card, onUpdate }: Props) {
 
             // Mise à jour
             if (targetDoc) {
-                // Si on réduit la quantité totale en dessous de la quantité de trade, on ajuste le trade
                 const currentTrade = targetDoc.quantityForTrade || 0;
                 const newTrade = Math.min(currentTrade, newQty);
                 
@@ -102,29 +100,22 @@ export default function DualQuantityManager({ card, onUpdate }: Props) {
                 if (isTargetFoil) setFoilDoc(updated);
                 else setNormalDoc(updated);
             
-            // Création (C'est ici que se trouve la correction pour le prix)
+            // Création
             } else if (newQty > 0) {
                 const newId = `${scryfallId}_${isTargetFoil ? 'foil' : 'normal'}`;
                 const newDocRef = doc(db, 'users', user.uid, 'collection', newId);
                 
-                // --- LOGIQUE DE PRIX CORRIGÉE ---
                 let initialPrice = card.price || 0;
-
-                // Si on a les données Scryfall, on cherche le prix spécifique
                 if (scryfallData && scryfallData.prices) {
                     const priceNormal = parseFloat(scryfallData.prices.eur || "0");
                     const priceFoil = parseFloat(scryfallData.prices.eur_foil || "0");
 
                     if (isTargetFoil) {
-                        // On veut créer une Foil : on prend le prix Foil. 
-                        // Si pas de prix foil (0), on fallback sur le prix normal pour ne pas avoir 0.
                         initialPrice = priceFoil > 0 ? priceFoil : (priceNormal > 0 ? priceNormal : initialPrice);
                     } else {
-                        // On veut créer une Normale : on prend le prix Normal.
                         initialPrice = priceNormal > 0 ? priceNormal : (priceFoil > 0 ? priceFoil : initialPrice);
                     }
                 }
-                // -------------------------------
 
                 const newCardData = {
                     name: card.name,
@@ -133,7 +124,7 @@ export default function DualQuantityManager({ card, onUpdate }: Props) {
                     setName: card.setName,
                     setCode: card.setCode,
                     
-                    price: initialPrice, // On utilise le prix calculé
+                    price: initialPrice, 
                     
                     purchasePrice: card.purchasePrice ?? null, 
                     customPrice: card.customPrice ?? null,
@@ -184,12 +175,10 @@ export default function DualQuantityManager({ card, onUpdate }: Props) {
                 isForTrade: newTrade > 0
             });
 
-            // Optimistic update
             const updated = { ...targetDoc, quantityForTrade: newTrade, isForTrade: newTrade > 0 };
             if (isTargetFoil) setFoilDoc(updated);
             else setNormalDoc(updated);
 
-            // Gestion des notifications de match
             if (newTrade > 0 && newTrade > currentTrade) {
                 checkAutoMatch(user.uid, [{ id: targetDoc.id, name: targetDoc.name, isFoil: isTargetFoil }]);
             } else if (newTrade === 0 && currentTrade > 0) {
@@ -205,12 +194,13 @@ export default function DualQuantityManager({ card, onUpdate }: Props) {
     if (loading) return <div className="p-4 text-center text-muted text-xs">Chargement des variantes...</div>;
 
     const normalQty = normalDoc?.quantity || 0;
-    const normalTrade = normalDoc?.quantityForTrade || 0;
+    // CORRECTION CRITIQUE : Clamp visuel pour que Trade ne dépasse jamais la Quantité
+    const normalTrade = Math.min(normalDoc?.quantityForTrade || 0, normalQty);
     
     const foilQty = foilDoc?.quantity || 0;
-    const foilTrade = foilDoc?.quantityForTrade || 0;
+    // CORRECTION CRITIQUE : Clamp visuel pour le Foil aussi
+    const foilTrade = Math.min(foilDoc?.quantityForTrade || 0, foilQty);
 
-    // Fonction de rendu pour une variante pour éviter la duplication de code
     const renderVariantBlock = (title: string, isFoil: boolean, total: number, trade: number) => {
         const isOwned = total > 0;
         const currentDoc = isFoil ? foilDoc : normalDoc;
@@ -219,7 +209,6 @@ export default function DualQuantityManager({ card, onUpdate }: Props) {
         return (
             <div className={`rounded-xl border overflow-hidden flex flex-col h-full transition-all duration-200 ${isOwned ? (isFoil ? 'bg-amber-50 border-amber-200' : 'bg-white border-border shadow-sm') : 'bg-secondary/20 border-border opacity-70 hover:opacity-100'}`}>
                 
-                {/* Header du Bloc */}
                 <div className={`px-4 py-3 border-b flex justify-between items-center ${isFoil ? 'bg-amber-100/50 border-amber-200' : 'bg-secondary/30 border-border'}`}>
                     <span className={`font-bold text-sm flex items-center gap-2 ${isFoil ? 'text-amber-700' : 'text-foreground'}`}>
                         {isFoil && <span>✨</span>}
@@ -234,10 +223,8 @@ export default function DualQuantityManager({ card, onUpdate }: Props) {
                     )}
                 </div>
 
-                {/* Corps du Bloc */}
                 <div className="p-4 space-y-4 grow flex flex-col justify-center">
                     
-                    {/* Ligne Collection */}
                     <div className="flex items-center justify-between">
                         <span className="text-xs font-bold text-muted uppercase tracking-wide">Collection</span>
                         <div className="flex items-center bg-background rounded-lg border border-border shadow-sm h-9">
@@ -257,10 +244,8 @@ export default function DualQuantityManager({ card, onUpdate }: Props) {
                         </div>
                     </div>
 
-                    {/* Ligne Séparatrice Subtile */}
                     {isOwned && <div className="h-px bg-border/50 w-full"></div>}
 
-                    {/* Ligne Échange (Mise en avant) */}
                     <div className={`flex items-center justify-between transition-opacity duration-200 ${!isOwned ? 'opacity-40 pointer-events-none' : 'opacity-100'}`}>
                         <div className="flex flex-col">
                             <span className="text-xs font-bold text-green-700 uppercase tracking-wide">À l&apos;échange</span>

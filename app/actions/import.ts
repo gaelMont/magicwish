@@ -45,11 +45,27 @@ export async function importCardsAction(
     userId: string,
     targetCollection: 'collection' | 'wishlist',
     importMode: 'add' | 'sync',
-    items: ImportItemInput[]
+    items: ImportItemInput[],
+    targetListId: string = 'default' // NOUVEAU PARAMÈTRE
 ): Promise<{ success: boolean; count: number; error?: string }> {
     
     const db = getAdminFirestore();
-    const collectionPath = targetCollection === 'wishlist' ? 'wishlist' : 'collection';
+    
+    // LOGIQUE DE CHEMIN MISE À JOUR
+    let collectionPath = '';
+    if (targetCollection === 'collection') {
+        if (targetListId === 'default') {
+            collectionPath = 'collection'; // Ancienne route
+        } else {
+            collectionPath = `collections_data/${targetListId}/cards`; // Nouvelle route sous-collection
+        }
+    } else {
+        if (targetListId === 'default') {
+            collectionPath = 'wishlist';
+        } else {
+            collectionPath = `wishlists_data/${targetListId}/cards`;
+        }
+    }
 
     try {
         let processedCount = 0;
@@ -67,6 +83,7 @@ export async function importCardsAction(
             const currentQuantities = new Map<string, number>();
             
             if (importMode === 'sync' && scryfallIdsToCheck.length > 0) {
+                // Lecture sur le bon chemin
                 const reads = scryfallIdsToCheck.map(id => db.doc(`users/${userId}/${collectionPath}/${id}`).get());
                 const snapshots = await Promise.all(reads);
                 
@@ -102,14 +119,20 @@ export async function importCardsAction(
             for (const scryCard of foundCards) {
                 const originalItem = chunk.find(item => {
                     if (item.scryfallId && item.scryfallId === scryCard.id) return true;
-                    const nameMatch = item.name.toLowerCase().includes(scryCard.name.toLowerCase().split(' // ')[0]);
+                    
+                    const itemName = item.name.toLowerCase();
+                    const scryName = scryCard.name.toLowerCase().split(' // ')[0];
+                    const nameMatch = itemName.includes(scryName) || scryName.includes(itemName);
+                    
                     const setMatch = item.set.toLowerCase() === scryCard.set.toLowerCase();
                     const cnMatch = item.collectorNumber === scryCard.collector_number;
+                    
                     if (item.set && item.collectorNumber) return setMatch && cnMatch;
                     return nameMatch && setMatch;
                 });
 
                 if (originalItem) {
+                    // Écriture sur le bon chemin
                     const docRef = db.doc(`users/${userId}/${collectionPath}/${scryCard.id}`);
                     
                     let quantityToAdd = 0;
@@ -148,10 +171,10 @@ export async function importCardsAction(
                         isFoil: originalItem.isFoil,
                         scryfallData: scryCard,
                         lastPriceUpdate: new Date(),
-                        wishlistId: targetCollection === 'wishlist' ? 'default' : null,
+                        // Si c'est une wishlist, on associe l'ID de la liste, sinon null
+                        wishlistId: targetCollection === 'wishlist' ? targetListId : null,
                         isSpecificVersion: targetCollection === 'wishlist',
                         quantityForTrade: 0
-                        // NOTE: Pas de customPrice ici !
                     };
 
                     batch.set(docRef, {
@@ -178,7 +201,8 @@ export async function importCardsAction(
             await batch.commit();
         }
 
-        if (targetCollection === 'collection' && processedCount > 0) {
+        // Mise à jour des stats globales uniquement si c'est la collection principale
+        if (targetCollection === 'collection' && targetListId === 'default' && processedCount > 0) {
             await updateUserStats(userId);
         }
 

@@ -3,7 +3,7 @@
 
 import { getAdminFirestore } from '@/lib/firebase-admin';
 import { CardType } from '@/hooks/useCardCollection';
-import { Timestamp } from 'firebase-admin/firestore';
+import { Timestamp, FieldValue } from 'firebase-admin/firestore';
 
 // Définition stricte des types de retour
 export type ScannedPartnerInfo = {
@@ -27,71 +27,82 @@ export type ScannerResult = {
 
 // Interfaces internes Firestore
 interface FirestoreUserData {
-    displayName?: string;
-    username?: string;
-    photoURL?: string;
+    displayName?: unknown; // Devrait être string
+    username?: unknown;    // Devrait être string
+    photoURL?: unknown;    // Devrait être string | null
 }
 
 interface FirestoreGroupData {
-    members?: string[];
+    members?: unknown;     // Devrait être string[]
 }
 
+// Typage strict pour les données brutes de la carte Firestore
 interface FirestoreCardData {
-    name?: string;
-    imageUrl?: string;
-    imageBackUrl?: string;
-    price?: number;
-    customPrice?: number;
-    quantityForTrade?: number;
-    quantity?: number;
-    setCode?: string;
-    setName?: string;
-    isFoil?: boolean;
-    isSpecificVersion?: boolean;
-    isForTrade?: boolean;
-    wishlistId?: string;
-    scryfallData?: Record<string, unknown>;
+    name?: unknown;
+    imageUrl?: unknown;
+    imageBackUrl?: unknown;
+    price?: unknown;
+    customPrice?: unknown;
+    quantityForTrade?: unknown;
+    quantity?: unknown;
+    setCode?: unknown;
+    setName?: unknown;
+    isFoil?: unknown;
+    isSpecificVersion?: unknown;
+    isForTrade?: unknown;
+    wishlistId?: unknown;
+    scryfallData?: unknown;
     
-    lastPriceUpdate?: Timestamp | Date | null;
-    addedAt?: Timestamp | Date | null;
-    importedAt?: Timestamp | Date | null;
-    lastUpdated?: Timestamp | Date | null;
+    lastPriceUpdate?: unknown;
+    addedAt?: unknown;
+    importedAt?: unknown;
+    lastUpdated?: unknown;
     
     [key: string]: unknown;
 }
 
-// --- ON GARDE CETTE FONCTION VITALE ---
+// --- FONCTION DE SÉRIALISATION AVEC VÉRIFICATION DES TYPES ---
 const serializeCard = (docId: string, data: FirestoreCardData, forceIsWishlist: boolean): CardType => {
     
-    const toDate = (val: unknown): Date | undefined => {
-        if (val instanceof Timestamp) return val.toDate();
+    const toDate = (val: unknown): Date | null => {
+        if (val && typeof val === 'object' && typeof (val as { toDate: () => Date }).toDate === 'function') {
+            return (val as { toDate: () => Date }).toDate();
+        }
         if (val instanceof Date) return val;
-        return undefined;
+        return null;
     };
+    
+    const isString = (val: unknown): string | undefined => typeof val === 'string' ? val : undefined;
+    const isNumber = (val: unknown): number | undefined => typeof val === 'number' ? val : undefined;
+    const isBoolean = (val: unknown): boolean => typeof val === 'boolean' ? val : false;
 
     return {
         id: docId,
-        name: (data.name as string) || 'Carte Inconnue',
-        imageUrl: (data.imageUrl as string) || '',
-        imageBackUrl: (data.imageBackUrl as string) ?? null,
+        name: isString(data.name) || 'Carte Inconnue',
+        imageUrl: isString(data.imageUrl) || '',
+        imageBackUrl: isString(data.imageBackUrl) ?? null,
         
-        quantity: typeof data.quantity === 'number' ? data.quantity : 1,
-        price: typeof data.price === 'number' ? data.price : 0,
-        customPrice: typeof data.customPrice === 'number' ? data.customPrice : undefined,
+        quantity: isNumber(data.quantity) || 1,
+        price: isNumber(data.price) || 0,
+        customPrice: isNumber(data.customPrice),
         
-        setName: (data.setName as string) || '',
-        setCode: (data.setCode as string) || '',
+        setName: isString(data.setName) || '',
+        setCode: isString(data.setCode) || '',
         
-        isFoil: !!data.isFoil,
-        isSpecificVersion: !!data.isSpecificVersion,
+        isFoil: isBoolean(data.isFoil),
+        isSpecificVersion: isBoolean(data.isSpecificVersion),
         
-        quantityForTrade: typeof data.quantityForTrade === 'number' 
-            ? data.quantityForTrade 
-            : (data.isForTrade === true ? (typeof data.quantity === 'number' ? data.quantity : 1) : 0),
+        quantityForTrade: isNumber(data.quantityForTrade) !== undefined
+            ? isNumber(data.quantityForTrade)!
+            : (isBoolean(data.isForTrade) && isNumber(data.quantity) !== undefined ? isNumber(data.quantity)! : 0),
         
-        wishlistId: forceIsWishlist ? (data.wishlistId || 'default') : undefined,
-        scryfallData: (data.scryfallData as Record<string, unknown>) || undefined,
-        lastPriceUpdate: toDate(data.lastPriceUpdate) || null
+        wishlistId: forceIsWishlist ? (isString(data.wishlistId) || 'default') : null,
+        
+        // On s'assure que c'est un objet Record<string, unknown> si non null
+        scryfallData: (typeof data.scryfallData === 'object' && data.scryfallData !== null) 
+            ? data.scryfallData as Record<string, unknown> : null,
+            
+        lastPriceUpdate: toDate(data.lastPriceUpdate)
     };
 };
 
@@ -108,8 +119,8 @@ export async function runServerScan(userId: string): Promise<ScannerResult> {
             const d = doc.data() as FirestoreUserData;
             partnersMap.set(doc.id, { 
                 uid: doc.id, 
-                displayName: d.displayName || 'Ami inconnu', 
-                photoURL: d.photoURL || null 
+                displayName: typeof d.displayName === 'string' ? d.displayName : 'Ami inconnu', 
+                photoURL: typeof d.photoURL === 'string' ? d.photoURL : null 
             });
         });
 
@@ -119,9 +130,9 @@ export async function runServerScan(userId: string): Promise<ScannerResult> {
         
         groupsSnap.forEach(g => {
             const d = g.data() as FirestoreGroupData;
-            const members = d.members || [];
-            members.forEach((m: string) => {
-                if (m !== userId && !partnersMap.has(m)) memberUids.add(m);
+            const members = Array.isArray(d.members) ? d.members : [];
+            members.forEach((m: unknown) => {
+                if (typeof m === 'string' && m !== userId && !partnersMap.has(m)) memberUids.add(m);
             });
         });
 
@@ -134,8 +145,8 @@ export async function runServerScan(userId: string): Promise<ScannerResult> {
                     const d = p.data() as FirestoreUserData;
                     partnersMap.set(uid, { 
                         uid, 
-                        displayName: d.displayName || d.username || 'Membre Groupe', 
-                        photoURL: d.photoURL || null 
+                        displayName: typeof d.displayName === 'string' ? d.displayName : (typeof d.username === 'string' ? d.username : 'Membre Groupe'),
+                        photoURL: typeof d.photoURL === 'string' ? d.photoURL : null 
                     });
                 }
             }));
@@ -143,20 +154,23 @@ export async function runServerScan(userId: string): Promise<ScannerResult> {
 
         if (partnersMap.size === 0) return { success: true, proposals: [] };
 
-        // 2. Charger MES données
+        // 2. Charger MES données (pour l'ajustement de la quantité reçue)
         const myCollectionSnap = await db.collection(`users/${userId}/collection`).where('quantityForTrade', '>', 0).get();
         const myWishlistSnap = await db.collection(`users/${userId}/wishlist`).get();
 
-        // Note: myTradeCards n'est plus utilisé ici pour le matching "give", on utilise myWishlistNames pour "receive"
-        // On optimise en ne chargeant que ce dont on a besoin.
-        
-        const myWishlistNames = new Set<string>();
+        // Indexation de MA Wishlist par Nom -> Quantité désirée
+        const myWishlistDetails = new Map<string, { quantity: number, card: CardType }>();
         myWishlistSnap.forEach(d => {
-            const data = d.data() as FirestoreCardData;
-            if (data.name) myWishlistNames.add(data.name);
+            const card = serializeCard(d.id, d.data() as FirestoreCardData, true);
+            if (card.name) {
+                myWishlistDetails.set(card.name, {
+                    quantity: card.quantity, 
+                    card
+                });
+            }
         });
 
-        // Pour le matching "Je donne", on a besoin de mes cartes à l'échange
+        // Pour le matching "Je donne"
         const myTradeCards = myCollectionSnap.docs.map(d => serializeCard(d.id, d.data() as FirestoreCardData, false));
 
         // 3. Scanner chaque partenaire
@@ -169,11 +183,16 @@ export async function runServerScan(userId: string): Promise<ScannerResult> {
 
             const pTradeCards = pColSnap.docs.map(d => serializeCard(d.id, d.data() as FirestoreCardData, false));
             
-            // Pour la wishlist du partenaire, on a juste besoin des noms pour le matching
-            const pWishListNames = new Set<string>();
+            // Pour la wishlist du partenaire (pour le matching "Je donne")
+            const pWishListDetails = new Map<string, { quantity: number, card: CardType }>();
             pWishSnap.forEach(d => {
-                const data = d.data() as FirestoreCardData;
-                if (data.name) pWishListNames.add(data.name);
+                const card = serializeCard(d.id, d.data() as FirestoreCardData, true);
+                if (card.name) {
+                    pWishListDetails.set(card.name, { 
+                        quantity: card.quantity, 
+                        card
+                    });
+                }
             });
 
             const toReceive: CardType[] = [];
@@ -181,12 +200,36 @@ export async function runServerScan(userId: string): Promise<ScannerResult> {
 
             // MATCH: Je reçois (Sa collection -> Ma Wishlist)
             pTradeCards.forEach(card => {
-                if (myWishlistNames.has(card.name)) toReceive.push(card);
+                const myWish = myWishlistDetails.get(card.name);
+                if (myWish) {
+                    
+                    const neededQty = myWish.quantity; 
+                    const friendTradeQty = card.quantityForTrade; 
+                    
+                    const finalReceiveQty = Math.min(neededQty, friendTradeQty);
+
+                    if (finalReceiveQty > 0) {
+                        const cardToReceive: CardType = { ...card, quantity: finalReceiveQty, quantityForTrade: finalReceiveQty };
+                        toReceive.push(cardToReceive);
+                    }
+                }
             });
 
             // MATCH: Je donne (Ma collection -> Sa Wishlist)
             myTradeCards.forEach(card => {
-                if (pWishListNames.has(card.name)) toGive.push(card);
+                const partnerWish = pWishListDetails.get(card.name);
+                if (partnerWish) {
+                    
+                    const neededQty = partnerWish.quantity; 
+                    const myTradeQty = card.quantityForTrade; 
+
+                    const finalGiveQty = Math.min(neededQty, myTradeQty);
+                    
+                    if (finalGiveQty > 0) {
+                        const cardToGive: CardType = { ...card, quantity: finalGiveQty, quantityForTrade: finalGiveQty };
+                        toGive.push(cardToGive);
+                    }
+                }
             });
 
             if (toReceive.length > 0 || toGive.length > 0) {

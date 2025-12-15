@@ -5,19 +5,11 @@ import { getAdminFirestore } from '@/lib/firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
 import { updateUserStats } from '@/app/actions/stats';
 import { checkAutoMatch, removeAutoMatchNotification } from '@/app/actions/matching';
+import { normalizeCardData, ScryfallRawData } from '@/lib/cardUtils'; // Import de la fonction normalisée
 
-// Types Scryfall
-interface ScryfallPriceItem {
-    id: string;
-    prices?: {
-        eur?: string;
-        usd?: string;
-    };
-    [key: string]: unknown;
-}
-
+// Interfaces
 interface ScryfallCollectionResponse {
-    data?: ScryfallPriceItem[];
+    data?: ScryfallRawData[];
     not_found?: unknown[];
     warnings?: unknown[];
 }
@@ -31,7 +23,7 @@ interface FirestoreCardData {
     [key: string]: unknown;
 }
 
-// --- ACTUALISATION DES PRIX (ET RESET DU CUSTOM PRICE) ---
+// --- ACTUALISATION DES PRIX ET DES DONNÉES (CMC/COULEURS) ---
 export async function refreshUserCollectionPrices(userId: string): Promise<{ success: boolean; updatedCount: number; error?: string }> {
     const db = getAdminFirestore();
 
@@ -43,10 +35,8 @@ export async function refreshUserCollectionPrices(userId: string): Promise<{ suc
             return { success: true, updatedCount: 0 };
         }
 
-        // On ne récupère que les IDs
         const cardsToUpdate = snapshot.docs.map(doc => ({ id: doc.id }));
         
-        // Découpage en lots de 75 (limite Scryfall)
         const chunks = [];
         for (let i = 0; i < cardsToUpdate.length; i += 75) {
             chunks.push(cardsToUpdate.slice(i, i + 75));
@@ -72,15 +62,19 @@ export async function refreshUserCollectionPrices(userId: string): Promise<{ suc
             const foundCards = scryData.data || [];
 
             for (const scryCard of foundCards) {
-                const newPrice = parseFloat(scryCard.prices?.eur || "0");
+                // Utilisation de normalizeCardData pour obtenir l'identité couleur correcte
+                const normalized = normalizeCardData(scryCard);
+                
                 const cardRef = collectionRef.doc(scryCard.id);
                 
                 batch.update(cardRef, {
-                    price: newPrice,
-                    // ICI LA CORRECTION : On supprime le prix personnalisé pour forcer le retour à Scryfall
+                    price: normalized.price,
                     customPrice: FieldValue.delete(), 
                     lastPriceUpdate: new Date(),
-                    scryfallData: scryCard
+                    scryfallData: scryCard,
+                    // --- ENREGISTREMENT DES NOUVEAUX CHAMPS ---
+                    cmc: normalized.cmc,
+                    colors: normalized.colors
                 });
                 
                 updatedCount++;
@@ -93,7 +87,6 @@ export async function refreshUserCollectionPrices(userId: string): Promise<{ suc
                 }
             }
             
-            // Petite pause pour être gentil avec l'API
             await new Promise(resolve => setTimeout(resolve, 50));
         }
 
@@ -114,9 +107,6 @@ export async function refreshUserCollectionPrices(userId: string): Promise<{ suc
         return { success: false, updatedCount: 0, error: message };
     }
 }
-
-// ... (Le reste des fonctions bulkSetTradeStatusAction, bulkRemoveCardsAction, bulkUpdateAttributeAction reste identique à la version précédente)
-// Vous pouvez garder le reste du fichier tel quel, seule refreshUserCollectionPrices change.
 
 // --- GESTION DE MASSE (TRADE / BINDER) ---
 export async function bulkSetTradeStatusAction(

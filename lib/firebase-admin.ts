@@ -7,7 +7,7 @@ function formatPrivateKey(key: string) {
   return key.replace(/\\n/g, '\n');
 }
 
-export function getAdminFirestore() {
+function initAdmin() {
   // On vérifie si une instance existe déjà pour éviter les erreurs de hot-reload
   if (admin.apps.length === 0) {
     admin.initializeApp({
@@ -18,5 +18,15 @@ export function getAdminFirestore() {
       }),
     });
   }
+}
+
+export function getAdminFirestore() {
+  initAdmin();
   return admin.firestore();
+}
+
+// NOUVELLE FONCTION EXPORTÉE
+export function getAdminAuth() {
+  initAdmin();
+  return admin.auth();
 }

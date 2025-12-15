@@ -50,7 +50,7 @@ const formatToCsvData = (cards: CardType[]) => {
 }
 
 
-export default function ExportModal({ isOpen, onClose, cards, listName, targetType, onGoBack, onCloseAll }: Props) {
+export default function ExportModal({ isOpen, cards, listName, targetType, onGoBack, onCloseAll }: Props) {
     
     const [exportFormat, setExportFormat] = useState<ExportType>('text');
     const [copied, setCopied] = useState(false);
