@@ -1,4 +1,3 @@
-// app/search/page.tsx
 'use client';
 
 import { useState, useMemo } from 'react';
@@ -161,7 +160,8 @@ export default function SearchPage() {
   };
 
   return (
-    <main className="container mx-auto p-4 max-w-5xl min-h-[85vh] relative pb-24">
+    // CORRECTION ICI : Suppression de 'max-w-5xl' pour utiliser toute la largeur du container
+    <main className="container mx-auto p-4 min-h-[85vh] relative pb-24">
       <div className="text-center mb-8 pt-4">
           <h1 className="text-3xl font-bold text-primary mb-2">Recherche</h1>
       </div>
