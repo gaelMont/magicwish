@@ -1,7 +1,7 @@
 // app/card/[id]/page.tsx
 'use client';
 
-import { use, useEffect, useState, useMemo } from 'react';
+import { use, useEffect, useState, useMemo, Suspense } from 'react';
 import { db } from '@/lib/firebase';
 import { doc, getDoc } from 'firebase/firestore';
 import { useAuth } from '@/lib/AuthContext';
@@ -20,7 +20,7 @@ type CardDetailPageProps = {
     params: Promise<{ id: string }>;
 };
 
-export default function CardDetailPage({ params }: CardDetailPageProps) {
+function CardDetailContent({ params }: CardDetailPageProps) {
     const { user } = useAuth();
     const unwrappedParams = use(params);
     const cardId = unwrappedParams.id;
@@ -44,7 +44,6 @@ export default function CardDetailPage({ params }: CardDetailPageProps) {
     const [isFlipped, setIsFlipped] = useState(false); 
     const [showAllVersions, setShowAllVersions] = useState(false);
 
-    // Initialisation
     useEffect(() => {
         if (!user) { setLoading(false); return; }
 
@@ -99,19 +98,12 @@ export default function CardDetailPage({ params }: CardDetailPageProps) {
         setIsFlipped(false); 
     };
 
-    // --- CORRECTION : DÉPLACEMENT DES HOOKS AVANT LES RETOURS CONDITIONNELS ---
-
-    // Calcul sécurisé de scryfallId (gère le cas où card est null)
+    // Calculs
     const scryfallId = card ? ((card.scryfallData as ScryfallRawData)?.id || card.id) : null;
-
-    // Calcul de isOwner (Hook useMemo)
     const isOwner = useMemo(() => {
         if (!user || !card) return false;
-        
         if (!!card.uid && user.uid === card.uid) return true;
         if (collectionMap.has(card.id)) return true;
-        
-        // Recherche avancée par ID Scryfall
         if (scryfallId) {
             return Array.from(collectionMap.values()).some(c => {
                 const cScryId = (c.scryfallData as ScryfallRawData)?.id;
@@ -120,8 +112,6 @@ export default function CardDetailPage({ params }: CardDetailPageProps) {
         }
         return false;
     }, [user, card, collectionMap, scryfallId]);
-
-    // --- MAINTENANT ON PEUT FAIRE LES RETOURS CONDITIONNELS ---
 
     if (!user) return <div className="p-10 text-center text-muted">Connectez-vous pour voir les détails.</div>;
     if (loading) return <div className="p-10 text-center text-muted animate-pulse">Chargement des détails de la carte...</div>;
@@ -139,7 +129,6 @@ export default function CardDetailPage({ params }: CardDetailPageProps) {
         };
 
     const { name, imageUrl, imageBackUrl, setName } = displayData;
-
     const isDoubleSided = !!imageBackUrl;
     const oracleId = (card.scryfallData as ScryfallRawData)?.oracle_id as string | undefined;
     const displayImage = isFlipped && imageBackUrl ? imageBackUrl : imageUrl;
@@ -169,7 +158,6 @@ export default function CardDetailPage({ params }: CardDetailPageProps) {
                 />
             ) : (
                 <div className="grid md:grid-cols-3 gap-8">
-                    {/* GAUCHE : IMAGE */}
                     <div className="md:col-span-1 flex flex-col items-center">
                         <div 
                             className="w-full max-w-sm aspect-[2.5/3.5] rounded-xl overflow-hidden shadow-2xl ring-4 ring-primary/20 cursor-pointer"
@@ -192,7 +180,6 @@ export default function CardDetailPage({ params }: CardDetailPageProps) {
                         </div>
                     </div>
 
-                    {/* DROITE : DÉTAILS & ACTIONS */}
                     <div className="md:col-span-2 space-y-6">
                         {isOwner && (
                             <DualQuantityManager card={card} />
@@ -202,5 +189,13 @@ export default function CardDetailPage({ params }: CardDetailPageProps) {
                 </div>
             )}
         </main>
+    );
+}
+
+export default function CardDetailPage(props: CardDetailPageProps) {
+    return (
+        <Suspense fallback={<div className="flex h-screen items-center justify-center text-muted animate-pulse">Chargement de la carte...</div>}>
+            <CardDetailContent {...props} />
+        </Suspense>
     );
 }

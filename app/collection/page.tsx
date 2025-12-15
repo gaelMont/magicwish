@@ -1,6 +1,7 @@
+// app/collection/page.tsx
 'use client';
 
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, Suspense } from 'react';
 import { useAuth } from '@/lib/AuthContext';
 import { useCardCollection } from '@/hooks/useCardCollection'; 
 import MagicCard from '@/components/MagicCard';
@@ -19,14 +20,12 @@ import { useSearchParams } from 'next/navigation';
 
 const ITEMS_PER_PAGE = 50; 
 
-export default function CollectionPage() {
+function CollectionContent() {
   const { user } = useAuth();
   const searchParams = useSearchParams();
   
-  // Récupération de l'ID depuis l'URL
   const selectedListId = searchParams.get('listId') || 'default';
   
-  // On charge les métadonnées juste pour avoir le nom de la liste courante
   const { lists: collectionsMeta, deleteList, renameList, loading: metaLoading } = useCollections();
 
   const { 
@@ -37,7 +36,6 @@ export default function CollectionPage() {
     totalPrice 
   } = useCardCollection('collection', selectedListId);
 
-  // --- ÉTATS GLOBAUX ---
   const [isHubOpen, setIsHubOpen] = useState(false);
   const [isImportOpen, setIsImportOpen] = useState(false);
   const [isExportOpen, setIsExportOpen] = useState(false);
@@ -46,18 +44,15 @@ export default function CollectionPage() {
   const [cardToDelete, setCardToDelete] = useState<string | null>(null);
   const [collectionToDelete, setCollectionToDelete] = useState<string | null>(null);
 
-  // --- ÉTATS RENOMMAGE ---
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState('');
 
-  // --- ÉTATS D'AFFICHAGE ---
   const [isSelectMode, setIsSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [visibleCount, setVisibleCount] = useState(ITEMS_PER_PAGE);
   
   const { columns, setColumns } = useColumnPreference('mw_cols_collection', 5); 
 
-  // --- ÉTATS DE FILTRE ET TRI ---
   const [searchQuery, setSearchQuery] = useState('');
   const { sortBy, setSortBy } = useSortPreference('mw_sort_collection', 'date_desc' as SortOption); 
   const [filterSet, setFilterSet] = useState<string>('all');
@@ -66,7 +61,6 @@ export default function CollectionPage() {
   const [minPriceFilter, setMinPriceFilter] = useState<string>('');
   const [maxPriceFilter, setMaxPriceFilter] = useState<string>('');
   
-  // Nouveaux filtres (CMC / Couleurs)
   const [filterCMC, setFilterCMC] = useState<string>('');
   const [filterColors, setFilterColors] = useState<string[]>([]);
 
@@ -78,7 +72,6 @@ export default function CollectionPage() {
       setRenameValue(currentListName);
   }, [currentListName]);
 
-  // --- GESTION DES MODALES ---
   const closeAllModals = () => {
     setIsHubOpen(false);
     setIsImportOpen(false);
@@ -105,7 +98,6 @@ export default function CollectionPage() {
       if (user?.uid) updateUserStats(user.uid).catch(e => console.error("Stats update error", e));
   };
 
-  // --- ACTIONS DE COLLECTION ---
   const handleDeleteCurrentCollection = async () => {
       if (collectionToDelete) {
           await deleteList(collectionToDelete);
@@ -126,10 +118,8 @@ export default function CollectionPage() {
     if (visibleCount !== ITEMS_PER_PAGE) {
       setVisibleCount(ITEMS_PER_PAGE);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchQuery, sortBy, filterSet, filterTrade, filterFoil, minPriceFilter, maxPriceFilter, filterCMC, filterColors, selectedListId]);
 
-  // --- LOGIQUE DE FILTRAGE ---
   const filteredAndSortedCards = useMemo(() => {
     let result = [...cards];
     
@@ -159,7 +149,6 @@ export default function CollectionPage() {
         });
     }
 
-    // Filtre CMC
     if (filterCMC) {
         const targetCMC = parseFloat(filterCMC);
         if (!isNaN(targetCMC)) {
@@ -167,14 +156,11 @@ export default function CollectionPage() {
         }
     }
 
-    // Filtre Couleurs (Restrictif : la carte doit contenir TOUTES les couleurs sélectionnées)
     if (filterColors.length > 0) {
         result = result.filter(c => {
-            // Si la carte n'a pas de couleurs (incolore), on l'affiche si 'C' est sélectionné
             if (!c.colors || c.colors.length === 0) {
                 return filterColors.includes('C');
             }
-            // Sinon, toutes les couleurs de la carte doivent être dans la sélection
             return c.colors.every(col => filterColors.includes(col));
         });
     }
@@ -203,7 +189,6 @@ export default function CollectionPage() {
       return filteredAndSortedCards.slice(0, visibleCount);
   }, [filteredAndSortedCards, visibleCount]);
 
-  // --- HANDLERS ACTIONS CARTES ---
   const handleDecrement = async (cardId: string, currentQty: number) => {
     const result = await updateQuantity(cardId, -1, currentQty);
     if (result === 'shouldDelete') {
@@ -268,7 +253,6 @@ export default function CollectionPage() {
   return (
     <main className="container mx-auto p-4 pb-24 relative">
       
-      {/* HEADER DE PAGE */}
       <div className="flex justify-between items-center mb-6">
           <div className="overflow-hidden grow pr-4">
               {isRenaming ? (
@@ -323,7 +307,6 @@ export default function CollectionPage() {
           </div>
       </div>
       
-      {/* 1. BARRE D'OUTILS */}
       <CollectionToolbar 
           isSelectMode={isSelectMode}
           setIsSelectMode={setIsSelectMode}
@@ -331,7 +314,6 @@ export default function CollectionPage() {
           onOpenHub={openHub}
       />
 
-      {/* 2. BARRE DE FILTRES */}
       <CardListFilterBar
         context="collection"
         cards={cards}
@@ -350,7 +332,6 @@ export default function CollectionPage() {
         maxPriceFilter={maxPriceFilter}
         setMaxPriceFilter={setMaxPriceFilter}
         
-        // Nouveaux filtres
         filterCMC={filterCMC}
         setFilterCMC={setFilterCMC}
         filterColors={filterColors}
@@ -360,7 +341,6 @@ export default function CollectionPage() {
         setColumns={setColumns}
       />
 
-      {/* 3. BARRE D'ACTIONS DE SÉLECTION */}
       {isSelectMode && (
           <div className="mb-4 flex items-center justify-between bg-primary/10 p-3 rounded-lg border border-primary/30 animate-in fade-in slide-in-from-top-2">
               <span className="font-bold text-primary pl-2">
@@ -372,7 +352,6 @@ export default function CollectionPage() {
           </div>
       )}
 
-      {/* 4. GRILLE DE CARTES */}
       {filteredAndSortedCards.length === 0 ? (
         <div className="text-center py-20 bg-secondary/50 rounded-xl border-2 border-dashed border-border">
           <p className="text-xl text-muted mb-4">Aucun résultat ne correspond à vos filtres.</p>
@@ -431,7 +410,6 @@ export default function CollectionPage() {
         </>
       )}
 
-      {/* 5. ACTION BAR FLOTTANTE */}
       {isSelectMode && selectedIds.length > 0 && (
           <div className="fixed bottom-6 left-4 right-4 md:left-1/2 md:right-auto md:-translate-x-1/2 bg-surface shadow-2xl border border-border p-2 rounded-2xl flex items-center justify-around gap-2 z-50 animate-in slide-in-from-bottom-6 duration-300">
               <button onClick={() => handleBulkTrade(true)} className="px-4 py-2 bg-success/10 hover:bg-success/20 text-success rounded-xl text-sm font-bold transition flex flex-col items-center leading-none gap-1">
@@ -447,7 +425,6 @@ export default function CollectionPage() {
           </div>
       )}
 
-      {/* MODALES */}
       <DataTransferHubModal 
         isOpen={isHubOpen}
         onClose={closeAllModals}
@@ -480,4 +457,12 @@ export default function CollectionPage() {
       <ConfirmModal isOpen={!!collectionToDelete} onClose={() => setCollectionToDelete(null)} onConfirm={handleDeleteCurrentCollection} title="Supprimer la collection ?" message="Toutes les cartes de cette collection seront supprimées définitivement." />
     </main>
   );
+}
+
+export default function CollectionPage() {
+    return (
+        <Suspense fallback={<div className="flex h-screen items-center justify-center text-muted animate-pulse">Chargement de la collection...</div>}>
+            <CollectionContent />
+        </Suspense>
+    );
 }
