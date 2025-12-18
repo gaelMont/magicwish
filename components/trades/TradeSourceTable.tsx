@@ -5,9 +5,6 @@ import { CardType } from '@/hooks/useCardCollection';
 import { ScryfallRawData } from '@/lib/cardUtils';
 
 // Helper pour s'assurer que nous travaillons avec le type attendu
-function isCollectionCard(item: CardType | ScryfallRawData): item is CardType {
-    return (item as CardType).quantity !== undefined;
-}
 
 interface TradeSourceTableProps {
     cards: CardType[];

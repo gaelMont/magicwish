@@ -8,6 +8,7 @@ import { collection, query, where, onSnapshot, doc, getDoc } from 'firebase/fire
 import { createGroupAction, addMemberAction, promoteMemberAction, removeMemberAction } from '@/app/actions/groups';
 import toast from 'react-hot-toast';
 import { FriendProfile, useFriends } from '@/hooks/useFriends'; 
+import Image from 'next/image';
 
 type Group = {
     id: string;
@@ -219,8 +220,18 @@ export default function GroupsPage() {
                                 const isMemberAdmin = selectedGroup.admins.includes(member.uid);
                                 return (
                                     <div key={member.uid} className="flex items-center gap-3 p-3 bg-background rounded-xl border border-border hover:bg-secondary/30 transition">
-                                        <div className="w-10 h-10 rounded-full bg-linear-to-br from-primary to-purple-600 flex items-center justify-center text-white font-bold shadow-sm shrink-0 overflow-hidden">
-                                            {member.photoURL ? <img src={member.photoURL} className="w-full h-full object-cover" alt="" /> : member.username[0].toUpperCase()}
+                                        <div className="w-10 h-10 rounded-full bg-linear-to-br from-primary to-purple-600 flex items-center justify-center text-white font-bold shadow-sm shrink-0 overflow-hidden relative">
+                                            {member.photoURL ? (
+                                                <Image 
+                                                    src={member.photoURL} 
+                                                    fill 
+                                                    sizes="40px"
+                                                    className="object-cover" 
+                                                    alt={member.displayName} 
+                                                />
+                                            ) : (
+                                                member.username[0].toUpperCase()
+                                            )}
                                         </div>
                                         <div className="min-w-0 grow">
                                             <div className="flex items-center gap-2">
@@ -242,7 +253,7 @@ export default function GroupsPage() {
                                         {member.uid !== user.uid && (
                                             <div className="ml-2 flex gap-2">
                                                 <a 
-                                                    href={`/user/${member.uid}`} // <-- CORRECTION ICI
+                                                    href={`/user/${member.uid}`} 
                                                     className="text-xs bg-secondary text-foreground px-2 py-1 rounded hover:bg-border font-bold transition"
                                                 >
                                                     Voir

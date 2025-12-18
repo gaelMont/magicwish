@@ -3,7 +3,6 @@
 
 import { getAdminFirestore } from '@/lib/firebase-admin';
 import { CardType } from '@/hooks/useCardCollection';
-import { Timestamp, FieldValue } from 'firebase-admin/firestore';
 
 // Définition stricte des types de retour
 export type ScannedPartnerInfo = {

@@ -1,7 +1,7 @@
 // hooks/useWishlists.ts
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { db } from '@/lib/firebase';
-import { collection, onSnapshot, addDoc, deleteDoc, doc, serverTimestamp, setDoc, updateDoc } from 'firebase/firestore';
+import { collection, onSnapshot, addDoc, doc, serverTimestamp, setDoc, updateDoc } from 'firebase/firestore';
 import { useAuth } from '@/lib/AuthContext';
 import { deleteWishlistAction } from '@/app/actions/wishlist'; 
 import toast from 'react-hot-toast';
@@ -16,6 +16,23 @@ export function useWishlists() {
   const { user } = useAuth();
   const [lists, setLists] = useState<WishlistMeta[]>([]);
   const [loading, setLoading] = useState(true);
+
+  // Stabilisation de createList avec useCallback
+  const createList = useCallback(async (name: string, customId?: string) => {
+    if (!user) return;
+    try {
+      const data = { name, createdAt: serverTimestamp() };
+      if (customId) {
+        await setDoc(doc(db, 'users', user.uid, 'wishlists_meta', customId), { ...data, isDefault: true });
+      } else {
+        await addDoc(collection(db, 'users', user.uid, 'wishlists_meta'), data);
+      }
+      toast.success(`Liste "${name}" créée`);
+    } catch (err) {
+      console.error(err);
+      toast.error("Erreur création liste");
+    }
+  }, [user]);
 
   useEffect(() => {
     if (!user) {
@@ -32,6 +49,7 @@ export function useWishlists() {
         ...doc.data()
       })) as WishlistMeta[];
 
+      // Utilisation de createList stable ici
       if (fetchedLists.length === 0 && !snapshot.metadata.fromCache) {
         createList("Liste principale", "default");
       } else {
@@ -46,23 +64,7 @@ export function useWishlists() {
     });
 
     return () => unsubscribe();
-  }, [user]);
-
-  const createList = async (name: string, customId?: string) => {
-    if (!user) return;
-    try {
-      const data = { name, createdAt: serverTimestamp() };
-      if (customId) {
-        await setDoc(doc(db, 'users', user.uid, 'wishlists_meta', customId), { ...data, isDefault: true });
-      } else {
-        await addDoc(collection(db, 'users', user.uid, 'wishlists_meta'), data);
-      }
-      toast.success(`Liste "${name}" créée`);
-    } catch (err) {
-      console.error(err);
-      toast.error("Erreur création liste");
-    }
-  };
+  }, [user, createList]); // createList est maintenant une dépendance stable
 
   const renameList = async (listId: string, newName: string) => {
     if (!user || listId === 'default') {

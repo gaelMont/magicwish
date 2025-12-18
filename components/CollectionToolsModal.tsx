@@ -96,7 +96,10 @@ export default function CollectionToolsModal({
                 
                 {isRefreshing && (
                     <div className="mb-4">
-                        <AdContainer /> {/* <--- LA PUB APPARAIT PENDANT L'ATTENTE */}
+                        {/* CORRECTION : On passe uniquement 'slot' qui est la prop attendue par AdContainerProps.
+                            Remplacez "1234567890" par le 'data-ad-slot' fourni par Google AdSense.
+                        */}
+                        <AdContainer slot="1234567890" />
                         <p className="text-center text-sm text-blue-600 animate-pulse mt-2">
                             Analyse des prix en cours...
                         </p>

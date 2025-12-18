@@ -26,13 +26,14 @@ export type TradeRequest = {
   createdAt: Timestamp;
 };
 
-// Interface stricte des données de carte sérialisables pour le serveur (basée sur CardSchema)
+// Interface stricte des données de carte sérialisables pour le serveur
 interface ServerCardPayload {
     id: string;
     name: string;
     imageUrl: string;
     imageBackUrl: string | null;
     quantity: number;
+    quantityForTrade: number; // AJOUT : requis pour être assignable à CardType
     price: number;
     customPrice?: number;
     setName: string;
@@ -43,7 +44,7 @@ interface ServerCardPayload {
     wishlistId: string | null;
 }
 
-// Fonction utilitaire pour convertir les CardType du client vers le format attendu par le serveur (ServerCardPayload)
+// Fonction utilitaire pour convertir les CardType du client vers le format attendu par le serveur
 const mapCardsForServer = (cards: CardType[]): ServerCardPayload[] => {
     return cards.map(c => {
         const payload: ServerCardPayload = {
@@ -52,6 +53,7 @@ const mapCardsForServer = (cards: CardType[]): ServerCardPayload[] => {
             imageUrl: c.imageUrl,
             imageBackUrl: c.imageBackUrl ?? null,
             quantity: c.quantity,
+            quantityForTrade: c.quantityForTrade ?? 0, // AJOUT : mapping de la valeur
             price: c.price ?? 0,
             customPrice: c.customPrice,
             setName: c.setName ?? '',
@@ -111,13 +113,17 @@ export function useTradeSystem() {
     const toastId = toast.loading("Envoi de la proposition...");
 
     try {
+      // Cast en unknown puis CardType[] pour satisfaire TypeScript après avoir nettoyé l'objet
+      const itemsGiven = mapCardsForServer(toGive) as unknown as CardType[];
+      const itemsReceived = mapCardsForServer(toReceive) as unknown as CardType[];
+
       const payload = {
           senderUid: user.uid,
           senderName: username || user.displayName || 'Inconnu',
           receiverUid,
           receiverName,
-          itemsGiven: mapCardsForServer(toGive),
-          itemsReceived: mapCardsForServer(toReceive)
+          itemsGiven,
+          itemsReceived
       };
 
       const result = await proposeTradeAction(payload) as { 
@@ -161,8 +167,8 @@ export function useTradeSystem() {
     const toastId = toast.loading("Validation sécurisée en cours...");
 
     try {
-        const cleanGiven = mapCardsForServer(trade.itemsGiven);
-        const cleanReceived = mapCardsForServer(trade.itemsReceived);
+        const cleanGiven = mapCardsForServer(trade.itemsGiven) as unknown as CardType[];
+        const cleanReceived = mapCardsForServer(trade.itemsReceived) as unknown as CardType[];
         
         const result = await executeServerTrade(
             trade.id, 

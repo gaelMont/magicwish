@@ -22,7 +22,6 @@ type ImportModalProps = {
   isOpen: boolean;
   onClose: () => void;
   targetCollection?: 'collection' | 'wishlist'; 
-  // NOUVEAU PROP OPTIONNEL
   listId?: string;
   onGoBack?: () => void; 
   onCloseAll?: () => void;
@@ -32,7 +31,6 @@ export default function ImportModal({
     isOpen, 
     onClose,
     targetCollection = 'collection',
-    // Valeur par défaut 'default'
     listId = 'default',
     onGoBack,
     onCloseAll
@@ -85,7 +83,6 @@ export default function ImportModal({
     const rows: CsvRow[] = [];
     const lines = textInput.split('\n');
     
-    // Regex adaptée pour "1x Nom (SET) Num"
     const regex = /^(\d+)x?\s+(.+?)\s+\(([a-zA-Z0-9]+)\)\s+(\S+)(?:\s+\*(F)\*)?/i;
 
     lines.forEach(line => {
@@ -138,7 +135,7 @@ export default function ImportModal({
             targetCollection,
             importMode,
             cleanItems,
-            listId // TRANSMISSION DE L'ID
+            listId 
         );
 
         if (result.success) {
@@ -283,7 +280,8 @@ export default function ImportModal({
                     <h3 className="text-xl font-bold text-foreground mb-2">Importation en cours...</h3>
                     <p className="text-muted text-sm max-w-md mb-8">Ne fermez pas cette fenêtre.</p>
                     <div className="w-full max-w-md">
-                        <AdContainer message="Sponsorisé" adSlotId="1234567890" />
+                        {/* CORRECTION : Utilisation de la prop 'slot' uniquement */}
+                        <AdContainer slot="1234567890" />
                     </div>
                 </div>
             )}
