@@ -1,12 +1,11 @@
-// app/stats/page.tsx
 'use client';
 
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useAuth } from '@/lib/AuthContext';
 import { db } from '@/lib/firebase';
-import { collection, getDocs, query, where, doc, getDoc } from 'firebase/firestore';
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+import { collection, getDocs, query, where, doc, getDoc, documentId } from 'firebase/firestore';
 import { useFriends } from '@/hooks/useFriends';
-import { updateUserStats } from '@/app/actions/stats';
 import Image from 'next/image';
 
 // --- TYPES STRICTS ---
@@ -45,7 +44,7 @@ const StatCard = ({
     winner, 
     value, 
     colorClass,
-    valueColor // Nouvelle prop pour forcer la couleur du texte
+    valueColor 
 }: { 
     title: string, 
     winner?: StatProfile, 
@@ -110,15 +109,12 @@ const LeaderboardRow = ({ rank, profile }: { rank: number, profile: StatProfile 
                 <p className="font-bold text-foreground truncate">{profile.displayName}</p>
                 <div className="flex gap-2 text-xs text-muted items-center">
                     <span>@{profile.username}</span>
-                    <span className="w-1 h-1 bg-muted rounded-full"></span>
-                    <span>{profile.totalCards} cartes</span>
-                    <span className="w-1 h-1 bg-muted rounded-full"></span>
-                    <span>{profile.foilCount} Foils</span>
+                    <span className="hidden sm:inline">• {profile.totalCards} cartes</span>
                 </div>
             </div>
             <div className="text-right">
-                <p className="font-bold text-primary">{profile.totalValue.toFixed(2)} €</p>
-                <p className="text-xs text-muted">Moy. {profile.avgPrice.toFixed(2)} €</p>
+                <p className="font-bold text-primary">{profile.totalValue.toFixed(0)} €</p>
+                <p className="text-xs text-muted">Moy. {profile.avgPrice.toFixed(1)} €</p>
             </div>
         </div>
     );
@@ -134,121 +130,125 @@ export default function StatsPage() {
     
     const [stats, setStats] = useState<StatProfile[]>([]);
     const [loading, setLoading] = useState(false);
-    const [progress, setProgress] = useState(0);
 
     // 1. Charger les groupes
     useEffect(() => {
         if (!user) return;
         const fetchGroups = async () => {
-            const q = query(collection(db, 'groups'), where('members', 'array-contains', user.uid));
-            const snap = await getDocs(q);
-            const groupsList = snap.docs.map(d => ({ id: d.id, ...d.data() } as GroupOption));
-            setMyGroups(groupsList);
-            if (groupsList.length > 0) setSelectedGroupId(groupsList[0].id);
+            try {
+                const q = query(collection(db, 'groups'), where('members', 'array-contains', user.uid));
+                const snap = await getDocs(q);
+                const groupsList = snap.docs.map(d => ({ id: d.id, ...d.data() } as GroupOption));
+                setMyGroups(groupsList);
+                if (groupsList.length > 0) setSelectedGroupId(groupsList[0].id);
+            } catch (e) {
+                console.error("Erreur chargement groupes", e);
+            }
         };
         fetchGroups();
     }, [user]);
 
-    // 2. Fonction de calcul
+    // 2. Fonction de calcul OPTIMISÉE (Parallèle)
     const calculateStats = useCallback(async () => {
         if (!user) return;
         setLoading(true);
-        setStats([]); 
-        setProgress(0);
-
+        
         let targetUids: string[] = [];
 
         if (scope === 'friends') {
+            // On inclut l'utilisateur courant + ses amis
             targetUids = [user.uid, ...friends.map(f => f.uid)];
         } else {
             const group = myGroups.find(g => g.id === selectedGroupId);
             if (group) targetUids = group.members;
         }
 
+        // Dédoublonnage au cas où
+        targetUids = Array.from(new Set(targetUids));
+
         if (targetUids.length === 0) {
+            setStats([]);
             setLoading(false);
             return;
         }
 
-        const results: StatProfile[] = [];
-        let processed = 0;
-
-        for (const uid of targetUids) {
-            try {
-                // Info Profil
-                let profileData: { displayName: string, username: string, photoURL: string | null } = {
-                    displayName: 'Inconnu', username: '?', photoURL: null
-                };
-
-                if (uid === user.uid) {
-                    profileData = { 
-                        displayName: user.displayName || 'Moi', 
-                        username: 'moi', 
-                        photoURL: user.photoURL 
+        try {
+            // Lancement de TOUTES les requêtes en parallèle
+            const promises = targetUids.map(async (uid) => {
+                try {
+                    // A. Récupération Profil (Optimisé: on utilise les données locales si ami/soi-même)
+                    let profileData = { 
+                        displayName: 'Inconnu', 
+                        username: '?', 
+                        photoURL: null as string | null 
                     };
-                } else {
-                    const friend = friends.find(f => f.uid === uid);
-                    if (friend) {
+
+                    if (uid === user.uid) {
                         profileData = { 
-                            displayName: friend.displayName, 
-                            username: friend.username, 
-                            photoURL: friend.photoURL || null 
+                            displayName: user.displayName || 'Moi', 
+                            username: 'moi', 
+                            photoURL: user.photoURL 
                         };
                     } else {
-                        const userSnap = await getDoc(doc(db, 'users', uid, 'public_profile', 'info'));
-                        if (userSnap.exists()) {
-                            const d = userSnap.data();
-                            profileData = {
-                                displayName: d.displayName,
-                                username: d.username,
-                                photoURL: d.photoURL
+                        const friend = friends.find(f => f.uid === uid);
+                        if (friend) {
+                            profileData = { 
+                                displayName: friend.displayName, 
+                                username: friend.username, 
+                                photoURL: friend.photoURL || null 
                             };
+                        } else {
+                            // Si pas ami direct (membre de groupe), on fetch le profil
+                            const userSnap = await getDoc(doc(db, 'users', uid, 'public_profile', 'info'));
+                            if (userSnap.exists()) {
+                                const d = userSnap.data();
+                                profileData = {
+                                    displayName: d.displayName || 'Sans nom',
+                                    username: d.username || '?',
+                                    photoURL: d.photoURL || null
+                                };
+                            }
                         }
                     }
+
+                    // B. Récupération Stats (Lecture seule du document caché)
+                    // On ne recalcule PAS (updateUserStats) ici pour la vitesse.
+                    const statsSnap = await getDoc(doc(db, 'users', uid, 'public_profile', 'stats'));
+                    const userStats = statsSnap.exists() ? (statsSnap.data() as FirestoreStats) : {};
+
+                    return {
+                        uid,
+                        ...profileData,
+                        totalValue: userStats.totalValue || 0,
+                        totalCards: userStats.totalCards || 0,
+                        uniqueCards: userStats.uniqueCards || 0,
+                        foilCount: userStats.foilCount || 0,
+                        avgPrice: userStats.avgPrice || 0
+                    };
+                } catch (err) {
+                    console.error(`Erreur pour ${uid}`, err);
+                    return null;
                 }
+            });
 
-                // --- OPTIMISATION : On déclenche le calcul serveur pour être sûr d'avoir des données ---
-                await updateUserStats(uid);
+            // Attente de tous les résultats
+            const results = await Promise.all(promises);
+            
+            // Filtrage des erreurs (null) et tri
+            const validResults = results.filter((r): r is StatProfile => r !== null);
+            setStats(validResults.sort((a, b) => b.totalValue - a.totalValue));
 
-                // Ensuite on lit le résultat
-                const statsSnap = await getDoc(doc(db, 'users', uid, 'public_profile', 'stats'));
-                let userStats: FirestoreStats = { 
-                    totalValue: 0, totalCards: 0, uniqueCards: 0, foilCount: 0, avgPrice: 0 
-                };
-
-                if (statsSnap.exists()) {
-                    userStats = statsSnap.data() as FirestoreStats;
-                } 
-
-                results.push({
-                    uid,
-                    ...profileData,
-                    totalValue: userStats.totalValue || 0,
-                    totalCards: userStats.totalCards || 0,
-                    uniqueCards: userStats.uniqueCards || 0,
-                    foilCount: userStats.foilCount || 0,
-                    avgPrice: userStats.avgPrice || 0
-                });
-
-            } catch (e) {
-                console.error(`Erreur stats pour ${uid}`, e);
-            }
-
-            processed++;
-            setProgress(Math.round((processed / targetUids.length) * 100));
+        } catch (error) {
+            console.error("Erreur globale stats", error);
+        } finally {
+            setLoading(false);
         }
-
-        setStats(results.sort((a, b) => b.totalValue - a.totalValue));
-        setLoading(false);
     }, [user, friends, scope, selectedGroupId, myGroups]);
 
-    // 3. Trigger automatique au changement
+    // 3. Trigger automatique
     useEffect(() => {
-        if (user && (scope === 'friends' || (scope === 'group' && selectedGroupId))) {
-            // eslint-disable-next-line react-hooks/set-state-in-effect
-            calculateStats();
-        }
-    }, [calculateStats, scope, selectedGroupId, user]);
+        calculateStats();
+    }, [calculateStats]);
 
     // --- CALCUL DES GAGNANTS ---
     const topValue = useMemo(() => [...stats].sort((a, b) => b.totalValue - a.totalValue)[0], [stats]);
@@ -263,7 +263,7 @@ export default function StatsPage() {
             <div className="flex flex-col md:flex-row justify-between items-end mb-8 border-b border-border pb-4 gap-4">
                 <div>
                     <h1 className="text-3xl font-black text-primary tracking-tight">Panthéon</h1>
-                    <p className="text-muted text-sm">Comparez vos collections et découvrez qui règne sur le multivers.</p>
+                    <p className="text-muted text-sm">Le classement en temps réel de votre communauté.</p>
                 </div>
                 
                 <div className="flex items-center gap-2 bg-surface p-1 rounded-lg border border-border shadow-sm">
@@ -297,13 +297,11 @@ export default function StatsPage() {
                 </div>
             )}
 
-            {/* PROGRESSION */}
+            {/* CHARGEMENT */}
             {loading && (
-                <div className="text-center py-20">
-                    <p className="text-primary font-bold animate-pulse mb-2">Analyse des données... {progress}%</p>
-                    <div className="w-full max-w-md mx-auto bg-secondary rounded-full h-1 overflow-hidden">
-                        <div className="bg-primary h-full transition-all duration-300 ease-out" style={{ width: `${progress}%` }}></div>
-                    </div>
+                <div className="text-center py-20 animate-pulse">
+                    <div className="w-12 h-12 border-4 border-primary/30 border-t-primary rounded-full animate-spin mx-auto mb-4"></div>
+                    <p className="text-muted font-medium">Récupération des scores...</p>
                 </div>
             )}
 
@@ -321,23 +319,23 @@ export default function StatsPage() {
                             valueColor="text-yellow-600 dark:text-yellow-400"
                         />
                         <StatCard 
-                            title="Archiviste Suprême" 
+                            title="Archiviste" 
                             winner={topUnique} 
-                            value={`${topUnique?.uniqueCards} Uniques`} 
+                            value={`${topUnique?.uniqueCards}`} 
                             colorClass="border-blue-500 bg-blue-50 dark:bg-blue-900/10"
                             valueColor="text-blue-600 dark:text-blue-400"
                         />
                         <StatCard 
-                            title="Seigneur des Gobelins" 
+                            title="Seigneur Foil" 
                             winner={topFoil} 
-                            value={`${topFoil?.foilCount} Foils`} 
+                            value={`${topFoil?.foilCount}`} 
                             colorClass="border-purple-500 bg-purple-50 dark:bg-purple-900/10"
                             valueColor="text-purple-600 dark:text-purple-400"
                         />
                         <StatCard 
                             title="La Baleine" 
                             winner={topWhale} 
-                            value={`${topWhale?.avgPrice.toFixed(2)} € / carte`} 
+                            value={`${topWhale?.avgPrice.toFixed(1)} €`} 
                             colorClass="border-green-500 bg-green-50 dark:bg-green-900/10"
                             valueColor="text-green-600 dark:text-green-400"
                         />
@@ -353,12 +351,6 @@ export default function StatsPage() {
                                 <LeaderboardRow key={profile.uid} rank={index + 1} profile={profile} />
                             ))}
                         </div>
-                    </div>
-
-                    <div className="text-center pt-8">
-                        <button onClick={calculateStats} className="text-sm text-muted hover:text-primary underline">
-                            Rafraîchir les données
-                        </button>
                     </div>
                 </div>
             )}

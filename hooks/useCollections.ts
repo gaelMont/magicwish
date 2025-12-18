@@ -1,6 +1,7 @@
 // hooks/useCollections.ts
 import { useState, useEffect } from 'react';
 import { db } from '@/lib/firebase';
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 import { collection, onSnapshot, addDoc, doc, serverTimestamp, setDoc, deleteDoc, updateDoc } from 'firebase/firestore';
 import { useAuth } from '@/lib/AuthContext';
 import toast from 'react-hot-toast';

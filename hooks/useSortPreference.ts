@@ -1,18 +1,33 @@
-// hooks/useSortPreference.ts (Mise à jour essentielle pour corriger les erreurs de type)
+import { useState, useEffect } from 'react';
 
-import { useState, useCallback, useEffect } from 'react';
-
-// Définition complète des options de tri
+// Définition complète et exhaustive des options de tri
 export type SortOption = 
-    | 'date' // Ancienne valeur (gardée pour la compatibilité)
-    | 'quantity' 
-    | 'price_desc' 
-    | 'price_asc'
-    | 'name' // Ancienne valeur (gardée pour la compatibilité)
+    // Options Temporelles
     | 'date_desc' 
     | 'date_asc'
+    | 'date' // Legacy (gardé pour compatibilité avec vos anciennes données)
+
+    // Options Prix
+    | 'price_desc' 
+    | 'price_asc'
+
+    // Options Nom
     | 'name_asc'
-    | 'name_desc';
+    | 'name_desc'
+    | 'name' // Legacy
+
+    // Options Quantité
+    | 'quantity_desc' 
+    | 'quantity_asc'
+    | 'quantity' // Legacy
+
+    // Options Mana (CMC) - NOUVEAU
+    | 'cmc_desc'
+    | 'cmc_asc'
+
+    // Options Édition (Set) - NOUVEAU (C'est ce qui vous manque)
+    | 'set_asc'
+    | 'set_desc';
 
 const useSortPreference = (key: string, defaultValue: SortOption = 'date_desc') => {
     // La valeur par défaut doit être une nouvelle valeur valide
@@ -23,7 +38,8 @@ const useSortPreference = (key: string, defaultValue: SortOption = 'date_desc') 
         try {
             const storedValue = localStorage.getItem(key);
             if (storedValue) {
-                // S'assurer que la valeur stockée est assignable au type SortOption
+                // On pourrait ajouter une validation ici pour vérifier si c'est une option valide
+                // Mais pour l'instant on fait confiance au stockage
                 return storedValue as SortOption; 
             }
             return defaultValue;

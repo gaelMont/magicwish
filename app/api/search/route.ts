@@ -14,7 +14,7 @@ export async function GET(request: Request) {
 
   // --- CORRECTION : Suppression des guillemets pour permettre la recherche partielle ---
   // On utilise encodeURIComponent pour gérer proprement les espaces et caractères spéciaux
-  const scryfallUrl = `https://api.scryfall.com/cards/search?q=${encodeURIComponent(query)}&unique=prints`;
+const scryfallUrl = `https://api.scryfall.com/cards/search?q=${encodeURIComponent(query)}%20game:paper&unique=cards`;
 
   try {
     const scryfallResponse = await fetch(scryfallUrl);

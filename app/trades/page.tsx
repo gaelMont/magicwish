@@ -1,25 +1,28 @@
 // app/trades/page.tsx
 'use client';
 
-import { useState, useTransition, Suspense, useEffect } from 'react';
+import { useState, useTransition, useEffect } from 'react';
 import { useAuth } from '@/lib/AuthContext';
 import { useTradeMatcher, TradeProposal } from '@/hooks/useTradeMatcher';
 import { useTradeSystem, TradeRequest } from '@/hooks/useTradeSystem';
 import Link from 'next/link';
 import Image from 'next/image';
-import { CardType } from '@/hooks/useCardCollection'; 
-import AdContainer from '@/components/AdContainer';
+import { CardType } from '@/hooks/useCardCollection';
 import { ScryfallRawData } from '@/lib/cardUtils';
 import { useSearchParams } from 'next/navigation';
+import MagicCard from '@/components/MagicCard'; 
 
+// --- COMPOSANT LISTE (TEXTE) ---
 const TradeListText = ({ 
     cards, 
     allowPriceEdit = false, 
-    onPriceChange 
+    onPriceChange,
+    onPreview 
 }: { 
     cards: CardType[], 
     allowPriceEdit?: boolean, 
-    onPriceChange?: (id: string, val: number) => void 
+    onPriceChange?: (id: string, val: number) => void,
+    onPreview: (c: CardType) => void
 }) => {
     return (
         <div className="max-h-60 overflow-y-auto custom-scrollbar bg-surface rounded-lg border border-border">
@@ -39,13 +42,17 @@ const TradeListText = ({
                         const price = c.customPrice !== undefined ? c.customPrice : (c.price || 0);
                         const scryData = c.scryfallData as ScryfallRawData | undefined;
                         const collectorNum = scryData?.collector_number || '?';
-
+                        
                         return (
-                            <tr key={`${c.id}-${i}`} className="hover:bg-secondary/50 transition-colors text-foreground select-none">
+                            <tr 
+                                key={`${c.id}-${i}`} 
+                                className="hover:bg-secondary/50 transition-colors text-foreground select-none cursor-pointer"
+                                onClick={() => onPreview(c)}
+                            >
                                 <td className="px-2 py-1.5 text-center font-bold text-muted">
                                     {c.quantity}
                                 </td>
-                                <td className="px-2 py-1.5 font-medium truncate max-w-[140px]" title={c.name}>
+                                <td className="px-2 py-1.5 font-medium truncate max-w-[120px]" title={c.name}>
                                     {c.name}
                                 </td>
                                 <td className="px-2 py-1.5 text-center">
@@ -53,31 +60,24 @@ const TradeListText = ({
                                         {c.setCode?.toUpperCase()}
                                     </span>
                                 </td>
-                                <td className="px-2 py-1.5 text-center text-[10px] text-muted font-mono">
+                                <td className="px-2 py-1.5 text-center text-muted font-mono text-[10px]">
                                     {collectorNum}
                                 </td>
                                 <td className="px-2 py-1.5 text-center">
-                                    {c.isFoil ? (
-                                        <span className="text-[9px] font-bold text-amber-600 bg-amber-100 dark:bg-amber-900/30 dark:text-amber-400 px-1 rounded">
-                                            Foil
-                                        </span>
-                                    ) : <span className="text-muted">-</span>}
+                                    {c.isFoil && <span className="text-[9px] font-bold text-amber-600 bg-amber-50 px-1 rounded">Foil</span>}
                                 </td>
-                                <td className="px-2 py-1.5 text-right">
+                                <td className="px-2 py-1.5 text-right" onClick={e => e.stopPropagation()}>
                                     {allowPriceEdit ? (
-                                        <div className="flex items-center justify-end gap-1">
-                                            <input 
-                                                type="number" min="0" step="0.01" 
-                                                className="w-14 p-1 text-right border border-border rounded bg-background focus:ring-1 focus:ring-primary outline-none text-xs" 
-                                                value={price} 
-                                                onChange={(e) => onPriceChange && onPriceChange(c.id, parseFloat(e.target.value) || 0)} 
-                                            />
-                                            <span className="text-muted">€</span>
-                                        </div>
+                                        <input 
+                                            type="number" 
+                                            min="0" 
+                                            step="0.01" 
+                                            value={price}
+                                            onChange={(e) => onPriceChange?.(c.id, parseFloat(e.target.value) || 0)}
+                                            className="w-14 p-1 text-right bg-background border border-border rounded text-xs outline-none focus:border-primary [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                                        />
                                     ) : (
-                                        <span className={`tabular-nums ${c.customPrice !== undefined ? 'text-orange-600 font-bold' : 'text-muted'}`}>
-                                            {price.toFixed(2)} €
-                                        </span>
+                                        <span className="font-medium">{price.toFixed(2)} €</span>
                                     )}
                                 </td>
                             </tr>
@@ -89,102 +89,18 @@ const TradeListText = ({
     );
 };
 
-const IncomingRequestCard = ({ trade }: { trade: TradeRequest }) => {
-    const { acceptTrade, rejectTrade, isProcessing } = useTradeSystem();
-    const [isOpen, setIsOpen] = useState(false);
-
-    const valReceive = trade.itemsGiven.reduce((acc: number, c: CardType) => acc + (c.customPrice ?? c.price ?? 0) * c.quantity, 0); 
-    const valGive = trade.itemsReceived.reduce((acc: number, c: CardType) => acc + (c.customPrice ?? c.price ?? 0) * c.quantity, 0);
-
-    return (
-        <div className="bg-surface rounded-xl border border-border shadow-sm overflow-hidden mb-4 transition-all hover:shadow-md">
-            <div className="p-4 flex flex-col sm:flex-row justify-between sm:items-center gap-4 bg-secondary/30 select-none">
-                <div>
-                    <h3 className="font-bold text-foreground flex items-center gap-2">
-                        <span className="w-2.5 h-2.5 rounded-full bg-primary animate-pulse"></span>
-                        De {trade.senderName}
-                    </h3>
-                    <p className="text-sm text-muted mt-1">
-                        Vous recevez <strong className="text-success">{trade.itemsGiven.length} cartes</strong> (~{valReceive.toFixed(2)} €) 
-                        contre <strong className="text-danger">{trade.itemsReceived.length} cartes</strong> (~{valGive.toFixed(2)} €)
-                    </p>
-                </div>
-                <div className="flex gap-2 self-end sm:self-auto items-center">
-                    <button onClick={() => setIsOpen(!isOpen)} className="text-sm text-muted underline mr-4 hover:text-foreground transition">
-                        {isOpen ? 'Masquer' : 'Voir le contenu'}
-                    </button>
-                    <button onClick={() => rejectTrade(trade.id)} disabled={isProcessing} className="px-3 py-1.5 bg-secondary hover:bg-danger/10 text-danger rounded-lg text-sm font-bold transition">Refuser</button>
-                    <button onClick={() => acceptTrade(trade)} disabled={isProcessing} className="btn-primary text-sm shadow-sm">Accepter</button>
-                </div>
-            </div>
-            
-            {isOpen && (
-                <div className="p-4 border-t border-border grid md:grid-cols-2 gap-6 animate-in fade-in bg-background/50">
-                    <div>
-                        <p className="text-xs font-bold text-success uppercase mb-2 flex items-center gap-2">Vous recevez</p>
-                        <TradeListText cards={trade.itemsGiven} />
-                    </div>
-                    <div>
-                        <p className="text-xs font-bold text-danger uppercase mb-2 flex items-center gap-2">Vous donnez</p>
-                        <TradeListText cards={trade.itemsReceived} />
-                    </div>
-                </div>
-            )}
-        </div>
-    );
-};
-
-const OutgoingRequestCard = ({ trade }: { trade: TradeRequest }) => {
-    const { cancelTrade } = useTradeSystem();
-    const [isOpen, setIsOpen] = useState(false);
-
-    const valGiven = trade.itemsGiven.reduce((acc: number, c: CardType) => acc + (c.customPrice ?? c.price ?? 0) * c.quantity, 0); 
-    const valReceived = trade.itemsReceived.reduce((acc: number, c: CardType) => acc + (c.customPrice ?? c.price ?? 0) * c.quantity, 0);
-
-    return (
-        <div className="bg-surface rounded-xl border border-border shadow-sm overflow-hidden mb-4">
-            <div className="p-4 flex flex-col sm:flex-row justify-between sm:items-center gap-4 bg-secondary/20 select-none">
-                <div>
-                    <h3 className="font-bold text-muted flex items-center gap-2">
-                        Envoyée à <span className="text-foreground">{trade.receiverName}</span>
-                    </h3>
-                    <p className="text-sm text-muted mt-1">
-                        Vous donnez <strong className="text-danger">{trade.itemsGiven.length} cartes</strong> (~{valGiven.toFixed(2)} €) 
-                        contre <strong className="text-success">{trade.itemsReceived.length} cartes</strong> (~{valReceived.toFixed(2)} €)
-                    </p>
-                </div>
-                <div className="flex gap-2 self-end sm:self-auto items-center">
-                    <button onClick={() => setIsOpen(!isOpen)} className="text-sm text-muted underline mr-4 hover:text-foreground transition">
-                        {isOpen ? 'Masquer' : 'Vérifier contenu'}
-                    </button>
-                    <button 
-                        onClick={() => cancelTrade(trade.id)} 
-                        className="px-3 py-1.5 bg-secondary hover:bg-border text-muted hover:text-danger rounded-lg text-sm font-medium transition"
-                    >
-                        Annuler
-                    </button>
-                </div>
-            </div>
-            
-            {isOpen && (
-                <div className="p-4 border-t border-border grid md:grid-cols-2 gap-6 animate-in fade-in bg-background/50">
-                    <div>
-                        <p className="text-xs font-bold text-danger uppercase mb-2 flex items-center gap-2">Vous donnez</p>
-                        <TradeListText cards={trade.itemsGiven} />
-                    </div>
-                    <div>
-                        <p className="text-xs font-bold text-success uppercase mb-2 flex items-center gap-2">Vous recevez</p>
-                        <TradeListText cards={trade.itemsReceived} />
-                    </div>
-                </div>
-            )}
-        </div>
-    );
-};
-
-const TradeRowProposal = ({ proposal, onProposalSent }: { proposal: TradeProposal, onProposalSent: () => void }) => {
-    const { proposeTrade } = useTradeSystem(); 
-    const [isPending, startTransition] = useTransition(); 
+// --- COMPOSANT PROPOSITION (MOI -> AMI) ---
+const TradeRowProposal = ({ 
+    proposal, 
+    onProposalSent,
+    onPreview
+}: { 
+    proposal: TradeProposal, 
+    onProposalSent: () => void,
+    onPreview: (c: CardType) => void
+}) => {
+    const { proposeTrade } = useTradeSystem();
+    const [isPending, startTransition] = useTransition();
 
     const [localGiven, setLocalGiven] = useState<CardType[]>(proposal.toGive);
     const [localReceived, setLocalReceived] = useState<CardType[]>(proposal.toReceive);
@@ -197,21 +113,21 @@ const TradeRowProposal = ({ proposal, onProposalSent }: { proposal: TradeProposa
     const totalGive = localGiven.reduce((acc, c) => acc + (c.customPrice ?? c.price ?? 0) * c.quantity, 0);
     const totalReceive = localReceived.reduce((acc, c) => acc + (c.customPrice ?? c.price ?? 0) * c.quantity, 0);
     const delta = totalGive - totalReceive;
-    
+
     const handleLocalPriceChange = (id: string, newVal: number, side: 'give' | 'receive') => {
         const updater = side === 'give' ? setLocalGiven : setLocalReceived;
         updater(prev => prev.map(c => c.id === id ? { ...c, customPrice: newVal } : c));
     };
 
-    const handlePropose = () => { 
+    const handlePropose = () => {
         startTransition(async () => {
             const success = await proposeTrade(
                 proposal.friend.uid,
                 proposal.friend.displayName,
                 localGiven, 
-                localReceived 
+                localReceived
             );
-            if (success) onProposalSent(); 
+            if (success) onProposalSent();
         });
     };
 
@@ -219,17 +135,28 @@ const TradeRowProposal = ({ proposal, onProposalSent }: { proposal: TradeProposa
         <div className="bg-surface rounded-2xl shadow-sm border border-border overflow-hidden mb-8 shrink-0">
             <div className="bg-secondary/30 p-4 border-b border-border flex flex-col sm:flex-row justify-between items-center gap-4 select-none">
                 <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-full bg-linear-to-br from-primary to-purple-600 flex items-center justify-center text-white font-bold overflow-hidden shadow-sm">
-                        {proposal.friend.photoURL ? <Image src={proposal.friend.photoURL} alt="" width={40} height={40} className="w-full h-full object-cover"/> : proposal.friend.username[0].toUpperCase()}
+                    <div className="w-10 h-10 rounded-full bg-linear-to-br from-primary to-purple-600 flex items-center justify-center text-white font-bold overflow-hidden shadow-sm relative">
+                        {proposal.friend.photoURL ? (
+                            <Image 
+                                src={proposal.friend.photoURL} 
+                                alt={proposal.friend.displayName} 
+                                fill
+                                className="object-cover"
+                                sizes="40px"
+                            />
+                        ) : (
+                            proposal.friend.username[0].toUpperCase()
+                        )}
                     </div>
                     <div>
                         <h2 className="text-xl font-bold text-foreground">Match avec {proposal.friend.displayName}</h2>
                         <Link href={`/user/${proposal.friend.uid}`} className="text-sm text-primary hover:underline">Voir son profil</Link>
                     </div>
                 </div>
+                
                 <button 
                     onClick={handlePropose} 
-                    disabled={isPending} 
+                    disabled={isPending}
                     className="btn-primary w-full sm:w-auto disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                 >
                     {isPending ? 'Envoi en cours...' : 'Envoyer la proposition'}
@@ -248,6 +175,7 @@ const TradeRowProposal = ({ proposal, onProposalSent }: { proposal: TradeProposa
                         cards={localGiven} 
                         allowPriceEdit={true} 
                         onPriceChange={(id, val) => handleLocalPriceChange(id, val, 'give')} 
+                        onPreview={onPreview}
                     />
                 </div>
 
@@ -260,12 +188,13 @@ const TradeRowProposal = ({ proposal, onProposalSent }: { proposal: TradeProposa
                     </h3>
                     <TradeListText 
                         cards={localReceived} 
-                        allowPriceEdit={true}
-                        onPriceChange={(id, val) => handleLocalPriceChange(id, val, 'receive')}
+                        allowPriceEdit={true} 
+                        onPriceChange={(id, val) => handleLocalPriceChange(id, val, 'receive')} 
+                        onPreview={onPreview}
                     />
                 </div>
             </div>
-            
+
             <div className="p-3 text-center bg-secondary/20 border-t border-border">
                 <span className="text-xs text-muted uppercase font-bold mr-2">Balance estimée :</span>
                 <span className={`font-bold ${delta > 0 ? 'text-success' : 'text-danger'}`}>
@@ -277,87 +206,237 @@ const TradeRowProposal = ({ proposal, onProposalSent }: { proposal: TradeProposa
     );
 };
 
-function TradesPageContent() {
-  const { user } = useAuth();
-  const { proposals, loading, status, runScan } = useTradeMatcher();
-  const { incomingTrades, outgoingTrades } = useTradeSystem(); 
-  
-  const searchParams = useSearchParams();
-  const initialTab = searchParams.get('tab') === 'requests' ? 'requests' : 'scan';
-  const [activeTab, setActiveTab] = useState<'scan' | 'requests'>(initialTab);
+// --- COMPOSANT DEMANDE ENTRANTE (AMI -> MOI) ---
+const IncomingRequestCard = ({ 
+    trade, 
+    onPreview 
+}: { 
+    trade: TradeRequest,
+    onPreview: (c: CardType) => void
+}) => {
+    const { acceptTrade, rejectTrade } = useTradeSystem();
+    const [isOpen, setIsOpen] = useState(false);
+    const [isProcessing, setIsProcessing] = useState(false);
 
-  if (!user) return <div className="p-10 text-center text-muted">Connectez-vous.</div>;
+    const valGive = trade.itemsReceived.reduce((acc, c) => acc + (c.customPrice ?? c.price ?? 0) * c.quantity, 0);
+    const valReceive = trade.itemsGiven.reduce((acc, c) => acc + (c.customPrice ?? c.price ?? 0) * c.quantity, 0);
 
-  return (
-    <div className="container mx-auto p-4 max-w-5xl h-[calc(100vh-64px)] flex flex-col">
-        <div className="flex-none flex flex-col md:flex-row justify-between items-end mb-4 gap-4 border-b border-border pb-4">
-            <div><h1 className="text-3xl font-black text-primary tracking-tight">Centre d&apos;Echanges</h1></div>
-            <div className="flex gap-4">
-                <button onClick={() => setActiveTab('scan')} className={`pb-2 px-2 font-bold transition ${activeTab === 'scan' ? 'text-primary border-b-2 border-primary' : 'text-muted hover:text-foreground'}`}>
-                    Scanner ({proposals.length})
-                </button>
-                <button onClick={() => setActiveTab('requests')} className={`pb-2 px-2 font-bold transition relative ${activeTab === 'requests' ? 'text-primary border-b-2 border-primary' : 'text-muted hover:text-foreground'}`}>
-                    Demandes {incomingTrades.length > 0 && <span className="ml-2 bg-danger text-white text-[10px] px-1.5 rounded-full align-top animate-pulse">{incomingTrades.length}</span>}
-                </button>
-                <Link href="/trades/history" className="pb-2 px-3 font-bold text-muted hover:text-foreground hover:bg-secondary rounded-t-lg transition flex items-center gap-1">
-                    <span className="hidden sm:inline">Historique</span>
-                </Link>
-            </div>
-        </div>
-
-        <div className="grow overflow-y-auto custom-scrollbar pb-10">
-            {activeTab === 'scan' && (
-                <div className="animate-in fade-in">
-                    <div className="flex flex-col sm:flex-row justify-end mb-6 gap-3 sticky top-0 bg-background/80 backdrop-blur-md z-20 py-2">
-                         <Link href="/trades/manual" className="bg-secondary hover:bg-border text-foreground px-4 py-2 rounded-lg font-bold transition text-sm flex items-center justify-center border border-border">Mode Manuel</Link>
-                        <button onClick={runScan} disabled={loading} className="btn-primary w-full sm:w-auto disabled:opacity-50">{loading ? status : "Lancer le Scanner"}</button>
-                    </div>
-                    {loading ? (
-                        <div className="text-center py-20"><div className="inline-block w-8 h-8 border-4 border-primary border-t-transparent rounded-full animate-spin mb-4"></div><p className="text-muted mb-6">{status}</p><AdContainer message="Sponsorisé" adSlotId="1234567890" /></div>
-                    ) : (
-                        <>
-                            {proposals.length === 0 ? (
-                                <div className="space-y-6">
-                                    <div className="text-center py-20 text-muted border-2 border-dashed border-border rounded-xl">
-                                        <p className="text-lg font-medium">Aucun échange trouvé.</p>
-                                        <p className="text-sm">Vérifiez que vous avez des amis et que vos Wishlists sont à jour.</p>
-                                    </div>
-                                </div>
-                            ) : (
-                                <div className="space-y-8">
-                                    {proposals.map((proposal: TradeProposal) => (
-                                        <TradeRowProposal key={proposal.friend.uid} proposal={proposal} onProposalSent={runScan} />
-                                    ))}
-                                </div>
-                            )}
-                        </>
-                    )}
-                </div>
-            )}
-
-            {activeTab === 'requests' && (
-                <div className="animate-in fade-in space-y-8">
-                    <div>
-                        <h2 className="font-bold text-muted uppercase text-xs mb-4 sticky top-0 bg-background py-2 z-10 border-b border-border">A traiter ({incomingTrades.length})</h2>
-                        {incomingTrades.length === 0 && <p className="text-muted italic text-sm p-4 text-center">Aucune demande en attente.</p>}
-                        {incomingTrades.map((trade: TradeRequest) => (<IncomingRequestCard key={trade.id} trade={trade} />))}
-                    </div>
-                    <div>
-                        <h2 className="font-bold text-muted uppercase text-xs mb-4 pt-4 border-t border-border">Envoyées - En attente ({outgoingTrades.length})</h2>
-                        {outgoingTrades.length === 0 && <p className="text-muted italic text-sm p-4 text-center">Aucune proposition en cours.</p>}
-                        {outgoingTrades.map((trade: TradeRequest) => (<OutgoingRequestCard key={trade.id} trade={trade} />))}
-                    </div>
-                </div>
-            )}
-        </div>
-    </div>
-  );
-}
-
-export default function TradesPage() {
     return (
-        <Suspense fallback={<div className="flex h-screen items-center justify-center">Chargement...</div>}>
-            <TradesPageContent />
-        </Suspense>
+        <div className="bg-surface p-4 rounded-xl border border-border shadow-sm animate-in fade-in">
+            <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-3">
+                <div>
+                    <h3 className="font-bold text-foreground">Proposition de {trade.senderName}</h3>
+                    <p className="text-sm text-muted">
+                        Tu reçois <span className="text-success font-bold">{trade.itemsGiven.length} cartes</span> (~{valReceive.toFixed(0)}€) 
+                        contre <span className="text-danger font-bold">{trade.itemsReceived.length} cartes</span> (~{valGive.toFixed(0)}€)
+                    </p>
+                </div>
+                <div className="flex gap-2 self-end sm:self-auto">
+                    <button onClick={() => setIsOpen(!isOpen)} className="text-sm text-muted hover:text-foreground underline mr-2">
+                        {isOpen ? 'Masquer' : 'Détails'}
+                    </button>
+                    <button 
+                        onClick={() => rejectTrade(trade.id)} 
+                        disabled={isProcessing}
+                        className="px-3 py-1.5 bg-secondary hover:bg-danger/20 text-danger rounded-lg text-sm font-medium transition"
+                    >
+                        Refuser
+                    </button>
+                    <button 
+                        onClick={() => { setIsProcessing(true); acceptTrade(trade).finally(() => setIsProcessing(false)); }} 
+                        disabled={isProcessing}
+                        className="px-3 py-1.5 bg-primary hover:bg-primary/90 text-primary-foreground rounded-lg text-sm font-medium transition shadow-sm"
+                    >
+                        {isProcessing ? '...' : 'Accepter'}
+                    </button>
+                </div>
+            </div>
+
+            {isOpen && (
+                <div className="mt-4 pt-4 border-t border-border grid md:grid-cols-2 gap-4">
+                    <div className="bg-success/5 p-3 rounded">
+                        <p className="text-xs font-bold text-success mb-2">Tu vas recevoir :</p>
+                        <div className="flex flex-wrap gap-2">
+                            {trade.itemsGiven.map((c: CardType) => (
+                                <div 
+                                    key={c.id} 
+                                    className="relative group w-12 h-16 bg-black/10 rounded overflow-hidden cursor-pointer hover:scale-105 transition-transform"
+                                    onClick={() => onPreview(c)}
+                                >
+                                    <Image 
+                                        src={c.imageUrl} 
+                                        alt={c.name} 
+                                        fill
+                                        className="object-cover"
+                                        sizes="48px"
+                                    />
+                                    <div className="absolute bottom-0 right-0 bg-black/50 text-white text-[8px] px-1 font-bold">{c.quantity}x</div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+
+                    <div className="bg-danger/5 p-3 rounded">
+                        <p className="text-xs font-bold text-danger mb-2">Tu vas donner :</p>
+                        <div className="flex flex-wrap gap-2">
+                            {trade.itemsReceived.map((c: CardType) => (
+                                <div 
+                                    key={c.id} 
+                                    className="relative group w-12 h-16 bg-black/10 rounded overflow-hidden cursor-pointer hover:scale-105 transition-transform"
+                                    onClick={() => onPreview(c)}
+                                >
+                                    <Image 
+                                        src={c.imageUrl} 
+                                        alt={c.name} 
+                                        fill
+                                        className="object-cover"
+                                        sizes="48px"
+                                    />
+                                    <div className="absolute bottom-0 right-0 bg-black/50 text-white text-[8px] px-1 font-bold">{c.quantity}x</div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+};
+
+// --- COMPOSANT PAGE PRINCIPALE ---
+export default function TradesPageContent() {
+    const { user } = useAuth();
+    const { proposals, loading, status, runScan } = useTradeMatcher();
+    const { incomingTrades, outgoingTrades } = useTradeSystem();
+    const searchParams = useSearchParams();
+    
+    const initialTab = searchParams.get('tab') === 'requests' ? 'requests' : 'scan';
+    const [activeTab, setActiveTab] = useState<'scan' | 'requests'>(initialTab);
+    const [previewCard, setPreviewCard] = useState<CardType | null>(null);
+
+    if (!user) return <div className="p-10 text-center text-muted">Connectez-vous pour voir vos échanges.</div>;
+
+    return (
+        <div className="container mx-auto p-4 max-w-5xl h-[calc(100vh-64px)] flex flex-col">
+            
+            <div className="flex-none mb-6">
+                <h1 className="text-3xl font-bold text-foreground mb-4">Centre d&apos;Échanges</h1>
+                <div className="flex gap-4 border-b border-border">
+                    <button 
+                        onClick={() => setActiveTab('scan')}
+                        className={`pb-3 text-sm font-bold transition-colors border-b-2 ${activeTab === 'scan' ? 'border-primary text-primary' : 'border-transparent text-muted hover:text-foreground'}`}
+                    >
+                        Scanner Intelligent ({proposals.length})
+                    </button>
+                    <button 
+                        onClick={() => setActiveTab('requests')}
+                        className={`pb-3 text-sm font-bold transition-colors border-b-2 ${activeTab === 'requests' ? 'border-primary text-primary' : 'border-transparent text-muted hover:text-foreground'}`}
+                    >
+                        Demandes ({incomingTrades.length + outgoingTrades.length})
+                    </button>
+                    
+                    <Link 
+                        href="/trades/history"
+                        className="pb-3 text-sm font-bold transition-colors border-b-2 border-transparent text-muted hover:text-foreground ml-auto flex items-center gap-1"
+                    >
+                        Historique
+                    </Link>
+                </div>
+            </div>
+
+            <div className="grow overflow-y-auto custom-scrollbar pb-10">
+                
+                {activeTab === 'scan' && (
+                    <div className="animate-in fade-in">
+                        <div className="flex flex-col sm:flex-row justify-end mb-6 gap-3 sticky top-0 bg-background/95 backdrop-blur-sm z-10 py-2 border-b border-border/50">
+                            <Link href="/trades/manual" className="bg-secondary hover:bg-border text-foreground px-4 py-2 rounded-lg font-bold transition text-sm flex items-center justify-center">
+                                Mode Manuel
+                            </Link>
+                            <button 
+                                onClick={runScan} 
+                                disabled={loading}
+                                className="bg-primary hover:bg-primary/90 text-primary-foreground px-4 py-2 rounded-lg font-bold shadow transition text-sm disabled:opacity-50 w-full sm:w-auto"
+                            >
+                                {loading ? status : "Lancer le Scanner"}
+                            </button>
+                        </div>
+
+                        {proposals.length === 0 && !loading && (
+                            <div className="text-center py-20 text-muted border-2 border-dashed border-border rounded-xl">
+                                Lancez le scanner pour trouver des &quot;matchs&quot; avec vos amis.
+                            </div>
+                        )}
+
+                        <div className="space-y-8">
+                            {proposals.map(proposal => (
+                                <TradeRowProposal 
+                                    key={proposal.friend.uid} 
+                                    proposal={proposal} 
+                                    onProposalSent={runScan}
+                                    onPreview={setPreviewCard}
+                                />
+                            ))}
+                        </div>
+                    </div>
+                )}
+
+                {activeTab === 'requests' && (
+                    <div className="animate-in fade-in space-y-8">
+                        <div>
+                            <h2 className="font-bold text-muted uppercase text-xs mb-4 sticky top-0 bg-background py-2 z-10">
+                                À traiter ({incomingTrades.length})
+                            </h2>
+                            {incomingTrades.length === 0 && <p className="text-muted italic text-sm">Aucune demande en attente.</p>}
+                            <div className="space-y-4">
+                                {incomingTrades.map((trade: TradeRequest) => (
+                                    <IncomingRequestCard 
+                                        key={trade.id} 
+                                        trade={trade} 
+                                        onPreview={setPreviewCard}
+                                    />
+                                ))}
+                            </div>
+                        </div>
+
+                        <div>
+                            <h2 className="font-bold text-muted uppercase text-xs mb-4 pt-4 border-t border-border">
+                                En attente de réponse ({outgoingTrades.length})
+                            </h2>
+                            {outgoingTrades.length === 0 && <p className="text-muted italic text-sm">Aucune proposition en cours.</p>}
+                            <div className="space-y-3">
+                                {outgoingTrades.map((trade: TradeRequest) => (
+                                    <div key={trade.id} className="flex justify-between items-center p-3 bg-secondary/30 rounded-lg border border-border">
+                                        <div>
+                                            <span className="font-bold text-foreground">Pour {trade.receiverName}</span>
+                                            <p className="text-xs text-muted">Envoyé le {new Date(trade.createdAt.seconds * 1000).toLocaleDateString()}</p>
+                                        </div>
+                                        <span className="text-xs bg-secondary px-2 py-1 rounded text-muted font-medium">En attente</span>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+                )}
+            </div>
+
+            {previewCard && (
+                <div 
+                    className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in cursor-pointer"
+                    onClick={() => setPreviewCard(null)}
+                >
+                    <div className="relative transform transition-all scale-100 p-4" onClick={e => e.stopPropagation()}>
+                        <button 
+                            onClick={() => setPreviewCard(null)} 
+                            className="absolute -top-2 -right-2 bg-surface text-foreground rounded-full p-2 shadow-lg z-10 border border-border hover:bg-secondary transition-colors"
+                        >
+                            ✕
+                        </button>
+                        <div className="w-[300px] h-[420px] shadow-2xl rounded-xl overflow-hidden pointer-events-none">
+                            <MagicCard {...previewCard} readOnly={true} quantity={previewCard.quantity} />
+                        </div>
+                    </div>
+                </div>
+            )}
+        </div>
     );
 }

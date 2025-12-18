@@ -78,14 +78,29 @@ export default function FriendCollectionDisplay({
             });
         }
 
+        // --- TRI MIS A JOUR ---
         result.sort((a, b) => {
             const priceA = a.customPrice ?? a.price ?? 0;
             const priceB = b.customPrice ?? b.price ?? 0;
+            const cmcA = a.cmc ?? 0;
+            const cmcB = b.cmc ?? 0;
+
             switch (sortBy) {
-                case 'name': return a.name.localeCompare(b.name);
-                case 'price_desc': return priceB - priceA;
+                case 'name_asc': return a.name.localeCompare(b.name);
+                case 'name_desc': return b.name.localeCompare(a.name);
+                
                 case 'price_asc': return priceA - priceB;
-                case 'quantity': return b.quantity - a.quantity;
+                case 'price_desc': return priceB - priceA;
+                
+                case 'quantity_asc': return a.quantity - b.quantity;
+                case 'quantity_desc': return b.quantity - a.quantity;
+                
+                case 'cmc_asc': return cmcA - cmcB;
+                case 'cmc_desc': return cmcB - cmcA;
+
+                case 'set_asc': return (a.setName || '').localeCompare(b.setName || '');
+                case 'set_desc': return (b.setName || '').localeCompare(a.setName || '');
+
                 default: return 0;
             }
         });
@@ -116,7 +131,10 @@ export default function FriendCollectionDisplay({
             {filteredAndSortedCards.length === 0 ? (
                 <div className="text-center py-16 bg-secondary/30 rounded-xl border-dashed border-2 border-border"><p className="text-muted italic">Aucun résultat.</p></div>
             ) : (
-                <div className="grid gap-4 animate-in fade-in" style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}>
+                <div 
+                    className="grid gap-4 animate-in fade-in grid-cols-2 md:grid-cols-[repeat(var(--cols),minmax(0,1fr))]" 
+                    style={{ '--cols': columns } as React.CSSProperties}
+                >
                     {filteredAndSortedCards.map((card) => (
                         <MagicCard key={card.id} {...card} readOnly={true} returnTo={`/user/${targetUid}`} matchStatus={card.isMatch ? 'my_wishlist' : undefined} />
                     ))}

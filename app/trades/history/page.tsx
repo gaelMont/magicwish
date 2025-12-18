@@ -1,4 +1,3 @@
-// app/trades/history/page.tsx
 'use client';
 
 import { useState, useEffect, useMemo } from 'react';
@@ -9,6 +8,7 @@ import { TradeRequest } from '@/hooks/useTradeSystem';
 import Link from 'next/link';
 import { CardType } from '@/hooks/useCardCollection';
 import { ScryfallRawData } from '@/lib/cardUtils';
+import MagicCard from '@/components/MagicCard'; // Pour preview
 
 // --- UTILITAIRES ---
 
@@ -37,10 +37,21 @@ const aggregateCards = (cards: CardType[]) => {
 };
 
 // --- COMPOSANT TABLEAU STRICT (STYLE 001922) ---
-const CompactCardTable = ({ cards, title, colorClass, emptyLabel }: { cards: CardType[], title: string, colorClass: string, emptyLabel: string }) => (
+const CompactCardTable = ({ 
+    cards, 
+    title, 
+    colorClass, 
+    emptyLabel,
+    onPreview // Callback pour preview
+}: { 
+    cards: CardType[], 
+    title: string, 
+    colorClass: string, 
+    emptyLabel: string,
+    onPreview: (c: CardType) => void
+}) => (
     <div className="flex flex-col h-full bg-surface border border-border rounded-lg overflow-hidden shadow-sm">
         <div className={`p-3 border-b border-border ${colorClass} bg-opacity-10 bg-current flex justify-between items-center`}>
-            {/* CORRECTION 1: Force le titre H4 en blanc (text-white) */}
             <h4 className={`text-xs font-bold uppercase text-white`}>{title}</h4>
             <span className="bg-white text-foreground px-2 py-0.5 rounded text-xs font-bold shadow-sm border border-border">
                 {cards.reduce((acc, c) => acc + c.quantity, 0)}
@@ -55,7 +66,6 @@ const CompactCardTable = ({ cards, title, colorClass, emptyLabel }: { cards: Car
             ) : (
                 <div className="overflow-y-auto custom-scrollbar grow">
                     <table className="w-full text-xs text-left border-collapse">
-                        {/* CORRECTION 2: Définit le fond du THEAD en couleur principale (primary) et le texte en blanc (text-white) pour assurer le contraste */}
                         <thead className="bg-primary text-white sticky top-0 z-10 font-semibold uppercase tracking-wider">
                             <tr>
                                 <th className="px-2 py-2 text-center w-8">Qté</th>
@@ -74,7 +84,11 @@ const CompactCardTable = ({ cards, title, colorClass, emptyLabel }: { cards: Car
                                 const collectorNum = scryData?.collector_number || '?';
 
                                 return (
-                                    <tr key={i} className="hover:bg-secondary/50 transition-colors text-foreground select-none">
+                                    <tr 
+                                        key={i} 
+                                        className="hover:bg-secondary/50 transition-colors text-foreground select-none cursor-pointer"
+                                        onClick={() => onPreview(c)} // Déclencheur preview
+                                    >
                                         <td className="px-2 py-1.5 text-center font-bold text-muted">
                                             {c.quantity}
                                         </td>
@@ -118,6 +132,10 @@ const PeriodSummaryModal = ({ isOpen, onClose, trades, currentUid }: { isOpen: b
         return d.toISOString().split('T')[0];
     });
     const [endDate, setEndDate] = useState(() => new Date().toISOString().split('T')[0]);
+
+    // Preview state local à la modale de bilan ? Non, utilisons pas de preview ici pour simplifier, ou alors passons un callback vide
+    // Pour rester simple et efficace : pas de preview dans le bilan global agrégé pour l'instant (car agrégé).
+    const dummyPreview = () => {}; 
 
     const summary = useMemo(() => {
         if (!isOpen) return { given: [], received: [], valGiven: 0, valReceived: 0, count: 0 };
@@ -195,8 +213,8 @@ const PeriodSummaryModal = ({ isOpen, onClose, trades, currentUid }: { isOpen: b
                 </div>
 
                 <div className="grid md:grid-cols-2 gap-6 grow overflow-hidden min-h-0">
-                    <CompactCardTable cards={summary.given} title="Cartes Sorties" colorClass="text-danger" emptyLabel="Aucune sortie." />
-                    <CompactCardTable cards={summary.received} title="Cartes Entrées" colorClass="text-success" emptyLabel="Aucune entrée." />
+                    <CompactCardTable cards={summary.given} title="Cartes Sorties" colorClass="text-danger" emptyLabel="Aucune sortie." onPreview={dummyPreview} />
+                    <CompactCardTable cards={summary.received} title="Cartes Entrées" colorClass="text-success" emptyLabel="Aucune entrée." onPreview={dummyPreview} />
                 </div>
 
                 <div className="mt-4 pt-4 border-t border-border flex justify-between items-center">
@@ -210,7 +228,15 @@ const PeriodSummaryModal = ({ isOpen, onClose, trades, currentUid }: { isOpen: b
     );
 };
 
-const HistoryCard = ({ trade, currentUid }: { trade: TradeRequest, currentUid: string }) => {
+const HistoryCard = ({ 
+    trade, 
+    currentUid,
+    onPreview // Recoit le callback
+}: { 
+    trade: TradeRequest, 
+    currentUid: string,
+    onPreview: (c: CardType) => void
+}) => {
     const [isOpen, setIsOpen] = useState(false);
     
     const isSender = trade.senderUid === currentUid;
@@ -262,8 +288,8 @@ const HistoryCard = ({ trade, currentUid }: { trade: TradeRequest, currentUid: s
 
             {isOpen && (
                 <div className="border-t border-border p-4 bg-background/50 grid md:grid-cols-2 gap-6 animate-in fade-in slide-in-from-top-1">
-                    <CompactCardTable cards={aggregatedGiven} title="Cartes Données" colorClass="text-danger" emptyLabel="-" />
-                    <CompactCardTable cards={aggregatedReceived} title="Cartes Reçues" colorClass="text-success" emptyLabel="-" />
+                    <CompactCardTable cards={aggregatedGiven} title="Cartes Sorties" colorClass="text-danger" emptyLabel="-" onPreview={onPreview} />
+                    <CompactCardTable cards={aggregatedReceived} title="Cartes Entrées" colorClass="text-success" emptyLabel="-" onPreview={onPreview} />
                 </div>
             )}
         </div>
@@ -275,6 +301,9 @@ export default function TradeHistoryPage() {
     const [history, setHistory] = useState<TradeRequest[]>([]);
     const [loading, setLoading] = useState(true);
     const [showSummary, setShowSummary] = useState(false);
+    
+    // Etat Preview
+    const [previewCard, setPreviewCard] = useState<CardType | null>(null);
 
     useEffect(() => {
         if (!user) return;
@@ -359,7 +388,12 @@ export default function TradeHistoryPage() {
             ) : (
                 <div className="space-y-2">
                     {history.map(trade => (
-                        <HistoryCard key={trade.id} trade={trade} currentUid={user.uid} />
+                        <HistoryCard 
+                            key={trade.id} 
+                            trade={trade} 
+                            currentUid={user.uid} 
+                            onPreview={setPreviewCard} 
+                        />
                     ))}
                 </div>
             )}
@@ -370,6 +404,26 @@ export default function TradeHistoryPage() {
                 trades={history} 
                 currentUid={user.uid} 
             />
+
+            {/* MODALE DE PRÉVISUALISATION */}
+            {previewCard && (
+                <div 
+                    className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in cursor-pointer"
+                    onClick={() => setPreviewCard(null)}
+                >
+                    <div className="relative transform transition-all scale-100 p-4" onClick={e => e.stopPropagation()}>
+                        <button 
+                            onClick={() => setPreviewCard(null)} 
+                            className="absolute -top-2 -right-2 bg-surface text-foreground rounded-full p-2 shadow-lg z-10 border border-border hover:bg-secondary transition-colors"
+                        >
+                            ✕
+                        </button>
+                        <div className="w-[300px] h-[420px] shadow-2xl rounded-xl overflow-hidden pointer-events-none">
+                            <MagicCard {...previewCard} readOnly={true} quantity={previewCard.quantity} />
+                        </div>
+                    </div>
+                </div>
+            )}
         </main>
     );
 }

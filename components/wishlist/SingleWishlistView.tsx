@@ -25,7 +25,6 @@ export default function SingleWishlistView({ listId, listName, onRename }: Props
     const [isRenaming, setIsRenaming] = useState(false);
     const [renameValue, setRenameValue] = useState(listName);
 
-    // Initialiser la valeur quand listName change (changement de liste)
     useEffect(() => {
         setRenameValue(listName);
     }, [listName]);
@@ -33,7 +32,7 @@ export default function SingleWishlistView({ listId, listName, onRename }: Props
     // --- ÉTATS DE PRÉFÉRENCE & FILTRE ---
     const { columns, setColumns } = useColumnPreference('mw_cols_wishlist_single', 5);
     const [searchQuery, setSearchQuery] = useState('');
-    const [sortBy, setSortBy] = useState<SortOption>('name');
+    const [sortBy, setSortBy] = useState<SortOption>('name_asc'); // Default strict
     const [filterSet, setFilterSet] = useState<string>('all'); 
     const [filterFoil, setFilterFoil] = useState(false);
     const [minPriceFilter, setMinPriceFilter] = useState<string>('');
@@ -83,15 +82,27 @@ export default function SingleWishlistView({ listId, listName, onRename }: Props
             });
         }
 
-
-        // 5. Tri
+        // --- TRI MIS A JOUR ---
         result.sort((a: CardType, b: CardType) => {
             const priceA = a.price ?? 0;
             const priceB = b.price ?? 0;
+            const cmcA = a.cmc ?? 0;
+            const cmcB = b.cmc ?? 0;
+
             switch (sortBy) {
+                case 'name_asc': return a.name.localeCompare(b.name);
+                case 'name_desc': return b.name.localeCompare(a.name);
                 case 'name': return a.name.localeCompare(b.name);
-                case 'price_desc': return priceB - priceA;
+
                 case 'price_asc': return priceA - priceB;
+                case 'price_desc': return priceB - priceA;
+
+                case 'cmc_asc': return cmcA - cmcB;
+                case 'cmc_desc': return cmcB - cmcA;
+
+                case 'set_asc': return (a.setName || '').localeCompare(b.setName || '');
+                case 'set_desc': return (b.setName || '').localeCompare(a.setName || '');
+
                 default: return 0;
             }
         });
@@ -167,7 +178,7 @@ export default function SingleWishlistView({ listId, listName, onRename }: Props
                 setSortBy={setSortBy}
                 filterSet={filterSet}
                 setFilterSet={setFilterSet}
-                filterTrade={false} // Non applicable à la wishlist
+                filterTrade={false}
                 setFilterTrade={() => {}}
                 filterFoil={filterFoil}
                 setFilterFoil={setFilterFoil}

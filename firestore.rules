@@ -1,139 +1,230 @@
-rules_version = '2';
-service cloud.firestore {
-  match /databases/{database}/documents {
+'use client';
 
-    function isAuthenticated() {
-      return request.auth != null;
-    }
-    
-    function isAdmin() {
-      return isAuthenticated() && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
-    }
+import { useState, useEffect } from 'react';
+import { motion } from 'framer-motion';
+import { Trophy, Search, Users, Star, TrendingUp } from 'lucide-react';
+import { db } from '@/lib/firebase/config';
+import { collection, getDocs, query, where, orderBy, limit, doc, setDoc } from 'firebase/firestore';
+import PantheonRow from '@/components/pantheon/PantheonRow';
+import { useAuth } from '@/context/AuthContext';
+import { Input } from '@/components/ui/input';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { toast } from 'sonner';
 
-    function isOwner(userId) {
-      return isAuthenticated() && request.auth.uid == userId;
-    }
+// Définition stricte du type utilisateur pour éviter 'any'
+interface PantheonUser {
+  id: string;
+  displayName?: string;
+  photoURL?: string;
+  cardCount: number;
+  totalValue?: number;
+  isCollectionPublic: boolean;
+  rank?: number;
+  // Ajoute d'autres propriétés si nécessaire selon ton schéma Firestore
+}
 
-    function isFriend(userId) {
-      return exists(/databases/$(database)/documents/users/$(userId)/friends/$(request.auth.uid));
-    }
+export default function PantheonPage() {
+  const { user } = useAuth();
+  const [users, setUsers] = useState<PantheonUser[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [sortBy, setSortBy] = useState('cards'); // 'cards' | 'value'
 
-    // --- RÈGLES GLOBALES ---
+  useEffect(() => {
+    const fetchUsers = async () => {
+      try {
+        const q = query(
+          collection(db, 'users'),
+          where('cardCount', '>', 0),
+          orderBy('cardCount', 'desc'),
+          limit(50)
+        );
+        
+        const querySnapshot = await getDocs(q);
+        const usersData = querySnapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        })) as PantheonUser[];
 
-    match /admins/{userId} {
-      allow read: if isAuthenticated();
-      allow write: if false; 
-    }
-
-    match /app_feedback/{feedbackId} {
-      allow read, update, delete: if isAdmin();
-      allow create: if isAuthenticated() && request.resource.data.uid == request.auth.uid;
-    }
-
-    match /{path=**}/public_profile/{docId} {
-      allow read: if isAuthenticated();
-    }
-
-    match /usernames/{username} {
-      allow read: if isAuthenticated();
-      allow create: if isAuthenticated() 
-                    && request.resource.data.uid == request.auth.uid
-                    && !exists(/databases/$(database)/documents/usernames/$(username));
-      allow update, delete: if false;
-    }
-
-    match /games/{gameId} {
-        allow read: if isAuthenticated();
-        allow create: if isAuthenticated(); 
-    }
-
-    // --- RÈGLES UTILISATEURS ---
-
-    match /users/{userId} {
-      allow read, write: if isOwner(userId); 
-
-      match /public_profile/info {
-        allow read: if isAuthenticated();
-        allow write: if isOwner(userId);
+        setUsers(usersData);
+      } catch (error) {
+        console.error('Error fetching pantheon:', error);
+        toast.error('Erreur lors du chargement du panthéon');
+      } finally {
+        setLoading(false);
       }
+    };
+
+    fetchUsers();
+  }, []);
+
+  const handleUpdateVisibility = async (userId: string, isPublic: boolean) => {
+    // 1. Sauvegarder l'état précédent pour le rollback en cas d'erreur
+    const previousUsers = [...users];
+
+    // 2. Mise à jour Optimiste : on met à jour l'UI immédiatement
+    setUsers(prevUsers => prevUsers.map(user => 
+      user.id === userId 
+        ? { ...user, isCollectionPublic: isPublic }
+        : user
+    ));
+
+    try {
+      const userRef = doc(db, 'users', userId);
       
-      match /public_profile/stats {
-        allow read: if isAuthenticated();
-        allow write: if isOwner(userId) || isAdmin(); // Autoriser l'écriture par l'admin (serveur)
-      }
+      // 3. Utilisation de setDoc avec merge: true pour éviter l'erreur "No document to update"
+      // Si le document n'existe pas, il sera créé avec ce champ uniquement.
+      // S'il existe, seul le champ isCollectionPublic sera mis à jour.
+      await setDoc(userRef, {
+        isCollectionPublic: isPublic
+      }, { merge: true });
 
-      // Ancienne collection (compatibilité)
-      match /collection/{cardId} {
-        allow read: if isOwner(userId) || isFriend(userId); 
-        allow write: if isOwner(userId);
-      }
-
-      match /wishlist/{cardId} {
-        allow read: if isOwner(userId) || isFriend(userId); 
-        allow write: if isOwner(userId);
-      }
-
-      // --- NOUVELLES RÈGLES POUR LES COLLECTIONS MULTIPLES ---
-      match /collections_meta/{listId} {
-        allow read: if isOwner(userId) || isFriend(userId);
-        allow write: if isOwner(userId);
-      }
+      toast.success(isPublic ? 'Collection rendue publique' : 'Collection rendue privée');
+    } catch (error) {
+      console.error('Error updating visibility:', error);
       
-      match /collections_data/{listId}/cards/{cardId} {
-        allow read: if isOwner(userId) || isFriend(userId);
-        allow write: if isOwner(userId);
-      }
-      // -------------------------------------------------------
-
-      // --- NOUVELLES RÈGLES POUR LES WISHLISTS MULTIPLES ---
-      match /wishlists_meta/{listId} {
-        allow read: if isOwner(userId) || isFriend(userId);
-        allow write: if isOwner(userId);
-      }
-      
-      match /wishlists_data/{listId}/cards/{cardId} {
-        allow read: if isOwner(userId) || isFriend(userId);
-        allow write: if isOwner(userId);
-      }
-      // -----------------------------------------------------
-
-      match /friends/{friendId} {
-        allow read, write: if isOwner(userId);
-        allow delete: if isOwner(userId) || request.auth.uid == friendId;
-      }
-
-      match /friend_requests_received/{senderId} {
-        allow read: if isOwner(userId);
-        allow write: if isAuthenticated() && request.resource.data.uid == request.auth.uid && request.auth.uid == senderId;
-        allow delete: if isOwner(userId) || request.auth.uid == senderId;
-      }
-      
-      match /notifications/{notifId} {
-        allow create, write, delete: if isAdmin(); 
-        allow read: if isOwner(userId); 
-      }
+      // 4. Rollback : on rétablit l'état précédent en cas d'erreur
+      setUsers(previousUsers);
+      toast.error('Impossible de modifier la visibilité');
     }
+  };
 
-    match /trades/{tradeId} {
-      allow read: if isAdmin() || (isAuthenticated() && (resource.data.senderUid == request.auth.uid || resource.data.receiverUid == request.auth.uid));
-      allow create: if isAuthenticated() && request.resource.data.senderUid == request.auth.uid;
-      allow delete: if isAdmin(); 
-      allow update: if isAdmin() 
-        || (
-        isAuthenticated() 
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status'])
-        && (
-          (resource.data.senderUid == request.auth.uid && request.resource.data.status == 'cancelled') ||
-          (resource.data.receiverUid == request.auth.uid && request.resource.data.status == 'rejected')
-        )
-      );
-    }
+  const filteredUsers = users
+    .filter(u => u.displayName?.toLowerCase().includes(searchTerm.toLowerCase()))
+    .sort((a, b) => {
+      if (sortBy === 'value') {
+        return (b.totalValue || 0) - (a.totalValue || 0);
+      }
+      return b.cardCount - a.cardCount;
+    });
 
-    match /groups/{groupId} {
-      allow read: if isAuthenticated() && request.auth.uid in resource.data.members;
-      allow create: if isAuthenticated() && request.resource.data.ownerUid == request.auth.uid;
-      allow update: if false; 
-      allow delete: if isAuthenticated() && resource.data.ownerUid == request.auth.uid;
-    }
+  if (loading) {
+    return (
+      <div className="min-h-screen pt-24 pb-12 flex justify-center items-center">
+        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-primary"></div>
+      </div>
+    );
   }
+
+  return (
+    <div className="min-h-screen pt-24 pb-12 px-4 sm:px-6 lg:px-8 bg-background">
+      <div className="max-w-7xl mx-auto space-y-8">
+        {/* Header */}
+        <div className="text-center space-y-4">
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="flex items-center justify-center gap-3"
+          >
+            <Trophy className="w-10 h-10 text-yellow-500" />
+            <h1 className="text-4xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-yellow-500 to-amber-600">
+              Panthéon des Collectionneurs
+            </h1>
+          </motion.div>
+          <p className="text-muted-foreground max-w-2xl mx-auto">
+            Découvrez les plus grandes collections de la communauté MagicWish.
+            Classement basé sur le nombre de cartes et la rareté.
+          </p>
+        </div>
+
+        {/* Stats Cards */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.1 }}
+            className="bg-card border border-border/50 rounded-xl p-6 shadow-sm"
+          >
+            <div className="flex items-center gap-4">
+              <div className="p-3 bg-primary/10 rounded-lg">
+                <Users className="w-6 h-6 text-primary" />
+              </div>
+              <div>
+                <p className="text-sm text-muted-foreground">Collectionneurs</p>
+                <p className="text-2xl font-bold">{users.length}</p>
+              </div>
+            </div>
+          </motion.div>
+
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.2 }}
+            className="bg-card border border-border/50 rounded-xl p-6 shadow-sm"
+          >
+            <div className="flex items-center gap-4">
+              <div className="p-3 bg-yellow-500/10 rounded-lg">
+                <Star className="w-6 h-6 text-yellow-500" />
+              </div>
+              <div>
+                <p className="text-sm text-muted-foreground">Top Collection</p>
+                <p className="text-2xl font-bold">
+                  {users[0]?.cardCount || 0} cartes
+                </p>
+              </div>
+            </div>
+          </motion.div>
+
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.3 }}
+            className="bg-card border border-border/50 rounded-xl p-6 shadow-sm"
+          >
+            <div className="flex items-center gap-4">
+              <div className="p-3 bg-green-500/10 rounded-lg">
+                <TrendingUp className="w-6 h-6 text-green-500" />
+              </div>
+              <div>
+                <p className="text-sm text-muted-foreground">Valeur Totale</p>
+                <p className="text-2xl font-bold">Soon</p>
+              </div>
+            </div>
+          </motion.div>
+        </div>
+
+        {/* Filters */}
+        <div className="flex flex-col sm:flex-row gap-4 justify-between items-center bg-card p-4 rounded-xl border border-border/50">
+          <div className="relative w-full sm:w-96">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+            <Input
+              placeholder="Rechercher un collectionneur..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="pl-9"
+            />
+          </div>
+          
+          <Select value={sortBy} onValueChange={setSortBy}>
+            <SelectTrigger className="w-full sm:w-[200px]">
+              <SelectValue placeholder="Trier par" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="cards">Nombre de cartes</SelectItem>
+              <SelectItem value="value">Valeur estimée</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+
+        {/* List */}
+        <div className="space-y-4">
+          {filteredUsers.map((pantheonUser, index) => (
+            <PantheonRow
+              key={pantheonUser.id}
+              user={pantheonUser}
+              rank={index + 1}
+              isCurrentUser={user?.uid === pantheonUser.id}
+              onUpdateVisibility={handleUpdateVisibility}
+            />
+          ))}
+          
+          {filteredUsers.length === 0 && (
+            <div className="text-center py-12 text-muted-foreground">
+              Aucun collectionneur trouvé
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
 }

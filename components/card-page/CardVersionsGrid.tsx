@@ -5,6 +5,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { normalizeCardData, ScryfallRawData } from '@/lib/cardUtils';
 import { CardType } from '@/hooks/useCardCollection';
 import toast from 'react-hot-toast';
+import Image from 'next/image'; // 1. IMPORT AJOUTÉ
 
 type Props = {
     oracleId: string;
@@ -73,10 +74,18 @@ export default function CardVersionsGrid({ oracleId, currentCardId, onVersionSel
             {/* GAUCHE : IMAGE */}
             <div className="md:col-span-1 flex flex-col items-center sticky top-24 self-start">
                  <div 
-                    className="w-full max-w-sm aspect-[2.5/3.5] rounded-xl overflow-hidden shadow-2xl ring-4 ring-primary/20 cursor-pointer"
+                    // Ajout de 'relative' ici pour que Image fill fonctionne
+                    className="w-full max-w-sm aspect-[2.5/3.5] rounded-xl overflow-hidden shadow-2xl ring-4 ring-primary/20 cursor-pointer relative"
                     onClick={() => isDoubleSided && setIsFlipped(!isFlipped)}
                 >
-                    <img src={displayImage} alt={cardToDisplay.name} className="w-full h-full object-cover" />
+                    <Image 
+                        src={displayImage} 
+                        alt={cardToDisplay.name} 
+                        fill
+                        className="object-cover"
+                        sizes="(max-width: 768px) 100vw, 400px" // Optimisation responsive
+                        priority // Priorité car c'est l'image principale visible tout de suite
+                    />
                 </div>
                 {isDoubleSided && (
                     <button 
@@ -130,8 +139,15 @@ export default function CardVersionsGrid({ oracleId, currentCardId, onVersionSel
                                             : 'bg-surface border-border hover:bg-primary/5' 
                                 }`}
                             >
-                                <div className="w-12 h-16 rounded overflow-hidden shrink-0">
-                                    <img src={normalized.imageUrl} alt={normalized.setName} className="w-full h-full object-cover" loading="lazy" />
+                                {/* Ajout de 'relative' ici */}
+                                <div className="w-12 h-16 rounded overflow-hidden shrink-0 relative">
+                                    <Image 
+                                        src={normalized.imageUrl} 
+                                        alt={normalized.setName} 
+                                        fill
+                                        className="object-cover"
+                                        sizes="48px" // Petite taille pour les miniatures
+                                    />
                                 </div>
                                 <div className="grow min-w-0">
                                     <p className="font-bold text-foreground truncate flex items-center gap-2">

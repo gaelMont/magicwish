@@ -2,56 +2,93 @@
 'use client';
 
 import { useState } from 'react';
+import Link from 'next/link';
+import Image from 'next/image';
 import { CardType } from '@/hooks/useCardCollection';
-import { ScryfallRawData } from '@/lib/cardUtils';
+import { normalizeCardData, ScryfallRawData } from '@/lib/cardUtils';
 import { useAuth } from '@/lib/AuthContext';
 import { db } from '@/lib/firebase';
 import { doc, updateDoc } from 'firebase/firestore';
 import toast from 'react-hot-toast';
 
-export default function CardMainDetails({ cardData }: { cardData: CardType }) {
+type Props = {
+    card: CardType;
+    showAllVersions: boolean;
+    setShowAllVersions: (val: boolean) => void;
+    backLink: string;
+};
+
+// Interface locale pour typer le champ finishes
+interface ScryfallWithFinishes {
+    finishes?: string[];
+    purchase_uris?: { cardmarket?: string };
+    oracle_id?: string;
+    type_line?: string;
+    oracle_text?: string;
+    flavor_text?: string;
+    collector_number?: string;
+}
+
+export default function CardMainDetails({ 
+    card, 
+    showAllVersions, 
+    setShowAllVersions, 
+    backLink 
+}: Props) {
     const { user } = useAuth();
     
-    // État pour l'édition du prix d'achat
+    // --- ETATS LOCAUX ---
+    const [isFlipped, setIsFlipped] = useState(false);
     const [isEditingPurchase, setIsEditingPurchase] = useState(false);
-    const [purchaseValue, setPurchaseValue] = useState<string>(
-        cardData.purchasePrice?.toString() || ""
-    );
+    const [purchaseValue, setPurchaseValue] = useState<string>(card.purchasePrice?.toString() || "");
     const [isSaving, setIsSaving] = useState(false);
 
-    // Données pour le calcul de plus-value
-    const currentPrice = cardData.price ?? 0;
-    const hasPrice = currentPrice > 0;
+    // --- PREPARATION DONNEES AFFICHAGE ---
+    const rawScryData = card.scryfallData as ScryfallRawData | null;
+    // Conversion sécurisée pour accéder aux champs optionnels
+    const detailedData = rawScryData as unknown as ScryfallWithFinishes | null;
     
-    const purchasePrice = cardData.purchasePrice;
+    const displayData = rawScryData 
+        ? normalizeCardData(rawScryData) 
+        : {
+            name: card.name,
+            imageUrl: card.imageUrl,
+            imageBackUrl: card.imageBackUrl,
+            setName: card.setName,
+            setCode: card.setCode,
+            price: card.customPrice ?? card.price ?? 0,
+            scryfallData: null
+        };
+
+    const displayName = displayData.name;
+    const currentImage = (isFlipped && displayData.imageBackUrl) ? displayData.imageBackUrl : displayData.imageUrl;
+    const isDoubleSided = !!displayData.imageBackUrl;
+    
+    // --- VERIFICATION DES FINITIONS ---
+    const finishes = detailedData?.finishes || [];
+    // Si pas d'info (carte manuelle), on suppose que tout existe par défaut
+    const hasNonFoil = finishes.length === 0 || finishes.includes('nonfoil');
+    const hasFoil = finishes.length === 0 || finishes.includes('foil') || finishes.includes('etched');
+
+    // --- ACCÈS SÉCURISÉ AUX CHAMPS ---
+    const oracleId = detailedData?.oracle_id;
+    const typeLine = detailedData?.type_line;
+    const oracleText = detailedData?.oracle_text;
+    const flavorText = detailedData?.flavor_text;
+    const collectorNumber = detailedData?.collector_number; 
+
+    // --- CALCULS FINANCIERS ---
+    const currentPrice = displayData.price;
+    const purchasePrice = card.purchasePrice;
     let profitLoss = null;
     let profitLossPercent = null;
     
-    if (purchasePrice !== undefined && purchasePrice > 0 && hasPrice) {
+    if (purchasePrice !== undefined && purchasePrice > 0 && currentPrice > 0) {
         profitLoss = currentPrice - purchasePrice;
         profitLossPercent = (profitLoss / purchasePrice) * 100;
     }
 
-    const scryfallRaw = cardData.scryfallData as ScryfallRawData | undefined;
-    const prices = scryfallRaw?.prices;
-
-    // --- LOGIQUE DE LIEN PRÉCIS (CARDMARKET) ---
-    // 1. On récupère le lien 'purchase_uris' qui pointe vers la page produit exacte (Singles/Set/Card)
-    const purchaseUris = (scryfallRaw as unknown as { purchase_uris?: { cardmarket?: string } })?.purchase_uris;
-    
-    // 2. Si pas de lien Scryfall (rare), on construit un lien de recherche
-    const baseCardmarketUrl = purchaseUris?.cardmarket 
-        || `https://www.cardmarket.com/en/Magic/Products/Search?searchString=${encodeURIComponent(cardData.name)}`;
-
-    // 3. Fonction pour ajouter proprement ?isFoil=Y ou &isFoil=Y
-    const getPreciseUrl = (isFoilVersion: boolean) => {
-        // On vérifie si l'URL contient déjà un '?' (ce qui est le cas des liens Scryfall qui ont des UTM)
-        const separator = baseCardmarketUrl.includes('?') ? '&' : '?';
-        const param = isFoilVersion ? 'isFoil=Y' : 'isFoil=N';
-        return `${baseCardmarketUrl}${separator}${param}`;
-    };
-
-    // --- SAUVEGARDE PRIX D'ACHAT ---
+    // --- LOGIQUE SAUVEGARDE PRIX ---
     const handleSavePurchasePrice = async () => {
         if (!user) return;
         const val = parseFloat(purchaseValue);
@@ -59,8 +96,7 @@ export default function CardMainDetails({ cardData }: { cardData: CardType }) {
 
         setIsSaving(true);
         try {
-            const cardRef = doc(db, 'users', user.uid, 'collection', cardData.id);
-            await updateDoc(cardRef, { 
+            await updateDoc(doc(db, 'users', user.uid, 'collection', card.id), { 
                 purchasePrice: finalVal > 0 ? finalVal : 0 
             });
             toast.success("Historique mis à jour !");
@@ -73,167 +109,173 @@ export default function CardMainDetails({ cardData }: { cardData: CardType }) {
         }
     };
 
-    const formatPrice = (val?: string) => {
-        if (!val) return null;
-        const num = parseFloat(val);
-        return num > 0 ? `${num.toFixed(2)} €` : null;
+    // --- LIENS CARDMARKET ---
+    const baseCardmarketUrl = detailedData?.purchase_uris?.cardmarket 
+        || `https://www.cardmarket.com/en/Magic/Products/Search?searchString=${encodeURIComponent(displayName)}`;
+
+    const getPreciseUrl = (isFoilVersion: boolean) => {
+        const separator = baseCardmarketUrl.includes('?') ? '&' : '?';
+        return `${baseCardmarketUrl}${separator}isFoil=${isFoilVersion ? 'Y' : 'N'}`;
     };
 
-    if (!scryfallRaw) return <p className="text-muted">Détails non disponibles.</p>;
-
-    const priceNormal = formatPrice(prices?.eur);
-    const priceFoil = formatPrice(prices?.eur_foil);
-
     return (
-        <div className="space-y-6">
+        <div className="flex flex-col lg:flex-row gap-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
             
-            {/* BLOC 1 : HISTORIQUE (PRIX D'ACHAT) */}
-            <div className="bg-surface p-6 rounded-xl border border-border shadow-sm">
-                <div className="flex justify-between items-center mb-4">
-                    <h2 className="text-lg font-bold text-foreground flex items-center gap-2">
-                        <span className="bg-primary/10 text-primary p-1 rounded">
-                            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                        </span>
-                        Historique d&apos;Acquisition
-                    </h2>
-                    {!isEditingPurchase && (
-                        <button 
-                            onClick={() => {
-                                setPurchaseValue(cardData.purchasePrice?.toString() || "");
-                                setIsEditingPurchase(true);
-                            }}
-                            className="text-xs font-bold text-primary hover:underline"
+            {/* --- COLONNE GAUCHE : VISUEL --- */}
+            <div className="w-full lg:w-1/3 xl:w-1/4 flex flex-col gap-4">
+                <div className="relative aspect-[2.5/3.5] w-full max-w-sm mx-auto bg-secondary rounded-xl shadow-2xl overflow-hidden group">
+                    <Image
+                        src={currentImage}
+                        alt={displayName}
+                        fill
+                        priority
+                        className="object-cover transition-transform duration-700 group-hover:scale-105"
+                        sizes="(max-width: 768px) 100vw, 300px"
+                    />
+                    
+                    {card.isFoil && (
+                        <div className="absolute top-4 right-4 bg-amber-500/90 text-white px-3 py-1 rounded-full text-xs font-bold shadow-lg backdrop-blur-sm border border-amber-400/50 z-10">
+                            FOIL
+                        </div>
+                    )}
+
+                    {isDoubleSided && (
+                        <button
+                            type="button"
+                            onClick={() => setIsFlipped(!isFlipped)}
+                            className="absolute bottom-4 right-4 bg-black/60 text-white p-3 rounded-full hover:bg-black/80 transition backdrop-blur-md border border-white/10 z-20"
+                            title="Retourner la carte"
                         >
-                            {purchasePrice ? "Modifier" : "Ajouter un prix"}
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-6 h-6">
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" />
+                            </svg>
                         </button>
                     )}
                 </div>
+            </div>
 
-                {isEditingPurchase ? (
-                    <div className="flex items-center gap-3 animate-in fade-in">
-                        <div className="relative">
-                            <input 
-                                type="number" 
-                                min="0" 
-                                step="0.01" 
-                                placeholder="0.00"
-                                value={purchaseValue}
-                                onChange={(e) => setPurchaseValue(e.target.value)}
-                                className="w-32 p-2 pl-3 rounded border border-border bg-background font-bold focus:ring-2 focus:ring-primary outline-none"
-                                autoFocus
-                            />
-                            <span className="absolute right-3 top-2 text-muted font-bold">€</span>
+            {/* --- COLONNE DROITE : DETAILS & GESTION --- */}
+            <div className="flex-1 space-y-6">
+                
+                {/* 1. EN-TÊTE */}
+                <div>
+                    <div className="flex justify-between items-start mb-2">
+                        <h2 className="text-3xl md:text-4xl font-black text-foreground leading-tight">{displayName}</h2>
+                        <div className="flex flex-col items-end gap-2 shrink-0">
+                            <Link href={backLink} className="text-sm font-medium text-muted hover:text-primary transition flex items-center gap-1">
+                                ← Retour
+                            </Link>
+                            {oracleId && (
+                                <button 
+                                    type="button"
+                                    onClick={() => setShowAllVersions(!showAllVersions)}
+                                    className="text-primary hover:text-primary/80 font-semibold text-sm underline-offset-4 hover:underline transition-colors"
+                                >
+                                    {showAllVersions ? 'Masquer versions' : 'Autres versions'}
+                                </button>
+                            )}
                         </div>
-                        <button onClick={handleSavePurchasePrice} disabled={isSaving} className="btn-primary py-2 px-4 text-sm">
-                            {isSaving ? '...' : 'OK'}
-                        </button>
-                        <button onClick={() => setIsEditingPurchase(false)} className="text-muted hover:text-foreground text-sm px-2">Annuler</button>
                     </div>
-                ) : (
-                    <div>
-                        {purchasePrice ? (
-                            <div className="flex items-center gap-6">
-                                <div>
-                                    <p className="text-xs text-muted uppercase">Acquis pour</p>
-                                    <p className="text-xl font-bold text-foreground">{purchasePrice.toFixed(2)} €</p>
-                                </div>
-                                {profitLoss !== null && (
-                                    <div className={`px-3 py-1 rounded-lg border ${profitLoss >= 0 ? 'bg-success/10 border-success/20 text-success' : 'bg-danger/10 border-danger/20 text-danger'}`}>
-                                        <p className="text-xs font-bold uppercase">{profitLoss >= 0 ? 'Plus-value' : 'Moins-value'}</p>
-                                        <p className="font-bold">
-                                            {profitLoss >= 0 ? '+' : ''}{profitLoss.toFixed(2)} € 
-                                            <span className="opacity-70 ml-1">
-                                                ({profitLoss >= 0 ? '+' : ''}{profitLossPercent?.toFixed(1)}%)
-                                            </span>
-                                        </p>
-                                    </div>
-                                )}
+                    <div className="flex items-center gap-3 text-lg text-muted-foreground">
+                        <span className="bg-secondary dark:bg-gray-800 px-2 py-1 rounded text-sm font-mono border border-border uppercase">
+                            {displayData.setCode}
+                        </span>
+                        <span>{displayData.setName}</span>
+                        {collectorNumber && <span className="text-sm opacity-60">#{collectorNumber}</span>}
+                    </div>
+                </div>
+
+                {/* 2. BLOC FINANCIER (PRIX & ACHAT) */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {/* Bloc Prix Actuel */}
+                    <div className="bg-surface dark:bg-gray-800 p-5 rounded-xl border border-border dark:border-gray-700 shadow-sm flex flex-col justify-between">
+                        <p className="text-xs font-bold text-muted uppercase tracking-wider mb-2">Valeur Marché</p>
+                        <div className="flex items-baseline gap-2 mb-2">
+                            <span className="text-3xl font-bold text-success">{currentPrice.toFixed(2)} €</span>
+                            {card.isFoil && <span className="text-[10px] font-bold text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/30 px-1.5 py-0.5 rounded border border-amber-100 dark:border-amber-800">FOIL</span>}
+                        </div>
+                        
+                        {/* LIENS CARDMARKET CONDITIONNELS */}
+                        <div className="flex gap-2 mt-auto pt-2">
+                            {hasNonFoil && (
+                                <a href={getPreciseUrl(false)} target="_blank" rel="noreferrer" className="text-xs text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1">
+                                    Acheter Normal ↗
+                                </a>
+                            )}
+                            
+                            {hasNonFoil && hasFoil && (
+                                <div className="w-px bg-border dark:bg-gray-700 h-4"></div>
+                            )}
+                            
+                            {hasFoil && (
+                                <a href={getPreciseUrl(true)} target="_blank" rel="noreferrer" className="text-xs text-amber-600 dark:text-amber-400 hover:underline flex items-center gap-1">
+                                    Acheter Foil ↗
+                                </a>
+                            )}
+                        </div>
+                    </div>
+
+                    {/* Bloc Historique Achat */}
+                    <div className="bg-surface dark:bg-gray-800 p-5 rounded-xl border border-border dark:border-gray-700 shadow-sm">
+                        <div className="flex justify-between items-start mb-2">
+                            <p className="text-xs font-bold text-muted uppercase tracking-wider">Mon Achat</p>
+                            {!isEditingPurchase && (
+                                <button onClick={() => setIsEditingPurchase(true)} className="text-xs font-bold text-primary hover:underline">
+                                    {purchasePrice ? "Modifier" : "Définir"}
+                                </button>
+                            )}
+                        </div>
+
+                        {isEditingPurchase ? (
+                            <div className="flex items-center gap-2 mt-1">
+                                <input 
+                                    type="number" step="0.01" placeholder="0.00" autoFocus
+                                    value={purchaseValue} onChange={(e) => setPurchaseValue(e.target.value)}
+                                    className="w-24 p-1.5 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-gray-900 dark:text-white font-bold text-sm focus:ring-2 focus:ring-primary outline-none"
+                                />
+                                <button onClick={handleSavePurchasePrice} disabled={isSaving} className="bg-primary text-white px-3 py-1.5 rounded text-xs font-bold hover:bg-primary/90">OK</button>
+                                <button onClick={() => setIsEditingPurchase(false)} className="text-muted text-xs hover:text-foreground">X</button>
                             </div>
                         ) : (
-                            <p className="text-muted italic text-sm">Aucune donnée d&apos;achat enregistrée.</p>
+                            <div>
+                                {purchasePrice ? (
+                                    <>
+                                        <p className="text-xl font-bold text-foreground mb-1">{purchasePrice.toFixed(2)} €</p>
+                                        {profitLoss !== null && (
+                                            <p className={`text-xs font-bold ${profitLoss >= 0 ? 'text-success' : 'text-danger'}`}>
+                                                {profitLoss >= 0 ? '+' : ''}{profitLoss.toFixed(2)} € ({profitLoss >= 0 ? '+' : ''}{profitLossPercent?.toFixed(0)}%)
+                                            </p>
+                                        )}
+                                    </>
+                                ) : (
+                                    <p className="text-sm text-muted italic mt-1">Non renseigné</p>
+                                )}
+                            </div>
+                        )}
+                    </div>
+                </div>
+
+                {/* 3. DETAILS TECHNIQUES (Oracle) */}
+                {rawScryData && (
+                    <div className="space-y-4 text-foreground/90 pt-2">
+                        {typeLine && (
+                            <div className="border-l-4 border-primary/50 pl-4 py-1">
+                                <p className="font-bold text-lg text-foreground">{typeLine}</p>
+                            </div>
+                        )}
+                        {oracleText && (
+                            <div className="bg-secondary/30 dark:bg-gray-800/50 p-4 rounded-lg border border-border dark:border-gray-700 font-serif text-sm leading-relaxed whitespace-pre-line text-foreground/90">
+                                {oracleText}
+                            </div>
+                        )}
+                        {flavorText && (
+                            <p className="text-sm italic text-muted-foreground border-l-2 border-border dark:border-gray-700 pl-4">
+                                {flavorText}
+                            </p>
                         )}
                     </div>
                 )}
             </div>
-
-            {/* BLOC 2 : MARCHÉ ET LIENS (FUSIONNÉ ET ALIGNÉ SUR 3 COLONNES) */}
-            <div className="bg-surface rounded-xl border border-border shadow-sm overflow-hidden">
-                <div className="px-6 py-4 border-b border-border bg-secondary/10">
-                    <h2 className="text-lg font-bold text-foreground flex items-center gap-2">
-                        <span className="bg-secondary text-muted p-1 rounded">
-                            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" /></svg>
-                        </span>
-                        Données du Marché (Scryfall)
-                    </h2>
-                </div>
-
-                <div className="divide-y divide-border">
-                    
-                    {/* LIGNE NORMALE (GRILLE 3 COLONNES) */}
-                    <div className="px-6 py-4 grid grid-cols-3 items-center hover:bg-secondary/5 transition-colors">
-                        {/* 1. TYPE */}
-                        <div className="justify-self-start">
-                            <span className="text-sm font-bold text-foreground bg-secondary/50 px-2 py-1 rounded">Normal</span>
-                        </div>
-
-                        {/* 2. PRIX (Centré) */}
-                        <div className={`justify-self-center text-lg font-bold ${priceNormal ? 'text-success' : 'text-muted italic'}`}>
-                            {priceNormal || 'N/A'}
-                        </div>
-                        
-                        {/* 3. LIEN (Aligné Droite avec lien précis isFoil=N) */}
-                        <div className="justify-self-end">
-                            <a 
-                                href={getPreciseUrl(false)} 
-                                target="_blank" 
-                                rel="noopener noreferrer"
-                                className="flex items-center gap-2 text-sm text-blue-600 hover:text-blue-800 hover:bg-blue-50 px-3 py-1.5 rounded-lg transition font-medium border border-transparent hover:border-blue-100"
-                            >
-                                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
-                                </svg>
-                                Acheter Normal
-                            </a>
-                        </div>
-                    </div>
-
-                    {/* LIGNE FOIL (GRILLE 3 COLONNES) */}
-                    <div className="px-6 py-4 grid grid-cols-3 items-center hover:bg-secondary/5 transition-colors">
-                        {/* 1. TYPE */}
-                        <div className="justify-self-start">
-                            <span className="text-sm font-bold text-amber-700 bg-amber-50 px-2 py-1 rounded border border-amber-100">✨ Foil</span>
-                        </div>
-
-                        {/* 2. PRIX (Centré) */}
-                        <div className={`justify-self-center text-lg font-bold ${priceFoil ? 'text-purple-600' : 'text-muted italic'}`}>
-                            {priceFoil || 'N/A'}
-                        </div>
-                        
-                        {/* 3. LIEN (Aligné Droite avec lien précis isFoil=Y) */}
-                        <div className="justify-self-end">
-                            <a 
-                                href={getPreciseUrl(true)} 
-                                target="_blank" 
-                                rel="noopener noreferrer"
-                                className="flex items-center gap-2 text-sm text-amber-700 hover:text-amber-900 hover:bg-amber-50 px-3 py-1.5 rounded-lg transition font-medium border border-transparent hover:border-amber-100"
-                            >
-                                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
-                                </svg>
-                                Acheter Foil
-                            </a>
-                        </div>
-                    </div>
-
-                </div>
-                
-                <div className="px-6 py-2 bg-secondary/10 border-t border-border flex justify-end">
-                    <p className="text-[10px] text-muted italic">
-                        Mise à jour : {cardData.lastPriceUpdate ? new Date(cardData.lastPriceUpdate).toLocaleDateString() : 'Inconnue'}
-                    </p>
-                </div>
-            </div>
-
         </div>
     );
 }

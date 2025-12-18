@@ -17,7 +17,7 @@ const MANA_COLORS = [
 ];
 
 interface CardListFilterBarProps {
-    cards: CardType[];
+    cards: CardType[] | { setName?: string }[]; // Assouplissement pour accepter ScryfallRawData partiellement
     context: 'collection' | 'wishlist' | 'friend-collection' | 'friend-wishlist' | 'wishlist-global' | 'search';
     searchQuery: string;
     setSearchQuery: (val: string) => void;
@@ -34,7 +34,6 @@ interface CardListFilterBarProps {
     maxPriceFilter: string;
     setMaxPriceFilter: (val: string) => void;
     
-    // Nouveaux Props
     filterCMC?: string;
     setFilterCMC?: (val: string) => void;
     filterColors?: string[];
@@ -42,10 +41,14 @@ interface CardListFilterBarProps {
 
     filterMatch?: boolean;
     setFilterMatch?: (val: boolean) => void;
+    
+    // NOUVEAU : Option pour afficher toute la collection (Trade Manual)
+    filterFullCollection?: boolean;
+    setFilterFullCollection?: (val: boolean) => void;
+
     columns: number; 
     setColumns: (val: number) => void;
 
-    // Action de recherche explicite (pour la page Search)
     onSearch?: () => void;
 }
 
@@ -72,33 +75,47 @@ export default function CardListFilterBar({
     setFilterColors,
     filterMatch,
     setFilterMatch,
+    filterFullCollection, // Nouvelle prop
+    setFilterFullCollection, // Nouvelle prop
     columns,
     setColumns,
     onSearch
 }: CardListFilterBarProps) {
     
     const isOwnerCollection = context === 'collection';
-    const isCollection = context === 'collection' || context === 'friend-collection';
     const isFriendView = context.startsWith('friend');
     const isSearchPage = context === 'search';
     
-    const isTradeFilterApplicable = isCollection; 
+    const isTradeFilterApplicable = context === 'collection' || context === 'friend-collection'; 
     const isMatchFilterApplicable = isFriendView && setFilterMatch !== undefined; 
     
+     
     const availableSets: string[] = useMemo(() => {
         if (!cards) return [];
-        const sets = new Set(cards.map((c: CardType) => c.setName).filter((s): s is string => !!s));
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const sets = new Set(cards.map((c: any) => c.setName).filter((s: any): s is string => !!s));
         return Array.from(sets).sort();
     }, [cards]);
     
     const sortOptions: { value: SortOption; label: string; }[] = useMemo(() => {
         const options: { value: SortOption; label: string; }[] = [
-            { value: 'date_desc' as SortOption, label: "Date (Plus Récent)" },
-            { value: 'price_desc' as SortOption, label: "Prix (Haut-Bas)" },
-            { value: 'price_asc' as SortOption, label: "Prix (Bas-Haut)" },
-            { value: 'name_asc' as SortOption, label: "Nom (A-Z)" },
+            { value: 'date_desc', label: "Date (Récent → Ancien)" },
+            { value: 'date_asc', label: "Date (Ancien → Récent)" },
+            { value: 'price_desc', label: "Prix (Décroissant)" },
+            { value: 'price_asc', label: "Prix (Croissant)" },
+            { value: 'name_asc', label: "Nom (A → Z)" },
+            { value: 'name_desc', label: "Nom (Z → A)" },
+            { value: 'cmc_desc', label: "Mana (Élevé → Faible)" },
+            { value: 'cmc_asc', label: "Mana (Faible → Élevé)" },
         ];
-        if (isOwnerCollection) options.push({ value: 'quantity' as SortOption, label: "Qté" });
+
+        if (isOwnerCollection) {
+            options.push(
+                { value: 'quantity_desc', label: "Quantité (Plus → Moins)" },
+                { value: 'quantity_asc', label: "Quantité (Moins → Plus)" }
+            );
+        }
+
         return options;
     }, [isOwnerCollection]);
 
@@ -120,7 +137,7 @@ export default function CardListFilterBar({
     return (
         <div className="bg-surface p-4 rounded-xl border border-border shadow-sm flex flex-col gap-4 mb-6">
             
-            {/* LIGNE 1 : TEXTE / TRI / SETS */}
+            {/* LIGNE 1 : RECHERCHE / TRI / SETS */}
             <div className="flex flex-wrap gap-4 items-end">
                 <div className="grow min-w-[200px] relative">
                     <input 
@@ -144,7 +161,11 @@ export default function CardListFilterBar({
                 
                 <div className="w-full sm:w-auto">
                     <label className="block text-xs font-bold text-muted mb-1 uppercase">Trier</label>
-                    <select value={sortBy} onChange={(e) => setSortBy(e.target.value as SortOption)} className="w-full p-2.5 rounded-lg border border-border bg-background text-foreground text-sm cursor-pointer min-w-[140px]">
+                    <select 
+                        value={sortBy} 
+                        onChange={(e) => setSortBy(e.target.value as SortOption)} 
+                        className="w-full p-2.5 rounded-lg border border-border bg-background text-foreground text-sm cursor-pointer min-w-[140px]"
+                    >
                         {sortOptions.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
                     </select>
                 </div>
@@ -206,23 +227,42 @@ export default function CardListFilterBar({
 
             {/* LIGNE 3 : TOGGLES / SLIDER COLONNES */}
             <div className="flex flex-wrap gap-4 items-center justify-between pt-2 border-t border-border mt-2">
-                <div className="flex items-center gap-4">
+                <div className="flex flex-wrap items-center gap-4">
+                    
+                    {/* NOUVEAU TOGGLE : ACCÉDER À TOUTE LA COLLECTION */}
+                    {setFilterFullCollection && (
+                        <label className="flex items-center gap-2 cursor-pointer select-none border border-primary/30 bg-primary/5 px-3 py-1.5 rounded-lg transition hover:bg-primary/10">
+                            <input 
+                                type="checkbox" 
+                                checked={filterFullCollection || false} 
+                                onChange={(e) => setFilterFullCollection(e.target.checked)} 
+                                className="w-4 h-4 text-primary rounded border-border focus:ring-primary accent-primary" 
+                            />
+                            <span className="text-sm font-bold text-primary">Accéder à toute la collection</span>
+                        </label>
+                    )}
+
                     {isMatchFilterApplicable && setFilterMatch && (
                         <label className="flex items-center gap-2 cursor-pointer select-none">
                             <input type="checkbox" checked={filterMatch || false} onChange={(e) => setFilterMatch(e.target.checked)} className="w-4 h-4 text-success rounded border-border" />
                             <span className="text-sm font-medium text-foreground">Matchs</span>
                         </label>
                     )}
+                    
                     {isTradeFilterApplicable && setFilterTrade && (
                         <label className="flex items-center gap-2 cursor-pointer select-none">
                             <input type="checkbox" checked={filterTrade || false} onChange={(e) => setFilterTrade(e.target.checked)} className="w-4 h-4 text-primary rounded border-border" />
                             <span className="text-sm font-medium text-foreground">Échange</span>
                         </label>
                     )}
-                    <label className="flex items-center gap-2 cursor-pointer select-none">
-                        <input type="checkbox" checked={filterFoil || false} onChange={(e) => setFilterFoil(e.target.checked)} className="w-4 h-4 text-primary rounded border-border" />
-                        <span className="text-sm font-medium text-foreground">Foil</span>
-                    </label>
+                    
+                    {!isSearchPage && (
+                        <label className="flex items-center gap-2 cursor-pointer select-none">
+                            <input type="checkbox" checked={filterFoil || false} onChange={(e) => setFilterFoil(e.target.checked)} className="w-4 h-4 text-primary rounded border-border" />
+                            <span className="text-sm font-medium text-foreground">Foil</span>
+                        </label>
+                    )}
+                    
                 </div>
 
                 <div className="ml-auto">

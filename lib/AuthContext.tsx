@@ -1,4 +1,3 @@
-// lib/AuthContext.tsx
 'use client';
 
 import { createContext, useContext, useEffect, useState, useMemo } from 'react';
@@ -10,9 +9,10 @@ import {
   signInWithEmailAndPassword,
   signOut, 
   User,
-  Unsubscribe
+  Unsubscribe,
+  sendEmailVerification // 1. IMPORT AJOUTÉ
 } from 'firebase/auth';
-import { doc, onSnapshot, collection } from 'firebase/firestore'; 
+import { doc, onSnapshot, collection, getDoc, setDoc, serverTimestamp } from 'firebase/firestore'; 
 import { auth, db } from './firebase'; 
 import toast from 'react-hot-toast';
 
@@ -27,6 +27,9 @@ type AuthContextType = {
   signInWithEmail: (email: string, pass: string) => Promise<boolean>;
   signUpWithEmail: (email: string, pass: string) => Promise<boolean>;
   logOut: () => Promise<void>;
+  // 2. NOUVELLES MÉTHODES AJOUTÉES AU TYPE
+  sendVerificationEmail: () => Promise<boolean>;
+  reloadUser: () => Promise<void>;
 };
 
 const AuthContext = createContext<AuthContextType>({
@@ -39,6 +42,8 @@ const AuthContext = createContext<AuthContextType>({
   signInWithEmail: async () => false,
   signUpWithEmail: async () => false,
   logOut: async () => {},
+  sendVerificationEmail: async () => false,
+  reloadUser: async () => {},
 });
 
 // Helper pour traduire les erreurs Firebase
@@ -69,7 +74,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     let unsubRequests: Unsubscribe | null = null;
     let unsubAdmin: Unsubscribe | null = null;
 
-    const unsubscribeAuth = onAuthStateChanged(auth, (currentUser) => {
+    const unsubscribeAuth = onAuthStateChanged(auth, async (currentUser) => {
       
       // Nettoyage des anciens listeners si l'user change
       if (unsubProfile) { unsubProfile(); unsubProfile = null; }
@@ -79,8 +84,32 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       setUser(currentUser);
 
       if (currentUser) {
+        // --- 0. CRUCIAL : Vérification/Création du Document Racine (Anti-Fantôme) ---
+        // (Code conservé intact pour éviter les bugs)
+        try {
+          const userRootRef = doc(db, 'users', currentUser.uid);
+          const userRootSnap = await getDoc(userRootRef);
+          
+          if (!userRootSnap.exists()) {
+            // Création du document racine s'il n'existe pas
+            await setDoc(userRootRef, {
+              uid: currentUser.uid,
+              email: currentUser.email,
+              displayName: currentUser.displayName,
+              photoURL: currentUser.photoURL,
+              createdAt: serverTimestamp(),
+              lastLogin: serverTimestamp(),
+              // Champs par défaut pour éviter les erreurs ailleurs
+              cardCount: 0,
+              isCollectionPublic: false
+            }, { merge: true });
+            console.log("Document utilisateur racine initialisé.");
+          }
+        } catch (err) {
+          console.error("Erreur lors de l'init user racine:", err);
+        }
+
         // --- 1. Vérification Admin (Via Firestore) ---
-        // On écoute le document dans la collection 'admins' correspondant à l'UID
         const adminRef = doc(db, 'admins', currentUser.uid);
         unsubAdmin = onSnapshot(adminRef, (docSnap) => {
             setIsAdmin(docSnap.exists());
@@ -108,7 +137,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         unsubRequests = onSnapshot(requestsRef, (snap) => {
           setFriendRequestCount(snap.docs.length);
         }, (error) => {
-            console.error("Erreur listener requests:", error);
+          console.error("Erreur listener requests:", error);
         });
 
       } else {
@@ -147,35 +176,47 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   };
 
   const signInWithEmail = async (email: string, pass: string) => {
-      try {
-          await signInWithEmailAndPassword(auth, email, pass);
-          toast.success("Bon retour !");
-          return true;
-      } catch (error: unknown) {
-          console.error(error);
-          let msg = "Erreur connexion";
-          if (error && typeof error === 'object' && 'code' in error) {
-              msg = getErrorMessage((error as { code: string }).code);
-          }
-          toast.error(msg);
-          return false;
-      }
+    try {
+        await signInWithEmailAndPassword(auth, email, pass);
+        toast.success("Bon retour !");
+        return true;
+    } catch (error: unknown) {
+        console.error(error);
+        let msg = "Erreur connexion";
+        if (error && typeof error === 'object' && 'code' in error) {
+            msg = getErrorMessage((error as { code: string }).code);
+        }
+        toast.error(msg);
+        return false;
+    }
   };
 
   const signUpWithEmail = async (email: string, pass: string) => {
-      try {
-          await createUserWithEmailAndPassword(auth, email, pass);
-          toast.success("Compte créé avec succès !");
-          return true;
-      } catch (error: unknown) {
-          console.error(error);
-          let msg = "Erreur inscription";
-          if (error && typeof error === 'object' && 'code' in error) {
-              msg = getErrorMessage((error as { code: string }).code);
-          }
-          toast.error(msg);
-          return false;
-      }
+    try {
+        // 3. MODIFICATION : Récupérer l'objet userCredential
+        const userCred = await createUserWithEmailAndPassword(auth, email, pass);
+        toast.success("Compte créé avec succès !");
+        
+        // 4. MODIFICATION : Envoi automatique de la vérification
+        if (userCred.user) {
+            try {
+                await sendEmailVerification(userCred.user);
+                toast("Un email de vérification a été envoyé.");
+            } catch (err) {
+                console.warn("Erreur envoi email vérif auto", err);
+            }
+        }
+
+        return true;
+    } catch (error: unknown) {
+        console.error(error);
+        let msg = "Erreur inscription";
+        if (error && typeof error === 'object' && 'code' in error) {
+            msg = getErrorMessage((error as { code: string }).code);
+        }
+        toast.error(msg);
+        return false;
+    }
   };
 
   const logOut = async () => {
@@ -188,6 +229,38 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     }
   };
 
+  // --- 5. NOUVELLES FONCTIONS ---
+
+  const sendVerificationEmail = async () => {
+    if (!auth.currentUser) return false;
+    try {
+        await sendEmailVerification(auth.currentUser);
+        toast.success("Email envoyé ! Vérifiez vos spams.");
+        return true;
+    } catch (e) {
+        console.error(e);
+        toast.error("Erreur lors de l'envoi.");
+        return false;
+    }
+  };
+
+  const reloadUser = async () => {
+    if (!auth.currentUser) return;
+    try {
+        await auth.currentUser.reload();
+        // On force la mise à jour de l'état local pour que l'UI réagisse
+        setUser({ ...auth.currentUser });
+        
+        if (auth.currentUser.emailVerified) {
+            toast.success("Compte vérifié !");
+        } else {
+            toast("Email toujours non vérifié.");
+        }
+    } catch (e) {
+        console.error(e);
+    }
+  };
+
   const value = useMemo(() => ({
     user,
     username,
@@ -197,7 +270,10 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     signInWithGoogle,
     signInWithEmail,
     signUpWithEmail,
-    logOut
+    logOut,
+    // Export des nouvelles fonctions
+    sendVerificationEmail,
+    reloadUser
   }), [user, username, loading, friendRequestCount, isAdmin]);
 
   return (

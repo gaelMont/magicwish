@@ -1,9 +1,10 @@
-// app/actions/import.ts
 'use server';
 
 import { getAdminFirestore } from '@/lib/firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
 import { updateUserStats } from '@/app/actions/stats';
+import { validateImport } from '@/lib/importRules';
+import { ScryfallRawData } from '@/lib/cardUtils';
 
 export type ImportItemInput = {
     scryfallId?: string;
@@ -21,24 +22,14 @@ interface ScryfallIdentifier {
     collector_number?: string;
 }
 
-interface ScryfallCardData {
-    id: string;
-    name: string;
-    set: string;
-    set_name: string;
-    collector_number: string;
-    image_uris?: { normal?: string };
-    card_faces?: Array<{
-        name: string;
-        image_uris?: { normal?: string };
-    }>;
-    prices?: { eur?: string; usd?: string };
-    [key: string]: unknown;
-}
-
+// Typage strict de la réponse API en utilisant le type partagé
 interface ScryfallResponse {
-    data: ScryfallCardData[];
-    not_found?: unknown[];
+    data: ScryfallRawData[];
+    not_found?: Array<{
+        set?: string;
+        collector_number?: string;
+        name?: string;
+    }>;
 }
 
 export async function importCardsAction(
@@ -46,29 +37,21 @@ export async function importCardsAction(
     targetCollection: 'collection' | 'wishlist',
     importMode: 'add' | 'sync',
     items: ImportItemInput[],
-    targetListId: string = 'default' // NOUVEAU PARAMÈTRE
-): Promise<{ success: boolean; count: number; error?: string }> {
+    targetListId: string = 'default'
+): Promise<{ success: boolean; count: number; error?: string; report?: { imported: number; errors: Array<{ name: string; reason: string }> } }> {
     
     const db = getAdminFirestore();
     
-    // LOGIQUE DE CHEMIN MISE À JOUR
     let collectionPath = '';
     if (targetCollection === 'collection') {
-        if (targetListId === 'default') {
-            collectionPath = 'collection'; // Ancienne route
-        } else {
-            collectionPath = `collections_data/${targetListId}/cards`; // Nouvelle route sous-collection
-        }
+        collectionPath = targetListId === 'default' ? 'collection' : `collections_data/${targetListId}/cards`;
     } else {
-        if (targetListId === 'default') {
-            collectionPath = 'wishlist';
-        } else {
-            collectionPath = `wishlists_data/${targetListId}/cards`;
-        }
+        collectionPath = targetListId === 'default' ? 'wishlist' : `wishlists_data/${targetListId}/cards`;
     }
 
     try {
         let processedCount = 0;
+        const errors: Array<{ name: string; reason: string }> = [];
         
         const chunks = [];
         for (let i = 0; i < items.length; i += 75) {
@@ -83,7 +66,6 @@ export async function importCardsAction(
             const currentQuantities = new Map<string, number>();
             
             if (importMode === 'sync' && scryfallIdsToCheck.length > 0) {
-                // Lecture sur le bon chemin
                 const reads = scryfallIdsToCheck.map(id => db.doc(`users/${userId}/${collectionPath}/${id}`).get());
                 const snapshots = await Promise.all(reads);
                 
@@ -116,6 +98,15 @@ export async function importCardsAction(
             const scryResult = (await response.json()) as ScryfallResponse;
             const foundCards = scryResult.data || [];
 
+            if (scryResult.not_found) {
+                scryResult.not_found.forEach((nf) => {
+                    errors.push({ 
+                        name: `Set: ${nf.set || '?'}, # ${nf.collector_number || '?'}`, 
+                        reason: "Carte introuvable" 
+                    });
+                });
+            }
+
             for (const scryCard of foundCards) {
                 const originalItem = chunk.find(item => {
                     if (item.scryfallId && item.scryfallId === scryCard.id) return true;
@@ -132,22 +123,27 @@ export async function importCardsAction(
                 });
 
                 if (originalItem) {
-                    // Écriture sur le bon chemin
+                    // --- VALIDATION (Plus de 'as any' ici !) ---
+                    // scryCard est déjà de type ScryfallRawData grâce à l'interface ScryfallResponse
+                    const validation = validateImport(scryCard, originalItem.isFoil);
+                    
+                    if (!validation.isValid) {
+                        errors.push({ 
+                            name: scryCard.name, 
+                            reason: validation.reason || "Version invalide (Foil/Non-Foil)" 
+                        });
+                        continue;
+                    }
+
                     const docRef = db.doc(`users/${userId}/${collectionPath}/${scryCard.id}`);
                     
                     let quantityToAdd = 0;
-
                     if (importMode === 'add') {
                         quantityToAdd = originalItem.quantity;
                     } else {
                         const currentQty = currentQuantities.get(scryCard.id) || 0;
                         const targetQty = originalItem.quantity;
-
-                        if (targetQty > currentQty) {
-                            quantityToAdd = targetQty - currentQty;
-                        } else {
-                            quantityToAdd = 0;
-                        }
+                        quantityToAdd = targetQty > currentQty ? targetQty - currentQty : 0;
                     }
 
                     if (quantityToAdd <= 0) continue;
@@ -160,6 +156,12 @@ export async function importCardsAction(
                     }
                     if (!imageUrl) imageUrl = "https://cards.scryfall.io/large/front/a/6/a6984342-f723-4e80-8e69-902d287a915f.jpg";
 
+                    const priceFoil = parseFloat(scryCard.prices?.eur_foil || "0");
+                    const priceNormal = parseFloat(scryCard.prices?.eur || "0");
+                    const finalPrice = originalItem.isFoil 
+                        ? (priceFoil > 0 ? priceFoil : 0) 
+                        : (priceNormal > 0 ? priceNormal : 0);
+
                     const cardData = {
                         name: scryCard.name,
                         imageUrl,
@@ -167,11 +169,10 @@ export async function importCardsAction(
                         setName: scryCard.set_name,
                         setCode: scryCard.set,
                         scryfallId: scryCard.id,
-                        price: parseFloat(scryCard.prices?.eur || "0"),
+                        price: finalPrice,
                         isFoil: originalItem.isFoil,
                         scryfallData: scryCard,
                         lastPriceUpdate: new Date(),
-                        // Si c'est une wishlist, on associe l'ID de la liste, sinon null
                         wishlistId: targetCollection === 'wishlist' ? targetListId : null,
                         isSpecificVersion: targetCollection === 'wishlist',
                         quantityForTrade: 0
@@ -201,12 +202,18 @@ export async function importCardsAction(
             await batch.commit();
         }
 
-        // Mise à jour des stats globales uniquement si c'est la collection principale
         if (targetCollection === 'collection' && targetListId === 'default' && processedCount > 0) {
             await updateUserStats(userId);
         }
 
-        return { success: true, count: processedCount };
+        return { 
+            success: true, 
+            count: processedCount,
+            report: {
+                imported: processedCount,
+                errors: errors
+            }
+        };
 
     } catch (error: unknown) {
         console.error("Erreur Import Serveur:", error);

@@ -1,13 +1,14 @@
 // components/card-page/DualQuantityManager.tsx
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { db } from '@/lib/firebase';
-import { collection, query, where, getDocs, doc, setDoc, deleteDoc, updateDoc, increment, serverTimestamp } from 'firebase/firestore';
+import { collection, query, where, getDocs, doc, deleteDoc, updateDoc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { CardType } from '@/hooks/useCardCollection';
 import { ScryfallRawData } from '@/lib/cardUtils';
 import { useAuth } from '@/lib/AuthContext';
 import { checkAutoMatch, removeAutoMatchNotification } from '@/app/actions/matching';
+import { useDebouncedUpdate } from '@/hooks/useDebounceUpdate';
 import toast from 'react-hot-toast';
 
 type Props = {
@@ -15,17 +16,48 @@ type Props = {
     onUpdate?: () => void;
 };
 
+// Interface pour l'état local optimiste
+type VariantState = {
+    qty: number;
+    trade: number;
+    docId: string | null;
+    exists: boolean;
+};
+
+// Interface minimale pour une erreur Firestore
+interface FirestoreError {
+    code?: string;
+    message?: string;
+}
+
+// Interface pour typage sécurisé de 'finishes'
+interface ScryfallWithFinishes {
+    finishes?: string[];
+}
+
 export default function DualQuantityManager({ card, onUpdate }: Props) {
     const { user } = useAuth();
     
-    const [foilDoc, setFoilDoc] = useState<CardType | null>(null);
-    const [normalDoc, setNormalDoc] = useState<CardType | null>(null);
+    // --- ÉTATS OPTIMISTES ---
+    const [normalState, setNormalState] = useState<VariantState>({ qty: 0, trade: 0, docId: null, exists: false });
+    const [foilState, setFoilState] = useState<VariantState>({ qty: 0, trade: 0, docId: null, exists: false });
     const [loading, setLoading] = useState(true);
+
+    const cardDataRef = useRef(card);
+    cardDataRef.current = card;
 
     const scryfallData = card.scryfallData as ScryfallRawData | undefined;
     const scryfallId = scryfallData?.id || card.id; 
 
-    // 1. Charger les variantes
+    // --- VERIFICATION DES FINITIONS ---
+    const detailedData = scryfallData as unknown as ScryfallWithFinishes | undefined;
+    const finishes = detailedData?.finishes || [];
+    
+    // Si la liste est vide, on affiche tout par précaution
+    const hasNonFoil = finishes.length === 0 || finishes.includes('nonfoil');
+    const hasFoil = finishes.length === 0 || finishes.includes('foil') || finishes.includes('etched');
+
+    // 1. CHARGEMENT INITIAL
     useEffect(() => {
         const fetchVariants = async () => {
             if (!user || !scryfallId) return;
@@ -38,18 +70,26 @@ export default function DualQuantityManager({ card, onUpdate }: Props) {
                 
                 const snap = await getDocs(q);
                 
-                let foundNormal: CardType | null = null;
-                let foundFoil: CardType | null = null;
+                const newNormal: VariantState = { qty: 0, trade: 0, docId: null, exists: false };
+                const newFoil: VariantState = { qty: 0, trade: 0, docId: null, exists: false };
 
                 snap.forEach(d => {
                     const data = d.data() as CardType;
-                    const item = { ...data, id: d.id };
-                    if (item.isFoil) foundFoil = item;
-                    else foundNormal = item;
+                    if (data.isFoil) {
+                        newFoil.qty = data.quantity;
+                        newFoil.trade = data.quantityForTrade || 0;
+                        newFoil.docId = d.id;
+                        newFoil.exists = true;
+                    } else {
+                        newNormal.qty = data.quantity;
+                        newNormal.trade = data.quantityForTrade || 0;
+                        newNormal.docId = d.id;
+                        newNormal.exists = true;
+                    }
                 });
 
-                setNormalDoc(foundNormal);
-                setFoilDoc(foundFoil);
+                setNormalState(newNormal);
+                setFoilState(newFoil);
 
             } catch (e) {
                 console.error("Erreur chargement variantes", e);
@@ -59,212 +99,205 @@ export default function DualQuantityManager({ card, onUpdate }: Props) {
         };
 
         fetchVariants();
-    }, [user, scryfallId, card]); 
+    }, [user, scryfallId]); 
 
-    // 2. Mise à jour Quantité Totale
-    const updateVariantQuantity = async (isTargetFoil: boolean, delta: number) => {
+    // 2. FONCTION D'ÉCRITURE EN BASE (Debounced)
+    const performDatabaseUpdate = async (isFoil: boolean, finalQty: number, finalTrade: number, currentDocId: string | null) => {
         if (!user) return;
 
-        const targetDoc = isTargetFoil ? foilDoc : normalDoc;
-        const currentQty = targetDoc?.quantity || 0;
-        const newQty = currentQty + delta;
-
-        if (newQty < 0) return;
-
         try {
-            // Suppression
-            if (newQty === 0 && targetDoc) {
-                if (confirm(`Retirer la version ${isTargetFoil ? 'Foil' : 'Normal'} de la collection ?`)) {
-                    await deleteDoc(doc(db, 'users', user.uid, 'collection', targetDoc.id));
-                    removeAutoMatchNotification(user.uid, [targetDoc.id]);
-                    
-                    if (isTargetFoil) setFoilDoc(null);
-                    else setNormalDoc(null);
-                    toast.success("Version retirée");
+            // CAS A : SUPPRESSION
+            if (finalQty <= 0) {
+                if (currentDocId) {
+                    await deleteDoc(doc(db, 'users', user.uid, 'collection', currentDocId));
+                    removeAutoMatchNotification(user.uid, [currentDocId]);
+                    if (onUpdate) onUpdate();
                 }
                 return;
             }
 
-            // Mise à jour
-            if (targetDoc) {
-                const currentTrade = targetDoc.quantityForTrade || 0;
-                const newTrade = Math.min(currentTrade, newQty);
+            // CAS B : MISE À JOUR
+            if (currentDocId) {
+                try {
+                    await updateDoc(doc(db, 'users', user.uid, 'collection', currentDocId), {
+                        quantity: finalQty,
+                        quantityForTrade: finalTrade,
+                        isForTrade: finalTrade > 0,
+                        lastPriceUpdate: new Date().toISOString()
+                    });
+                } catch (err: unknown) {
+                    const firestoreError = err as FirestoreError;
+                    if (firestoreError.code === 'not-found') {
+                        console.warn("Tentative de mise à jour sur un document supprimé (ignoré).");
+                        return;
+                    }
+                    throw err; 
+                }
                 
-                await updateDoc(doc(db, 'users', user.uid, 'collection', targetDoc.id), {
-                    quantity: increment(delta),
-                    quantityForTrade: newTrade,
-                    isForTrade: newTrade > 0
-                });
-                
-                const updated = { ...targetDoc, quantity: newQty, quantityForTrade: newTrade, isForTrade: newTrade > 0 };
-                if (isTargetFoil) setFoilDoc(updated);
-                else setNormalDoc(updated);
-            
-            // Création
-            } else if (newQty > 0) {
-                const newId = `${scryfallId}_${isTargetFoil ? 'foil' : 'normal'}`;
+                if (finalTrade > 0) {
+                    checkAutoMatch(user.uid, [{ id: currentDocId, name: cardDataRef.current.name, isFoil }]);
+                }
+            } 
+            // CAS C : CRÉATION
+            else {
+                const newId = `${scryfallId}_${isFoil ? 'foil' : 'normal'}`;
                 const newDocRef = doc(db, 'users', user.uid, 'collection', newId);
                 
-                let initialPrice = card.price || 0;
-                if (scryfallData && scryfallData.prices) {
-                    const priceNormal = parseFloat(scryfallData.prices.eur || "0");
-                    const priceFoil = parseFloat(scryfallData.prices.eur_foil || "0");
-
-                    if (isTargetFoil) {
-                        initialPrice = priceFoil > 0 ? priceFoil : (priceNormal > 0 ? priceNormal : initialPrice);
-                    } else {
-                        initialPrice = priceNormal > 0 ? priceNormal : (priceFoil > 0 ? priceFoil : initialPrice);
-                    }
+                let initialPrice = cardDataRef.current.price || 0;
+                const sData = cardDataRef.current.scryfallData as ScryfallRawData;
+                if (sData && sData.prices) {
+                    const pNormal = parseFloat(sData.prices.eur || "0");
+                    const pFoil = parseFloat(sData.prices.eur_foil || "0");
+                    if (isFoil) initialPrice = pFoil > 0 ? pFoil : (pNormal > 0 ? pNormal : initialPrice);
+                    else initialPrice = pNormal > 0 ? pNormal : (pFoil > 0 ? pFoil : initialPrice);
                 }
 
                 const newCardData = {
-                    name: card.name,
-                    imageUrl: card.imageUrl,
-                    imageBackUrl: card.imageBackUrl || null,
-                    setName: card.setName,
-                    setCode: card.setCode,
-                    
-                    price: initialPrice, 
-                    
-                    purchasePrice: card.purchasePrice ?? null, 
-                    customPrice: card.customPrice ?? null,
+                    ...cardDataRef.current,
                     id: newId,
-                    quantity: newQty,
-                    quantityForTrade: 0,
-                    isForTrade: false,
-                    isFoil: isTargetFoil,
-                    isSpecificVersion: card.isSpecificVersion || false,
+                    price: initialPrice,
+                    quantity: finalQty,
+                    quantityForTrade: finalTrade,
+                    isForTrade: finalTrade > 0,
+                    isFoil: isFoil,
                     addedAt: serverTimestamp(),
-                    scryfallData: scryfallData ? { ...scryfallData, id: scryfallId } : null,
+                    scryfallData: sData ? { ...sData, id: scryfallId } : null,
                     wishlistId: null
                 };
 
-                await setDoc(newDocRef, newCardData);
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                const optimisticData = newCardData as any;
+                // Nettoyage
+                Object.keys(newCardData).forEach(key => 
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    (newCardData as any)[key] === undefined && delete (newCardData as any)[key]
+                );
 
-                if (isTargetFoil) setFoilDoc(optimisticData);
-                else setNormalDoc(optimisticData);
+                await setDoc(newDocRef, newCardData);
+                toast.success(`Version ${isFoil ? 'Foil' : 'Normal'} créée !`);
                 
-                toast.success(`Version ${isTargetFoil ? 'Foil' : 'Normal'} ajoutée !`);
+                if (isFoil) setFoilState(prev => ({ ...prev, docId: newId, exists: true }));
+                else setNormalState(prev => ({ ...prev, docId: newId, exists: true }));
             }
 
             if (onUpdate) onUpdate();
 
         } catch (e) {
-            console.error("Erreur update quantité", e);
-            toast.error("Erreur sauvegarde");
+            console.error("Erreur sauvegarde DB", e);
         }
     };
 
-    // 3. Mise à jour Quantité Trade
-    const updateTradeQuantity = async (isTargetFoil: boolean, delta: number) => {
-        if (!user) return;
-        const targetDoc = isTargetFoil ? foilDoc : normalDoc;
-        if (!targetDoc) return;
+    const debouncedUpdateNormal = useDebouncedUpdate(performDatabaseUpdate, 600);
+    const debouncedUpdateFoil = useDebouncedUpdate(performDatabaseUpdate, 600);
 
-        const maxQty = targetDoc.quantity;
-        const currentTrade = targetDoc.quantityForTrade || 0;
-        const newTrade = Math.min(maxQty, Math.max(0, currentTrade + delta));
+    // 3. HANDLERS
+    const handleUpdate = (isFoil: boolean, type: 'qty' | 'trade', delta: number) => {
+        const currentState = isFoil ? foilState : normalState;
+        const setState = isFoil ? setFoilState : setNormalState;
+        const debouncer = isFoil ? debouncedUpdateFoil : debouncedUpdateNormal;
 
-        if (newTrade === currentTrade) return;
+        let newQty = currentState.qty;
+        let newTrade = currentState.trade;
 
-        try {
-            await updateDoc(doc(db, 'users', user.uid, 'collection', targetDoc.id), {
-                quantityForTrade: newTrade,
-                isForTrade: newTrade > 0
-            });
+        if (type === 'qty') {
+            newQty += delta;
+            if (newQty < 0) return;
 
-            const updated = { ...targetDoc, quantityForTrade: newTrade, isForTrade: newTrade > 0 };
-            if (isTargetFoil) setFoilDoc(updated);
-            else setNormalDoc(updated);
-
-            if (newTrade > 0 && newTrade > currentTrade) {
-                checkAutoMatch(user.uid, [{ id: targetDoc.id, name: targetDoc.name, isFoil: isTargetFoil }]);
-            } else if (newTrade === 0 && currentTrade > 0) {
-                removeAutoMatchNotification(user.uid, [targetDoc.id]);
+            if (newQty === 0 && currentState.exists) {
+                if (confirm(`Retirer la version ${isFoil ? 'Foil' : 'Normal'} ?`)) {
+                    setState({ ...currentState, qty: 0, trade: 0, exists: false });
+                    performDatabaseUpdate(isFoil, 0, 0, currentState.docId);
+                }
+                return;
             }
+            
+            if (newTrade > newQty) newTrade = newQty;
+        } 
+        else if (type === 'trade') {
+            newTrade += delta;
+            if (newTrade < 0 || newTrade > newQty) return;
+        }
 
-        } catch (e) {
-            console.error("Erreur update trade", e);
-            toast.error("Erreur sauvegarde trade");
+        setState({ ...currentState, qty: newQty, trade: newTrade });
+
+        if (newQty > 0) {
+            debouncer(isFoil, newQty, newTrade, currentState.docId);
         }
     };
 
-    if (loading) return <div className="p-4 text-center text-muted text-xs">Chargement des variantes...</div>;
+    if (loading) return <div className="p-4 text-center text-muted text-xs">Chargement...</div>;
 
-    const normalQty = normalDoc?.quantity || 0;
-    // CORRECTION CRITIQUE : Clamp visuel pour que Trade ne dépasse jamais la Quantité
-    const normalTrade = Math.min(normalDoc?.quantityForTrade || 0, normalQty);
-    
-    const foilQty = foilDoc?.quantity || 0;
-    // CORRECTION CRITIQUE : Clamp visuel pour le Foil aussi
-    const foilTrade = Math.min(foilDoc?.quantityForTrade || 0, foilQty);
-
-    const renderVariantBlock = (title: string, isFoil: boolean, total: number, trade: number) => {
-        const isOwned = total > 0;
-        const currentDoc = isFoil ? foilDoc : normalDoc;
-        const displayPrice = currentDoc?.price || 0;
+    // --- RENDU UI ---
+    const renderVariantBlock = (title: string, isFoil: boolean, state: VariantState) => {
+        const isOwned = state.qty > 0;
         
+        const containerClass = `rounded-xl border overflow-hidden flex flex-col h-full transition-all duration-200 
+            ${isOwned 
+                ? (isFoil ? 'bg-surface border-primary/30 ring-1 ring-primary/20' : 'bg-surface border-border shadow-sm') 
+                : 'bg-secondary/30 border-border opacity-70 hover:opacity-100'}`;
+
+        const headerClass = `px-4 py-3 border-b flex justify-between items-center 
+            ${isOwned ? 'bg-secondary/20' : 'bg-transparent'} border-border`;
+
         return (
-            <div className={`rounded-xl border overflow-hidden flex flex-col h-full transition-all duration-200 ${isOwned ? (isFoil ? 'bg-amber-50 border-amber-200' : 'bg-white border-border shadow-sm') : 'bg-secondary/20 border-border opacity-70 hover:opacity-100'}`}>
+            <div className={containerClass}>
                 
-                <div className={`px-4 py-3 border-b flex justify-between items-center ${isFoil ? 'bg-amber-100/50 border-amber-200' : 'bg-secondary/30 border-border'}`}>
-                    <span className={`font-bold text-sm flex items-center gap-2 ${isFoil ? 'text-amber-700' : 'text-foreground'}`}>
+                <div className={headerClass}>
+                    <span className={`font-bold text-sm flex items-center gap-2 ${isFoil ? 'text-primary' : 'text-foreground'}`}>
                         {isFoil && <span>✨</span>}
                         {title}
                     </span>
                     {isOwned ? (
-                        <span className="text-[10px] font-bold text-muted bg-background/50 px-2 py-0.5 rounded border border-border/50">
-                            {displayPrice > 0 ? `${displayPrice.toFixed(2)} €` : 'N/A'}
+                        <span className="text-[10px] font-bold text-muted bg-background px-2 py-0.5 rounded border border-border">
+                            {state.exists ? 'En stock' : 'Ajout...'}
                         </span>
                     ) : (
-                        <span className="text-[10px] uppercase font-bold text-muted bg-background/50 px-2 py-0.5 rounded">Absent</span>
+                        <span className="text-[10px] uppercase font-bold text-muted bg-background px-2 py-0.5 rounded border border-border">Absent</span>
                     )}
                 </div>
 
                 <div className="p-4 space-y-4 grow flex flex-col justify-center">
                     
+                    {/* Collection */}
                     <div className="flex items-center justify-between">
                         <span className="text-xs font-bold text-muted uppercase tracking-wide">Collection</span>
                         <div className="flex items-center bg-background rounded-lg border border-border shadow-sm h-9">
                             <button 
-                                onClick={() => updateVariantQuantity(isFoil, -1)} 
-                                className="w-9 h-full flex items-center justify-center hover:bg-secondary text-muted hover:text-danger font-bold transition rounded-l-lg"
+                                onClick={() => handleUpdate(isFoil, 'qty', -1)} 
+                                className="w-9 h-full flex items-center justify-center hover:bg-secondary text-muted hover:text-danger font-bold transition rounded-l-lg border-r border-border"
                             >
                                 -
                             </button>
-                            <span className="font-bold text-lg w-8 text-center tabular-nums text-foreground">{total}</span>
+                            <span className="font-bold text-lg w-10 text-center tabular-nums text-foreground">{state.qty}</span>
                             <button 
-                                onClick={() => updateVariantQuantity(isFoil, 1)} 
-                                className="w-9 h-full flex items-center justify-center hover:bg-primary text-primary font-bold transition rounded-r-lg"
+                                onClick={() => handleUpdate(isFoil, 'qty', 1)} 
+                                className="w-9 h-full flex items-center justify-center hover:bg-primary/10 text-primary font-bold transition rounded-r-lg border-l border-border"
                             >
                                 +
                             </button>
                         </div>
                     </div>
 
-                    {isOwned && <div className="h-px bg-border/50 w-full"></div>}
+                    {isOwned && <div className="h-px bg-border w-full"></div>}
 
+                    {/* Echange */}
                     <div className={`flex items-center justify-between transition-opacity duration-200 ${!isOwned ? 'opacity-40 pointer-events-none' : 'opacity-100'}`}>
                         <div className="flex flex-col">
-                            <span className="text-xs font-bold text-green-700 uppercase tracking-wide">À l&apos;échange</span>
-                            <span className="text-[10px] text-green-600/70">Disponible pour les amis</span>
+                            <span className="text-xs font-bold text-success uppercase tracking-wide">À l&apos;échange</span>
+                            <span className="text-[10px] text-muted">Disponible</span>
                         </div>
                         
-                        <div className="flex items-center bg-green-50 border border-green-200 rounded-lg shadow-sm h-9">
+                        <div className="flex items-center bg-success/5 border border-success/20 rounded-lg shadow-sm h-9">
                             <button 
-                                onClick={() => updateTradeQuantity(isFoil, -1)} 
-                                disabled={trade <= 0}
-                                className="w-9 h-full flex items-center justify-center hover:bg-green-100 text-green-700 font-bold transition rounded-l-lg disabled:opacity-30 disabled:hover:bg-transparent"
+                                onClick={() => handleUpdate(isFoil, 'trade', -1)} 
+                                disabled={state.trade <= 0}
+                                className="w-9 h-full flex items-center justify-center hover:bg-success/20 text-success font-bold transition rounded-l-lg disabled:opacity-30 border-r border-success/20"
                             >
                                 -
                             </button>
-                            <span className={`font-bold text-lg w-8 text-center tabular-nums ${trade > 0 ? 'text-green-700' : 'text-green-700/50'}`}>{trade}</span>
+                            <span className={`font-bold text-lg w-10 text-center tabular-nums ${state.trade > 0 ? 'text-success' : 'text-muted'}`}>{state.trade}</span>
                             <button 
-                                onClick={() => updateTradeQuantity(isFoil, 1)} 
-                                disabled={trade >= total}
-                                className="w-9 h-full flex items-center justify-center hover:bg-green-100 text-green-700 font-bold transition rounded-r-lg disabled:opacity-30 disabled:hover:bg-transparent"
+                                onClick={() => handleUpdate(isFoil, 'trade', 1)} 
+                                disabled={state.trade >= state.qty}
+                                className="w-9 h-full flex items-center justify-center hover:bg-success/20 text-success font-bold transition rounded-r-lg disabled:opacity-30 border-l border-success/20"
                             >
                                 +
                             </button>
@@ -286,12 +319,13 @@ export default function DualQuantityManager({ card, onUpdate }: Props) {
             </h2>
             
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {renderVariantBlock("Version Normale", false, normalQty, normalTrade)}
-                {renderVariantBlock("Version Foil", true, foilQty, foilTrade)}
+                {/* Condition d'affichage basée sur l'existence des finitions */}
+                {hasNonFoil && renderVariantBlock("Version Normale", false, normalState)}
+                {hasFoil && renderVariantBlock("Version Foil", true, foilState)}
             </div>
             
             <p className="text-[11px] text-muted text-center pt-2 italic">
-                Ajustez les quantités &quot;À l&apos;échange&quot; pour que vos amis puissent vous proposer des deals automatiquement.
+                Ajustez les quantités pour que vos amis puissent vous proposer des deals automatiquement.
             </p>
         </div>
     );

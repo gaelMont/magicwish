@@ -7,9 +7,8 @@ import { WishlistMeta } from '@/hooks/useWishlists';
 import { SortOption } from '@/hooks/useSortPreference'; 
 import MagicCard from '@/components/MagicCard';
 import { useCardCollection } from '@/hooks/useCardCollection';
-import CardListFilterBar from '@/components/common/CardListFilterBar'; // RÉUTILISABLE
+import CardListFilterBar from '@/components/common/CardListFilterBar';
 
-// NOUVELLE INTERFACE POUR GÉRER LA PROPRIÉTÉ DYNAMIQUE 'isMatch'
 interface CardWithMatchStatus extends CardType {
     isMatch?: boolean;
 }
@@ -29,7 +28,6 @@ const getMatchStatus = (card: CardType, myTradeBinderMap: Map<string, CardType>)
     return false;
 };
 
-
 export default function FriendWishlistDisplay({
     targetUid,
     wishlistsMeta,
@@ -41,7 +39,7 @@ export default function FriendWishlistDisplay({
     
     // --- ÉTATS DE FILTRE ET TRI ---
     const [searchQuery, setSearchQuery] = useState('');
-    const [sortBy, setSortBy] = useState<SortOption>('name');
+    const [sortBy, setSortBy] = useState<SortOption>('name_asc');
     const [filterSet, setFilterSet] = useState<string>('all');
     const [filterFoil, setFilterFoil] = useState(false);
     const [filterMatch, setFilterMatch] = useState(false);
@@ -71,22 +69,18 @@ export default function FriendWishlistDisplay({
             result = result.filter((c: CardWithMatchStatus) => c.name.toLowerCase().includes(lowerQ));
         }
         
-        // ADD SET FILTER
         if (filterSet !== 'all') {
             result = result.filter((c: CardWithMatchStatus) => c.setName === filterSet);
         }
 
-        // 2. Filtrage Foil
         if (filterFoil) {
             result = result.filter((c: CardWithMatchStatus) => c.isFoil);
         }
 
-        // 3. Filtre Match
         if (filterMatch) {
             result = result.filter((c: CardWithMatchStatus) => c.isMatch);
         }
         
-        // 4. Filtrage Prix
         if (!isNaN(minPrice) || !isNaN(maxPrice)) {
             result = result.filter((c: CardWithMatchStatus) => {
                 const cardPrice = c.price ?? 0;
@@ -96,15 +90,26 @@ export default function FriendWishlistDisplay({
             });
         }
 
-
-        // 5. Tri
+        // --- TRI MIS A JOUR ---
         result.sort((a: CardWithMatchStatus, b: CardWithMatchStatus) => {
             const priceA = a.price ?? 0;
             const priceB = b.price ?? 0;
+            const cmcA = a.cmc ?? 0;
+            const cmcB = b.cmc ?? 0;
+
             switch (sortBy) {
-                case 'name': return a.name.localeCompare(b.name);
-                case 'price_desc': return priceB - priceA;
+                case 'name_asc': return a.name.localeCompare(b.name);
+                case 'name_desc': return b.name.localeCompare(a.name);
+                
                 case 'price_asc': return priceA - priceB;
+                case 'price_desc': return priceB - priceA;
+                
+                case 'cmc_asc': return cmcA - cmcB;
+                case 'cmc_desc': return cmcB - cmcA;
+
+                case 'set_asc': return (a.setName || '').localeCompare(b.setName || '');
+                case 'set_desc': return (b.setName || '').localeCompare(a.setName || '');
+
                 default: return 0;
             }
         });
@@ -112,18 +117,12 @@ export default function FriendWishlistDisplay({
         return result;
     }, [cards, searchQuery, sortBy, filterSet, filterFoil, filterMatch, myTradeBinderMap, minPriceFilter, maxPriceFilter]);
 
-    const availableSets: string[] = useMemo(() => {
-        if (!cards) return [];
-        const sets = new Set(cards.map((c: CardType) => c.setName).filter((s): s is string => !!s));
-        return Array.from(sets).sort();
-    }, [cards]);
-
     return (
         <div className="space-y-6">
             
             <div className="bg-surface p-4 rounded-xl border border-border shadow-sm flex flex-col gap-4">
                 
-                {/* LIGNE SELECTION + TOTAL (Déplacée du bas) */}
+                {/* LIGNE SELECTION + TOTAL */}
                 <div className="flex flex-wrap gap-4 items-center border-b border-border/50 pb-3">
                      <div className="min-w-[200px] grow">
                         <label className="block text-xs font-bold text-muted mb-1 uppercase">Liste de Souhaits</label>
@@ -177,11 +176,10 @@ export default function FriendWishlistDisplay({
                     <p className="text-muted italic">La liste &apos;{currentListName}&apos; est vide ou ne correspond pas aux filtres.</p>
                 </div>
             ) : (
+                // GRID FIXE
                 <div 
-                    className="grid gap-4 animate-in fade-in slide-in-from-bottom-4 duration-500"
-                    style={{ 
-                        gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` 
-                    }}
+                    className="grid gap-4 animate-in fade-in slide-in-from-bottom-4 duration-500 grid-cols-2 md:grid-cols-[repeat(var(--cols),minmax(0,1fr))]"
+                    style={{ '--cols': columns } as React.CSSProperties}
                 >
                     {filteredAndSortedCards.map((card: CardWithMatchStatus) => (
                         <MagicCard 

@@ -1,64 +1,94 @@
-// Fichier : components/AdContainer.tsx
 'use client';
-import { usePremium } from '@/hooks/usePremium';
-import Link from 'next/link';
-import { useEffect } from 'react'; // <-- Correctement importé
 
-// Type pour les paramètres passés aux endroits où la pub s'affiche
-type Props = {
-    message?: string;
-    adSlotId?: string; 
-};
+import React, { useEffect } from 'react';
+import { useAuth } from '@/lib/AuthContext';
 
-export default function AdContainer({ message = "Publicité", adSlotId = "YOUR_ADSENSE_SLOT_ID" }: Props) {
-  const { isPremium, loading } = usePremium();
+/**
+ * 1. Définition de l'objet qu'on pousse dans le tableau.
+ * Record<string, unknown> remplace 'any' pour un objet générique.
+ */
+type AdSenseItem = Record<string, unknown>;
 
-  // Déclencher le rafraîchissement AdSense après le rendu
-  useEffect(() => {
+/**
+ * 2. CORRECTION : On utilise 'type' au lieu d'une interface vide qui étend Array.
+ * Cela résout l'erreur "An interface declaring no members is equivalent to its supertype".
+ */
+type AdSenseArray = AdSenseItem[];
 
-    const win = window as typeof window & { adsbygoogle?: unknown[] };
+/**
+ * 3. Extension de l'objet Window pour inclure AdSense.
+ */
+interface AdSenseWindow extends Window {
+    adsbygoogle?: AdSenseArray;
+}
 
-    if (!isPremium && win.adsbygoogle && Array.isArray(win.adsbygoogle)) {
-      try {
-        win.adsbygoogle.push({}); 
-      } catch (e) {
-        console.warn("Erreur chargement AdSense", e);
-      }
-    }
-  }, [isPremium, adSlotId]);
+/**
+ * 4. Extension locale du type User pour inclure isPremium.
+ * Cela permet de typer le cast proprement.
+ */
+interface UserWithPremium {
+    isPremium?: boolean;
+}
 
+interface AdContainerProps {
+    slot: string;
+    format?: 'auto' | 'fluid' | 'rectangle';
+    style?: React.CSSProperties;
+    isLoading?: boolean;
+}
 
-  // Conditionnel : ne pas charger si Premium, si en chargement, ou si l'ID n'est pas fourni
-  if (loading || isPremium || !process.env.NEXT_PUBLIC_ADSENSE_PUB_ID) return null;
+export default function AdContainer({ slot, format = 'auto', style, isLoading }: AdContainerProps) {
+    const { user } = useAuth();
 
-  return (
-    <div className="w-full my-6 animate-in fade-in slide-in-from-bottom-4 duration-700">
-        <div className="bg-surface border-2 border-dashed border-primary/30 rounded-xl p-4 flex flex-col items-center justify-center text-center relative overflow-hidden group">
-            
-            <div className="relative z-10 w-full">
-                <p className="text-xs font-bold text-muted uppercase tracking-widest mb-2">{message}</p>
+    // On utilise un cast sécurisé (via unknown) vers notre type étendu localement
+    const isPremium = (user as unknown as UserWithPremium)?.isPremium ?? false;
+
+    useEffect(() => {
+        if (!isPremium) {
+            try {
+                // On caste window proprement
+                const adsWindow = window as unknown as AdSenseWindow;
                 
-                {/* BLOC DE CODE ADSENSE */}
-                <div className="w-full flex justify-center min-h-[100px] mb-2">
-                  <ins 
-                    className="adsbygoogle"
-                    style={{ display: 'block', width: '100%', minHeight: '100px' }}
-                    data-ad-client={process.env.NEXT_PUBLIC_ADSENSE_PUB_ID}
-                    data-ad-slot={adSlotId}
-                    data-ad-format="auto"
-                    data-full-width-responsive="true"
-                  ></ins>
-                </div>
-                {/* FIN DU BLOC ADSENSE */}
+                // Si le tableau n'existe pas, on le crée
+                if (!adsWindow.adsbygoogle) {
+                    adsWindow.adsbygoogle = [];
+                }
 
-                <Link 
-                    href="/premium" 
-                    className="inline-block bg-primary hover:opacity-90 text-primary-foreground px-6 py-2 rounded-full text-xs font-bold shadow-md transition transform active:scale-95"
-                >
-                    Retirer les pubs (1€/mois)
-                </Link>
-            </div>
+                // On pousse l'objet vide {}.
+                adsWindow.adsbygoogle.push({});
+            } catch (err) {
+                if (err instanceof Error) {
+                    console.error('AdSense error:', err.message);
+                }
+            }
+        }
+    }, [isPremium, slot]);
+
+    if (isPremium) {
+        return null;
+    }
+
+    return (
+        <div 
+            className={`my-4 flex flex-col items-center w-full overflow-hidden ${
+                isLoading 
+                ? 'p-4 bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-sm' 
+                : ''
+            }`}
+        >
+            {isLoading && (
+                <p className="text-xs text-muted-foreground mb-3 italic">
+                    Traitement en cours... Merci de patienter durant cette courte publicité.
+                </p>
+            )}
+            <ins
+                className="adsbygoogle"
+                style={style || { display: 'block' }}
+                data-ad-client="ca-pub-5492732016245735"
+                data-ad-slot={slot}
+                data-ad-format={format}
+                data-full-width-responsive="true"
+            />
         </div>
-    </div>
-  );
+    );
 }

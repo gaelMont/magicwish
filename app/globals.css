@@ -1,62 +1,8 @@
 @import "tailwindcss";
 
-:root {
-  /* --- PALETTE DE BASE (Mode Clair) --- */
-  
-  /* Fond principal de la page */
-  --background: #f4f6fc; 
-  /* Texte principal */
-  --foreground: #27272a; /* Zinc-800 */
-
-  /* Surfaces (Cartes, Header, Modales) */
-  --surface: #ffffff;
-  --surface-foreground: #27272a;
-
-  /* Bordures */
-  --border: #e4e4e7; /* Zinc-200 */
-
-  /* COULEUR PRIMAIRE (Ton Bleu #6275b3) */
-  --primary: #6275b3;
-  --primary-foreground: #ffffff;
-
-  /* COULEUR SECONDAIRE (Pour les accents doux) */
-  --secondary: #eef2ff; /* Indigo-50 modifié */
-  --secondary-foreground: #6275b3;
-
-  /* ÉLÉMENTS D'ÉTAT */
-  --muted: #a1a1aa; /* Zinc-400 */
-  --danger: #ef4444; /* Red-500 */
-  --success: #10b981; /* Emerald-500 */
-  
-  /* NOUVEAU: Vert Vif personnalisé */
-  --success-vif: #48c99f;
-}
-
-.dark {
-  /* --- PALETTE MODE SOMBRE --- */
-  --background: #09090b; /* Zinc-950 */
-  --foreground: #f4f4f5; /* Zinc-100 */
-
-  --surface: #18181b; /* Zinc-900 */
-  --surface-foreground: #f4f4f5;
-
-  --border: #27272a; /* Zinc-800 */
-
-  /* On garde le même bleu ou on l'éclaircit légèrement pour le contraste sombre */
-  --primary: #7a8bc9; 
-  --primary-foreground: #ffffff;
-
-  --secondary: #1e1b4b; /* Indigo-950 */
-  --secondary-foreground: #a5b4fc;
-  
-  /* NOUVEAU: Vert Vif personnalisé (Assombrissement pour le thème sombre si nécessaire) */
-  --success-vif: #37a380; /* Un peu plus sombre que #48c99f pour le contraste */
-}
-
-/* --- CONFIGURATION TAILWIND --- */
-@theme inline {
-  /* On mappe les variables CSS aux classes Tailwind */
-  
+/* --- CONFIGURATION DU THÈME (Mapping v4) --- */
+@theme {
+  /* On mappe les classes Tailwind (ex: bg-primary) vers les variables CSS */
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   
@@ -75,22 +21,67 @@
   --color-danger: var(--danger);
   --color-success: var(--success);
   
-  /* NOUVEAU MAPPING: bg-success-vif */
   --color-success-vif: var(--success-vif);
 
+  /* Fonts */
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
 
+/* --- DÉFINITION DES VALEURS (CSS Natif) --- */
+:root {
+  /* Mode Clair */
+  --background: #f4f6fc; 
+  --foreground: #27272a; 
+
+  --surface: #ffffff;
+  --surface-foreground: #27272a;
+
+  --border: #e4e4e7; 
+
+  --primary: #6275b3;
+  --primary-foreground: #ffffff;
+
+  --secondary: #eef2ff; 
+  --secondary-foreground: #6275b3;
+
+  --muted: #a1a1aa; 
+  --danger: #ef4444; 
+  --success: #10b981; 
+  
+  --success-vif: #48c99f;
+}
+
+/* Mode Sombre (Tailwind v4 détecte automatiquement la classe .dark si présente) */
+.dark {
+  --background: #09090b; 
+  --foreground: #f4f4f5; 
+
+  --surface: #18181b; 
+  --surface-foreground: #f4f4f5;
+
+  --border: #27272a; 
+
+  --primary: #7a8bc9; 
+  --primary-foreground: #ffffff;
+
+  --secondary: #1e1b4b; 
+  --secondary-foreground: #a5b4fc;
+  
+  --success-vif: #37a380; 
+}
+
+/* --- STYLES GLOBAUX --- */
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-sans), Arial, Helvetica, sans-serif;
   -webkit-font-smoothing: antialiased;
 }
 
+/* --- COMPOSANTS --- */
+/* En v4, @layer components fonctionne toujours */
 @layer components {
-  /* Bouton standard utilisant la variable Primary */
   .btn-primary {
     @apply bg-primary text-primary-foreground font-bold py-2 px-4 rounded-lg shadow-sm transition-transform active:scale-95 hover:opacity-90;
   }

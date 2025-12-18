@@ -6,9 +6,8 @@ import { getAdminFirestore } from '@/lib/firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
 
 export async function POST(req: Request) {
-  // CORRECTION : Initialisation Lazy (au moment de la requête)
   const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-    apiVersion: '2025-11-17.clover',
+    apiVersion: '2025-11-17.clover', 
   });
 
   const body = await req.text();
@@ -23,10 +22,10 @@ export async function POST(req: Request) {
         signature, 
         process.env.STRIPE_WEBHOOK_SECRET!
     );
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  } catch (error: any) {
-    console.error("Webhook signature failed", error.message);
-    return new NextResponse(`Webhook Error: ${error.message}`, { status: 400 });
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error ? error.message : "Unknown error";
+    console.error("Webhook signature failed", errorMessage);
+    return new NextResponse(`Webhook Error: ${errorMessage}`, { status: 400 });
   }
 
   const db = getAdminFirestore();

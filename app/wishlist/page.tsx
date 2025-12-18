@@ -32,6 +32,7 @@ function WishlistContent() {
 
   const { 
       cards, loading, updateQuantity, removeCard, toggleAttribute, 
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
       bulkRemoveCards, bulkUpdateAttribute, totalPrice 
   } = useCardCollection('wishlist', selectedListId);
 
@@ -121,6 +122,7 @@ function WishlistContent() {
     if (visibleCount !== ITEMS_PER_PAGE) {
       setVisibleCount(ITEMS_PER_PAGE);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchQuery, sortBy, filterSet, filterFoil, minPriceFilter, maxPriceFilter, filterCMC, filterColors, selectedListId]);
 
   const filteredAndSortedCards = useMemo(() => {
@@ -161,20 +163,44 @@ function WishlistContent() {
         });
     }
 
+    // --- TRI MIS A JOUR ---
     result.sort((a, b) => {
         const priceA = a.price ?? 0;
         const priceB = b.price ?? 0;
-        const dateA = a.lastPriceUpdate?.getTime() || 0;
-        const dateB = b.lastPriceUpdate?.getTime() || 0;
+        const dateA = a.lastPriceUpdate ? new Date(a.lastPriceUpdate).getTime() : 0;
+        const dateB = b.lastPriceUpdate ? new Date(b.lastPriceUpdate).getTime() : 0;
+        const cmcA = a.cmc ?? 0;
+        const cmcB = b.cmc ?? 0;
         
         switch (sortBy) {
+            // NOM
             case 'name_asc': return a.name.localeCompare(b.name);
             case 'name_desc': return b.name.localeCompare(a.name);
-            case 'price_desc': return priceB - priceA;
+            case 'name': return a.name.localeCompare(b.name); // Legacy
+
+            // PRIX
             case 'price_asc': return priceA - priceB;
-            case 'quantity': return b.quantity - a.quantity;
+            case 'price_desc': return priceB - priceA;
+
+            // DATE
             case 'date_asc': return dateA - dateB;
-            case 'date_desc': default: return dateB - dateA;
+            case 'date_desc': return dateB - dateA;
+            case 'date': return dateB - dateA; // Legacy
+
+            // QUANTITÉ
+            case 'quantity_asc': return a.quantity - b.quantity;
+            case 'quantity_desc': return b.quantity - a.quantity;
+            case 'quantity': return b.quantity - a.quantity; // Legacy
+
+            // CMC (MANA)
+            case 'cmc_asc': return cmcA - cmcB;
+            case 'cmc_desc': return cmcB - cmcA;
+
+            // SET (ÉDITION)
+            case 'set_asc': return (a.setName || '').localeCompare(b.setName || '');
+            case 'set_desc': return (b.setName || '').localeCompare(a.setName || '');
+
+            default: return 0;
         }
     });
 
