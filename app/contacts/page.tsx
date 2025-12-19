@@ -7,7 +7,9 @@ import Image from 'next/image';
 import { useAuth } from '@/lib/AuthContext';
 import { useFriends, FriendProfile } from '@/hooks/useFriends';
 import toast from 'react-hot-toast';
-import { Search, UserPlus, Eye, X, UserMinus, Check } from 'lucide-react';
+import { Search, UserPlus, Eye, X, UserMinus, Check, MessageSquare } from 'lucide-react';
+import { getOrCreateDirectChat } from '@/app/actions/chat';
+import ChatWindow from '@/components/chat/ChatWindow';
 
 const PLANESWALKERS = ["Jace", "Liliana", "Chandra", "Ajani", "Garruk", "Teferi", "Nissa", "Gideon"];
 
@@ -22,6 +24,9 @@ export default function ContactsPage() {
   const [searchResults, setSearchResults] = useState<FriendProfile[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [randomPlaceholder, setRandomPlaceholder] = useState("Chercher...");
+  
+  // État pour le chat actif
+  const [activeChat, setActiveChat] = useState<{ chatId: string; recipientName: string } | null>(null);
 
   useEffect(() => {
     const randomName = PLANESWALKERS[Math.floor(Math.random() * PLANESWALKERS.length)];
@@ -38,8 +43,26 @@ export default function ContactsPage() {
       const results = await searchUsers(searchQuery);
       setSearchResults(results);
       if (results.length === 0) toast("Aucun utilisateur trouvé");
-    } catch (err) { console.error(err); toast.error("Erreur recherche"); }
-    finally { setIsSearching(false); }
+    } catch (err) { 
+      console.error(err); 
+      toast.error("Erreur recherche"); 
+    } finally { 
+      setIsSearching(false); 
+    }
+  };
+
+  const handleOpenChat = async (friendUid: string, friendName: string) => {
+    try {
+      const res = await getOrCreateDirectChat(user.uid, friendUid);
+      if (res.success && res.chatId) {
+        setActiveChat({ chatId: res.chatId, recipientName: friendName });
+      } else {
+        toast.error("Impossible d'ouvrir la discussion");
+      }
+    } catch (err) {
+      console.error(err);
+      toast.error("Erreur lors de l'ouverture du chat");
+    }
   };
 
   return (
@@ -83,74 +106,99 @@ export default function ContactsPage() {
           </div>
         </div>
 
-        {/* LISTE D'AMIS */}
-        <div className="bg-surface p-5 rounded-2xl shadow-sm border border-border">
-          <h2 className="font-black text-[10px] uppercase tracking-[0.2em] mb-6 text-muted">Mes Amis ({friends.length})</h2>
-
-          {/* Demandes reçues */}
-          {requestsReceived.length > 0 && (
-            <div className="mb-8 space-y-2">
-              <p className="text-[9px] font-black text-orange-500 uppercase tracking-widest mb-2">Demandes en attente</p>
-              {requestsReceived.map(req => (
-                <div key={req.uid} className="flex items-center justify-between p-3 bg-orange-50/50 dark:bg-orange-950/10 border border-orange-200 dark:border-orange-900/30 rounded-xl">
-                  <p className="font-bold text-xs truncate grow mr-2">@{req.username}</p>
-                  <div className="flex gap-1 shrink-0">
-                    <button onClick={() => acceptRequest(req)} className="w-8 h-8 bg-success text-white rounded-lg flex items-center justify-center"><Check className="w-4 h-4" /></button>
-                    <button onClick={() => declineRequest(req.uid)} className="w-8 h-8 bg-danger text-white rounded-lg flex items-center justify-center"><X className="w-4 h-4" /></button>
-                  </div>
-                </div>
-              ))}
+        {/* LISTE D'AMIS & CHAT */}
+        <div className="space-y-6">
+          {/* Fenêtre de Chat active */}
+          {activeChat && (
+            <div className="animate-in slide-in-from-top duration-300">
+              <div className="flex justify-end mb-2">
+                <button 
+                  onClick={() => setActiveChat(null)}
+                  className="text-[10px] font-black uppercase text-muted hover:text-foreground flex items-center gap-1"
+                >
+                  <X className="w-3 h-3" /> Fermer le chat
+                </button>
+              </div>
+              <ChatWindow chatId={activeChat.chatId} recipientName={activeChat.recipientName} />
             </div>
           )}
 
-          {/* Liste principale */}
-          <div className="grid gap-3">
-            {loading ? (
-              <p className="text-muted text-[10px] font-bold uppercase p-4 text-center animate-pulse tracking-widest">Chargement...</p>
-            ) : friends.length === 0 ? (
-              <p className="text-muted italic text-[10px] p-8 text-center bg-background rounded-xl border border-dashed border-border uppercase">Aucun ami.</p>
-            ) : (
-              friends.map(friend => (
-                <div key={friend.uid} className="flex flex-col p-4 bg-background rounded-2xl border border-border hover:border-primary/40 transition-all gap-4 shadow-xs">
-                  
-                  {/* Ligne 1 : Profil et Suppression Rapide */}
-                  <div className="flex items-center justify-between min-w-0">
-                    <div className="flex items-center gap-3 min-w-0">
-                      <div className="w-10 h-10 rounded-full bg-secondary border border-border shrink-0 overflow-hidden relative shadow-sm">
-                        {friend.photoURL && <Image src={friend.photoURL} alt="" fill className="object-cover" sizes="40px" />}
+          <div className="bg-surface p-5 rounded-2xl shadow-sm border border-border">
+            <h2 className="font-black text-[10px] uppercase tracking-[0.2em] mb-6 text-muted">Mes Amis ({friends.length})</h2>
+
+            {/* Demandes reçues */}
+            {requestsReceived.length > 0 && (
+              <div className="mb-8 space-y-2">
+                <p className="text-[9px] font-black text-orange-500 uppercase tracking-widest mb-2">Demandes en attente</p>
+                {requestsReceived.map(req => (
+                  <div key={req.uid} className="flex items-center justify-between p-3 bg-orange-50/50 dark:bg-orange-950/10 border border-orange-200 dark:border-orange-900/30 rounded-xl">
+                    <p className="font-bold text-xs truncate grow mr-2">@{req.username}</p>
+                    <div className="flex gap-1 shrink-0">
+                      <button onClick={() => acceptRequest(req)} className="w-8 h-8 bg-success text-white rounded-lg flex items-center justify-center"><Check className="w-4 h-4" /></button>
+                      <button onClick={() => declineRequest(req.uid)} className="w-8 h-8 bg-danger text-white rounded-lg flex items-center justify-center"><X className="w-4 h-4" /></button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Liste principale */}
+            <div className="grid gap-3">
+              {loading ? (
+                <p className="text-muted text-[10px] font-bold uppercase p-4 text-center animate-pulse tracking-widest">Chargement...</p>
+              ) : friends.length === 0 ? (
+                <p className="text-muted italic text-[10px] p-8 text-center bg-background rounded-xl border border-dashed border-border uppercase">Aucun ami.</p>
+              ) : (
+                friends.map(friend => (
+                  <div key={friend.uid} className="flex flex-col p-4 bg-background rounded-2xl border border-border hover:border-primary/40 transition-all gap-4 shadow-xs">
+                    
+                    <div className="flex items-center justify-between min-w-0">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="w-10 h-10 rounded-full bg-secondary border border-border shrink-0 overflow-hidden relative shadow-sm">
+                          {friend.photoURL && <Image src={friend.photoURL} alt="" fill className="object-cover" sizes="40px" />}
+                        </div>
+                        <div className="min-w-0">
+                          <p className="font-black text-sm text-foreground truncate tracking-tight">{friend.displayName}</p>
+                          <p className="text-[10px] text-primary font-black uppercase tracking-tighter">@{friend.username}</p>
+                        </div>
                       </div>
-                      <div className="min-w-0">
-                        <p className="font-black text-sm text-foreground truncate tracking-tight">{friend.displayName}</p>
-                        <p className="text-[10px] text-primary font-black uppercase tracking-tighter">@{friend.username}</p>
+                      <div className="flex items-center gap-1">
+                        {/* Bouton Message ajouté */}
+                        <button 
+                          onClick={() => handleOpenChat(friend.uid, friend.displayName || friend.username)}
+                          className="w-8 h-8 flex items-center justify-center text-primary hover:bg-primary/10 rounded-full transition-colors"
+                          title="Envoyer un message"
+                        >
+                          <MessageSquare className="w-4 h-4" />
+                        </button>
+                        <button 
+                          onClick={() => removeFriend(friend.uid)} 
+                          className="w-8 h-8 flex items-center justify-center text-muted hover:text-danger transition-colors"
+                          title="Retirer des amis"
+                        >
+                          <UserMinus className="w-4 h-4" />
+                        </button>
                       </div>
                     </div>
-                    <button 
-                      onClick={() => removeFriend(friend.uid)} 
-                      className="w-8 h-8 flex items-center justify-center text-muted hover:text-danger transition-colors"
-                      title="Retirer des amis"
-                    >
-                      <UserMinus className="w-4 h-4" />
-                    </button>
-                  </div>
 
-                  {/* Ligne 2 : Actions Stacking (Comme Playgroup) */}
-                  <div className="flex items-center gap-2">
-                    <Link 
-                      href={`/user/${friend.uid}`} 
-                      className="flex-1 flex items-center justify-center gap-2 text-[10px] bg-secondary text-foreground py-2.5 rounded-xl font-black uppercase tracking-tighter border border-border/50 hover:bg-border transition-colors"
-                    >
-                      <Eye className="w-3.5 h-3.5" /> Voir
-                    </Link>
-                    <Link 
-                      href={`/trades/new/${friend.uid}`} 
-                      className="flex-1 flex items-center justify-center gap-2 text-[10px] bg-primary text-white py-2.5 rounded-xl font-black uppercase tracking-tighter shadow-sm active:scale-95 transition-transform"
-                    >
-                        Échanger
-                    </Link>
+                    <div className="flex items-center gap-2">
+                      <Link 
+                        href={`/user/${friend.uid}`} 
+                        className="flex-1 flex items-center justify-center gap-2 text-[10px] bg-secondary text-foreground py-2.5 rounded-xl font-black uppercase tracking-tighter border border-border/50 hover:bg-border transition-colors"
+                      >
+                        <Eye className="w-3.5 h-3.5" /> Voir
+                      </Link>
+                      <Link 
+                        href={`/trades/new/${friend.uid}`} 
+                        className="flex-1 flex items-center justify-center gap-2 text-[10px] bg-primary text-white py-2.5 rounded-xl font-black uppercase tracking-tighter shadow-sm active:scale-95 transition-transform"
+                      >
+                          Échanger
+                      </Link>
+                    </div>
                   </div>
-                </div>
-              ))
-            )}
+                ))
+              )}
+            </div>
           </div>
         </div>
       </div>

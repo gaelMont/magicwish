@@ -69,6 +69,22 @@ export default function PantheonPage() {
         : user
     ));
 
+  match /chats/{chatId} {
+      // Un utilisateur peut lire une discussion s'il fait partie des participants
+      allow read: if isAuthenticated() && request.auth.uid in resource.data.participants;
+      
+      // La création initiale se fait via Server Action (Admin SDK), 
+      // mais on permet la lecture et l'ajout de messages pour les participants
+      match /messages/{messageId} {
+        allow read: if isAuthenticated() && 
+          request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants;
+        
+        allow create: if isAuthenticated() && 
+          request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants &&
+          request.resource.data.senderId == request.auth.uid;
+      }
+    }
+
     try {
       const userRef = doc(db, 'users', userId);
       
