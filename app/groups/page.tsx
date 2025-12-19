@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useAuth } from '@/context/AuthContext'; // Ajusté selon votre repomix
+import { useAuth } from '@/lib/AuthContext'; // Ajusté selon votre repomix
 import { db } from '@/lib/firebase';
 import { collection, query, where, onSnapshot, doc, getDoc } from 'firebase/firestore';
 import { createGroupAction, addMemberAction, promoteMemberAction, removeMemberAction } from '@/app/actions/groups';
