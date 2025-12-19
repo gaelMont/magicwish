@@ -165,6 +165,7 @@ export default function FriendWishlistDisplay({
                     setMaxPriceFilter={setMaxPriceFilter}
                     columns={columns}
                     setColumns={setColumns}
+                    hideSliderOnMobile={true}
                 />
             </div>
 
@@ -176,8 +177,8 @@ export default function FriendWishlistDisplay({
                     <p className="text-muted italic">La liste &apos;{currentListName}&apos; est vide ou ne correspond pas aux filtres.</p>
                 </div>
             ) : (
-                // GRID FIXE
                 <div 
+                    /* MODIFICATION ICI : grid-cols-2 par défaut (mobile) et md:grid-cols-[repeat(...)] pour PC */
                     className="grid gap-4 animate-in fade-in slide-in-from-bottom-4 duration-500 grid-cols-2 md:grid-cols-[repeat(var(--cols),minmax(0,1fr))]"
                     style={{ '--cols': columns } as React.CSSProperties}
                 >

@@ -584,8 +584,9 @@ export default function ManualTradePage() {
                         >
                             ✕
                         </button>
-                        <div className="w-[300px] h-[420px] shadow-2xl rounded-xl overflow-hidden pointer-events-none">
-                            <MagicCard {...previewCard} readOnly={true} quantity={previewCard.quantity} />
+                       <div className="w-[300px] h-[420px] shadow-2xl rounded-xl overflow-hidden pointer-events-none">
+                            {/* AJOUT DE HIDEFOOTER ICI */}
+                            <MagicCard {...previewCard} readOnly={true} quantity={previewCard.quantity} hideFooter={true} />
                         </div>
                     </div>
                 </div>

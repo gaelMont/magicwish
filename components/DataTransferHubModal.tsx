@@ -40,14 +40,14 @@ export default function DataTransferHubModal({
             onClick={onSelectImport}
             className="w-full bg-primary hover:opacity-90 text-primary-foreground font-bold py-3 rounded-lg transition shadow-md flex items-center justify-center gap-3"
           >
-            📥 Importer des Cartes
+            Importer des Cartes
           </button>
           
           <button
             onClick={onSelectExport}
             className="w-full bg-secondary hover:bg-border text-foreground font-bold py-3 rounded-lg transition shadow-sm flex items-center justify-center gap-3"
           >
-            📤 Exporter les Données
+            Exporter les Données
           </button>
         </div>
       </div>

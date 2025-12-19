@@ -1,3 +1,4 @@
+// components/MagicCard.tsx
 'use client';
 
 import { useState, useEffect, memo, useRef } from 'react';
@@ -50,6 +51,7 @@ type MagicCardProps = {
     onSelect?: () => void;
     returnTo?: string;
     matchStatus?: MatchStatus;
+    hideFooter?: boolean; // AJOUT : pour masquer le bloc infos/actions
 };
 
 const CARD_BACK_URL = "https://cards.scryfall.io/large/front/a/6/a6984342-f723-4e80-8e69-902d287a915f.jpg";
@@ -68,7 +70,8 @@ function MagicCard(props: MagicCardProps) {
         onIncrementTrade, onDecrementTrade, 
         isSelectMode, isSelected, onSelect,
         returnTo,
-        matchStatus 
+        matchStatus,
+        hideFooter = false // AJOUT
     } = props;
     
     // --- GESTION DU FLIP ---
@@ -81,13 +84,11 @@ function MagicCard(props: MagicCardProps) {
     const isLocalUpdate = useRef(false);
 
     // Synchronisation Parent -> Enfant
-    // On ne met à jour localQty que si la props change VRAIMENT et que ce n'est pas nous qui venons de la changer
     useEffect(() => {
         if (!isLocalUpdate.current) {
             // eslint-disable-next-line react-hooks/set-state-in-effect
             setLocalQty(quantity);
         }
-        // Une fois synchronisé, on reset le flag
         isLocalUpdate.current = false;
     }, [quantity]);
 
@@ -96,15 +97,15 @@ function MagicCard(props: MagicCardProps) {
         if (onQuantityChange) {
             onQuantityChange(val);
         }
-    }, 600); // 600ms de délai avant d'écrire en base
+    }, 600); 
 
     const handleOptimisticIncrement = () => {
         const newVal = localQty + 1;
-        setLocalQty(newVal); // Mise à jour visuelle instantanée
-        isLocalUpdate.current = true; // On signale que c'est une modif locale
+        setLocalQty(newVal); 
+        isLocalUpdate.current = true; 
         
         if (onQuantityChange) {
-            debouncedCommit(newVal); // On lance le chrono pour la DB
+            debouncedCommit(newVal); 
         } else if (onIncrement) {
             onIncrement();
         }
@@ -112,7 +113,6 @@ function MagicCard(props: MagicCardProps) {
 
     const handleOptimisticDecrement = () => {
         if (localQty <= 1) {
-            // Si on passe à 0 (suppression), on appelle directement sans debounce pour la confirmation
             if (onDecrement) onDecrement();
             return;
         }
@@ -165,6 +165,10 @@ function MagicCard(props: MagicCardProps) {
     const currentImage = isFlipped && imageBackUrl ? imageBackUrl : imageUrl;
 
     const handleCardClick = () => {
+        // MODIFICATION : Si readOnly est actif, on stoppe tout pour laisser 
+        // l'overlay de SearchPage gérer le clic (notamment sur mobile)
+        if (readOnly && !isSelectMode) return;
+
         if (isSelectMode && onSelect) {
             onSelect();
             return;
@@ -236,75 +240,74 @@ function MagicCard(props: MagicCardProps) {
           className={`relative group flex flex-col rounded-xl overflow-hidden p-2 gap-1.5 h-full content-visibility-auto select-none
           transition-all duration-200 shadow-sm hover:shadow-md
           ${isSelected ? 'border-primary ring-1 ring-primary bg-primary/5' : matchClasses} 
-          ${isSelectMode || !isTradeView ? 'cursor-pointer' : ''} 
+          ${isSelectMode || (!isTradeView && !readOnly) ? 'cursor-pointer' : ''} 
           `}
       >
         <CardImage 
-           imageUrl={imageUrl} 
-           imageBackUrl={imageBackUrl} 
-           name={name} 
-           isFoil={isFoil} 
-           isSelectMode={isSelectMode} 
-           isSelected={isSelected} 
-           isFlipped={isFlipped}
-           onFlip={() => setIsFlipped(!isFlipped)}
+            imageUrl={imageUrl} 
+            imageBackUrl={imageBackUrl} 
+            name={name} 
+            isFoil={isFoil} 
+            isSelectMode={isSelectMode} 
+            isSelected={isSelected} 
+            isFlipped={isFlipped}
+            onFlip={() => setIsFlipped(!isFlipped)}
         />
         
-        <div className="flex-1 flex flex-col min-w-0">
-          <div className="flex justify-between items-start mb-0.5">
-              <h3 className="font-semibold text-xs leading-tight text-foreground truncate grow" title={name}>{name}</h3>
-          </div>
-          <p className="text-[10px] text-muted truncate mb-1">{setName}</p>
+        {/* MODIFICATION : On conditionne tout le bloc texte/actions */}
+        {!hideFooter && (
+            <div className="flex-1 flex flex-col min-w-0">
+                <div className="flex justify-between items-start mb-0.5">
+                    <h3 className="font-semibold text-xs leading-tight text-foreground truncate grow" title={name}>{name}</h3>
+                </div>
+                <p className="text-[10px] text-muted truncate mb-1">{setName}</p>
 
-          <CardTags 
-              isWishlist={isWishlist} 
-              readOnly={readOnly} 
-              isSelectMode={isSelectMode} 
-              isFoil={isFoil} 
-              isSpecificVersion={isSpecificVersion}
-              onToggleAttribute={onToggleAttribute}
-              onMove={onMove}
-          />
-          
-          <div className={`mt-2 border-t border-border pt-1.5 flex justify-between items-center min-h-[26px] ${isSelectMode ? 'pointer-events-none opacity-50' : ''}`}>
-              
-              <div className="flex-1 flex justify-start items-center min-w-0">
-                  <CardQuantity 
-                      quantity={localQty} 
-                      readOnly={readOnly} 
-                      onIncrement={handleOptimisticIncrement} 
-                      onDecrement={handleOptimisticDecrement} 
-                  />
-              </div>
+                <CardTags 
+                    isWishlist={isWishlist} 
+                    readOnly={readOnly} 
+                    isSelectMode={isSelectMode} 
+                    isFoil={isFoil} 
+                    isSpecificVersion={isSpecificVersion}
+                    onToggleAttribute={onToggleAttribute}
+                    onMove={onMove}
+                />
+                
+                <div className={`mt-2 border-t border-border pt-1.5 flex justify-between items-center min-h-[26px] ${isSelectMode ? 'pointer-events-none opacity-50' : ''}`}>
+                    
+                    <div className="flex-1 flex justify-start items-center min-w-0">
+                        <CardQuantity 
+                            quantity={localQty} 
+                            readOnly={readOnly} 
+                            onIncrement={handleOptimisticIncrement} 
+                            onDecrement={handleOptimisticDecrement} 
+                        />
+                    </div>
 
-              <div className="shrink-0 flex justify-center mx-1">
-                  {!isWishlist && !readOnly && !isSelectMode && (
-                      <CardTradeQuantity 
-                          quantity={localQty} 
-                          tradeQty={tradeQty} 
-                          onIncrementTrade={onIncrementTrade} 
-                          onDecrementTrade={onDecrementTrade} 
-                      />
-                  )}
-              </div>
+                    <div className="shrink-0 flex justify-center mx-1">
+                        {!isWishlist && !readOnly && !isSelectMode && (
+                            <CardTradeQuantity 
+                                quantity={localQty} 
+                                tradeQty={tradeQty} 
+                                onIncrementTrade={onIncrementTrade} 
+                                onDecrementTrade={onDecrementTrade} 
+                            />
+                        )}
+                    </div>
 
-              <div className="flex-1 flex justify-end items-center min-w-0">
-                  <CardPrice 
-                      displayPriceString={displayPriceString} 
-                      hasPrice={hasPrice}
-                      isFoil={isFoil}
-                  />
-              </div>
-            
-          </div>
-        </div>
+                    <div className="flex-1 flex justify-end items-center min-w-0">
+                        <CardPrice 
+                            displayPriceString={displayPriceString} 
+                            hasPrice={hasPrice}
+                            isFoil={isFoil}
+                        />
+                    </div>
+                </div>
+            </div>
+        )}
       </div>
     );
 }
 
-// --- COMPARATEUR DE PERFORMANCE (CRUCIAL) ---
-// C'est cette partie qui empêche le re-rendu visuel (clignotement) 
-// quand le parent recrée les objets
 const arePropsEqual = (prev: MagicCardProps, next: MagicCardProps) => {
     return (
         prev.id === next.id &&
@@ -316,9 +319,8 @@ const arePropsEqual = (prev: MagicCardProps, next: MagicCardProps) => {
         prev.isSelected === next.isSelected &&
         prev.isSelectMode === next.isSelectMode &&
         prev.matchStatus === next.matchStatus &&
-        // On compare les images pour être sûr
-        prev.imageUrl === next.imageUrl
-        // On IGNORE scryfallData et les fonctions callbacks qui changent tout le temps
+        prev.imageUrl === next.imageUrl &&
+        prev.hideFooter === next.hideFooter // AJOUTÉ
     );
 };
 

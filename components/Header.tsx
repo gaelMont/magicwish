@@ -33,6 +33,7 @@ export default function Header() {
   // États des sous-menus Mobile
   const [isMobileCollectionOpen, setIsMobileCollectionOpen] = useState(false);
   const [isMobileWishlistOpen, setIsMobileWishlistOpen] = useState(false);
+  const [isMobileSocialOpen, setIsMobileSocialOpen] = useState(false);
 
   const linkClass = (path: string) => `
     text-sm font-medium transition-colors block py-2 md:py-0
@@ -81,7 +82,6 @@ export default function Header() {
       setIsMenuOpen(false);
   };
   
-  // Gestion sécurisée des IDs actifs via useSearchParams (Fix window is not defined)
   const currentCollectionId = pathname.startsWith('/collection') 
     ? (searchParams.get('listId') || 'default') : 'default';
     
@@ -105,7 +105,6 @@ export default function Header() {
       wishlistTimeoutRef.current = setTimeout(() => setShowWishlistSubmenu(false), 200);
   };
 
-
   return (
     <header className="bg-surface/80 backdrop-blur-md border-b border-border p-4 sticky top-0 z-40 transition-colors duration-300">
       <div className="container mx-auto">
@@ -125,10 +124,10 @@ export default function Header() {
             {user ? (
               <>
                 {/* NAVIGATION DESKTOP */}
-                <nav className="hidden md:flex gap-6 mr-4 items-center">
+                <nav className="hidden md:flex gap-6 mr-4 items-center h-full">
                   <Link href="/search" className={linkClass('/search')}>Recherche</Link> 
                   
-                  {/* --- MENU WISHLIST --- */}
+                  {/* --- MENU WISHLIST DESKTOP --- */}
                   <div 
                       className="relative h-full flex items-center"
                       onMouseEnter={openWishlistMenu}
@@ -162,11 +161,11 @@ export default function Header() {
                                       </button>
                                   </div>
                               </div>
-                          </div>
+                           </div>
                       )}
                   </div>
                   
-                  {/* --- MENU COLLECTION --- */}
+                  {/* --- MENU COLLECTION DESKTOP --- */}
                   <div 
                       className="relative h-full flex items-center"
                       onMouseEnter={openCollectionMenu}
@@ -200,13 +199,13 @@ export default function Header() {
                                       </button>
                                   </div>
                               </div>
-                          </div>
+                           </div>
                       )}
                   </div>
                   
                   <Link href="/trades" className={linkClass('/trades')}>Echanges</Link>
                     
-                  {/* DROPDOWN SOCIAL (Gardé simple pour l'instant) */}
+                  {/* --- MENU SOCIAL DESKTOP --- */}
                   <div className="relative group h-full flex items-center">
                     <button className={`text-sm font-medium transition-colors flex items-center gap-1 ${isSocialActive ? 'text-primary font-bold' : 'text-muted hover:text-foreground'}`}>
                       Social
@@ -221,10 +220,10 @@ export default function Header() {
                     <div className="absolute top-full right-0 pt-2 w-48 z-50 invisible group-hover:visible opacity-0 group-hover:opacity-100 transition-all duration-200">
                       <div className="bg-surface border border-border rounded-lg shadow-xl overflow-hidden">
                         <div className="py-1">
-                            <Link href="/stats" className="flex w-full px-4 py-2 text-sm text-foreground hover:bg-secondary transition justify-between items-center">
+                            {/* Suppression de la séparation ici pour un bloc Social uni */}
+                            <Link href="/stats" className="flex w-full px-4 py-2 text-sm text-foreground hover:bg-secondary transition items-center">
                             Panthéon
                             </Link>
-                            <div className="border-t border-border my-1"></div>
                             <Link href="/contacts" className="flex w-full px-4 py-2 text-sm text-foreground hover:bg-secondary transition justify-between items-center">
                             Mes Contacts
                             {friendRequestCount > 0 && (
@@ -241,12 +240,7 @@ export default function Header() {
                     </div>
                   </div>
 
-                  <Link 
-                    href="/settings"
-                    className={linkClass('/settings')}
-                  >
-                    Paramètres
-                  </Link>
+                  <Link href="/settings" className={linkClass('/settings')}>Paramètres</Link>
                 </nav>
 
                 <div className="h-5 w-px bg-border hidden md:block"></div>
@@ -262,10 +256,9 @@ export default function Header() {
                     />
                   )}
                   
-                  {/* Bouton Menu Mobile */}
                   <button 
                     onClick={() => setIsMenuOpen(!isMenuOpen)}
-                    className="md:hidden p-2 text-foreground hover:bg-secondary rounded-lg"
+                    className="md:hidden p-2 text-foreground hover:bg-secondary rounded-lg font-bold text-sm"
                   >
                     Menu
                   </button>
@@ -274,7 +267,7 @@ export default function Header() {
                     onClick={() => logOut()}
                     className="hidden md:block text-xs font-medium text-muted hover:text-primary transition"
                   >
-                    Déconnexion
+                    Quitter
                   </button>
                 </div>
               </>
@@ -361,29 +354,37 @@ export default function Header() {
                
                <Link href="/trades" className={linkClass('/trades')} onClick={() => setIsMenuOpen(false)}>Echanges</Link>
                
-               <div className="pt-2 pb-2 border-y border-border/50">
-                 <p className="text-xs text-muted font-bold uppercase mb-2 ml-4">Social</p>
-                 
-                 <Link href="/stats" className={`${linkClass('/stats')} pl-4 mb-2 flex items-center gap-2`} onClick={() => setIsMenuOpen(false)}>
-                    Panthéon
-                 </Link>
-                 
-                 <Link href="/contacts" className={`${linkClass('/contacts')} pl-4 mb-2 flex items-center gap-2`} onClick={() => setIsMenuOpen(false)}>
-                    Contacts 
-                    {friendRequestCount > 0 && (
-                        <span className="bg-primary text-primary-foreground text-[10px] font-bold px-1.5 py-0.5 rounded-full">
-                          {friendRequestCount}
-                        </span>
-                    )}
-                 </Link>
-                 
-                 <Link href="/groups" className={`${linkClass('/groups')} pl-4`} onClick={() => setIsMenuOpen(false)}>
-                    Mes Playgroups
-                 </Link>
+               {/* --- MOBILE SOCIAL (REDUIT) --- */}
+               <div className="border-b border-border/50">
+                  <button 
+                      onClick={() => setIsMobileSocialOpen(!isMobileSocialOpen)}
+                      className={`${linkClass('/contacts')} w-full text-left py-2 flex justify-between items-center`}
+                  >
+                      <span className="flex items-center gap-2">
+                        Social
+                        {friendRequestCount > 0 && (
+                          <span className="bg-primary text-primary-foreground text-[10px] font-bold px-1.5 py-0.5 rounded-full">
+                            {friendRequestCount}
+                          </span>
+                        )}
+                      </span>
+                      <span className={`text-[10px] transform transition-transform ${isMobileSocialOpen ? 'rotate-180' : ''}`}>▼</span>
+                  </button>
+                  
+                  {isMobileSocialOpen && (
+                    <div className="bg-background/50 p-2 space-y-1 animate-in fade-in slide-in-from-top-2 mb-2 rounded-lg">
+                       <Link href="/stats" className="block w-full text-left px-2 py-2 text-sm text-foreground hover:bg-secondary rounded" onClick={() => setIsMenuOpen(false)}>Panthéon</Link>
+                       <Link href="/contacts" className="flex justify-between items-center w-full text-left px-2 py-2 text-sm text-foreground hover:bg-secondary rounded" onClick={() => setIsMenuOpen(false)}>
+                          Mes Contacts
+                          {friendRequestCount > 0 && <span className="bg-primary text-white text-[10px] px-1.5 rounded-full">{friendRequestCount}</span>}
+                       </Link>
+                       <Link href="/groups" className="block w-full text-left px-2 py-2 text-sm text-foreground hover:bg-secondary rounded" onClick={() => setIsMenuOpen(false)}>Mes Playgroups</Link>
+                    </div>
+                  )}
                </div>
 
                <Link href="/settings" className={linkClass('/settings')} onClick={() => setIsMenuOpen(false)}>Paramètres</Link>
-               <button onClick={() => { logOut(); setIsMenuOpen(false); }} className="text-left py-2 text-danger text-sm font-medium">Déconnexion</button>
+               <button onClick={() => { logOut(); setIsMenuOpen(false); }} className="text-left py-2 text-danger text-sm font-bold">Déconnexion</button>
              </nav>
           </div>
         )}

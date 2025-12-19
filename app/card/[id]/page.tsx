@@ -6,9 +6,7 @@ import { doc, getDoc, updateDoc } from 'firebase/firestore';
 import { useAuth } from '@/lib/AuthContext';
 import { useCardCollection, CardType } from '@/hooks/useCardCollection'; 
 import { normalizeCardData, ScryfallRawData } from '@/lib/cardUtils'; 
-import Link from 'next/link';
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-import { useSearchParams, useParams } from 'next/navigation';
+import { useSearchParams, useRouter } from 'next/navigation';
 import Image from 'next/image';
 import toast from 'react-hot-toast';
 
@@ -29,7 +27,7 @@ type CardDetailPageProps = {
     params: Promise<{ id: string }>;
 };
 
-// --- COMPOSANT DE DÉTAILS PRINCIPAUX (CARDMAINDETAILS) ---
+// --- COMPOSANT DE DÉTAILS PRINCIPAUX ---
 function CardMainDetails({ cardData }: { cardData: CardType | null }) {
     const { user } = useAuth();
     
@@ -37,7 +35,6 @@ function CardMainDetails({ cardData }: { cardData: CardType | null }) {
     const [purchaseValue, setPurchaseValue] = useState<string>("");
     const [isSaving, setIsSaving] = useState(false);
 
-    // Initialisation synchronisée avec les données de la carte
     useEffect(() => {
         if (cardData?.purchasePrice !== undefined && cardData?.purchasePrice !== null) {
             setPurchaseValue(cardData.purchasePrice.toString());
@@ -46,7 +43,6 @@ function CardMainDetails({ cardData }: { cardData: CardType | null }) {
         }
     }, [cardData]);
 
-    // Protection contre le crash si cardData est chargé mais null ou undefined
     if (!cardData) return null;
 
     const currentPrice = cardData.price ?? 0;
@@ -65,7 +61,6 @@ function CardMainDetails({ cardData }: { cardData: CardType | null }) {
     const finishes = scryfallRaw?.finishes || [];
     const prices = scryfallRaw?.prices;
 
-    // Logique de filtrage par finition
     const hasNonFoilVersion = finishes.includes('nonfoil');
     const hasFoilVersion = finishes.includes('foil');
 
@@ -89,7 +84,7 @@ function CardMainDetails({ cardData }: { cardData: CardType | null }) {
             await updateDoc(cardRef, { 
                 purchasePrice: finalVal > 0 ? finalVal : 0 
             });
-            toast.success("Historique mis a jour");
+            toast.success("Historique mis à jour");
             setIsEditingPurchase(false);
         } catch (error) {
             console.error(error);
@@ -145,17 +140,26 @@ function CardMainDetails({ cardData }: { cardData: CardType | null }) {
                             />
                             <span className="absolute right-3 top-2 text-muted font-bold">EUR</span>
                         </div>
-                        <button onClick={handleSavePurchasePrice} disabled={isSaving} className="bg-primary text-primary-foreground py-2 px-4 rounded-lg text-sm font-bold">
+                        <button 
+                            onClick={handleSavePurchasePrice} 
+                            disabled={isSaving} 
+                            className="bg-primary text-primary-foreground py-2 px-4 rounded-lg text-sm font-bold"
+                        >
                             {isSaving ? '...' : 'OK'}
                         </button>
-                        <button onClick={() => setIsEditingPurchase(false)} className="text-muted hover:text-foreground text-sm px-2">Annuler</button>
+                        <button 
+                            onClick={() => setIsEditingPurchase(false)} 
+                            className="text-muted hover:text-foreground text-sm px-2"
+                        >
+                            Annuler
+                        </button>
                     </div>
                 ) : (
                     <div>
                         {purchasePrice ? (
                             <div className="flex items-center gap-6">
                                 <div>
-                                    <p className="text-xs text-muted uppercase">Acquis pour</p>
+                                    <p className="text-xs text-muted uppercase tracking-wider">Acquis pour</p>
                                     <p className="text-xl font-bold text-foreground">{purchasePrice.toFixed(2)} EUR</p>
                                 </div>
                                 {profitLoss !== null && (
@@ -171,7 +175,7 @@ function CardMainDetails({ cardData }: { cardData: CardType | null }) {
                                 )}
                             </div>
                         ) : (
-                            <p className="text-muted italic text-sm">Aucune donnee d&apos;achat enregistree.</p>
+                            <p className="text-muted italic text-sm">Aucune donnée d&apos;achat enregistrée.</p>
                         )}
                     </div>
                 )}
@@ -185,7 +189,7 @@ function CardMainDetails({ cardData }: { cardData: CardType | null }) {
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
                             </svg>
                         </span>
-                        Donnees du Marche (Scryfall)
+                        Données du Marché (Scryfall)
                     </h2>
                 </div>
 
@@ -203,7 +207,7 @@ function CardMainDetails({ cardData }: { cardData: CardType | null }) {
                                     href={getPreciseUrl(false)} 
                                     target="_blank" 
                                     rel="noopener noreferrer"
-                                    className="flex items-center gap-2 text-sm text-blue-600 hover:text-blue-800 hover:bg-blue-50 px-3 py-1.5 rounded-lg transition font-medium border border-transparent hover:border-blue-100"
+                                    className="text-sm text-blue-600 hover:text-blue-800 font-bold"
                                 >
                                     Acheter
                                 </a>
@@ -226,7 +230,7 @@ function CardMainDetails({ cardData }: { cardData: CardType | null }) {
                                     href={getPreciseUrl(true)} 
                                     target="_blank" 
                                     rel="noopener noreferrer"
-                                    className="flex items-center gap-2 text-sm text-amber-700 hover:text-amber-900 hover:bg-amber-50 px-3 py-1.5 rounded-lg transition font-medium border border-transparent hover:border-amber-100"
+                                    className="text-sm text-amber-700 hover:text-amber-900 font-bold"
                                 >
                                     Acheter
                                 </a>
@@ -239,17 +243,23 @@ function CardMainDetails({ cardData }: { cardData: CardType | null }) {
     );
 }
 
-// --- CONTENU DE LA PAGE (CARDDETAILCONTENT) ---
+// --- CONTENU DE LA PAGE ---
 function CardDetailContent({ params }: CardDetailPageProps) {
     const { user } = useAuth();
+    const router = useRouter();
     const unwrappedParams = use(params);
     const cardId = unwrappedParams.id;
     const searchParams = useSearchParams();
     
+    // GESTION RETOUR INTELLIGENTE
     const returnTo = searchParams.get('returnTo');
-    const backLink = returnTo ? decodeURIComponent(returnTo) : '/collection';
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const backLabel = returnTo ? (returnTo.includes('user') ? 'Retour au profil' : 'Retour') : 'Retour a la collection';
+    const handleBack = () => {
+        if (returnTo) {
+            router.push(decodeURIComponent(returnTo));
+        } else {
+            router.back();
+        }
+    };
 
     const { cards: collectionCards, loading: collectionLoading } = useCardCollection('collection'); 
     
@@ -330,8 +340,8 @@ function CardDetailContent({ params }: CardDetailPageProps) {
         return false;
     }, [user, card, collectionMap, scryfallId]);
 
-    if (!user) return <div className="p-10 text-center text-muted">Connectez-vous pour voir les details.</div>;
-    if (loading) return <div className="p-10 text-center text-muted animate-pulse">Chargement des details...</div>;
+    if (!user) return <div className="p-10 text-center text-muted">Connectez-vous pour voir les détails.</div>;
+    if (loading) return <div className="p-10 text-center text-muted animate-pulse">Chargement des détails...</div>;
     if (!card) return <div className="p-10 text-center text-danger">Carte introuvable.</div>;
 
     const displayData = card.scryfallData 
@@ -353,18 +363,28 @@ function CardDetailContent({ params }: CardDetailPageProps) {
     return (
         <main className="container mx-auto p-4 max-w-6xl min-h-[80vh]">
             <div className="mb-6 flex justify-between items-center">
-                <Link href={backLink} className="text-sm text-primary hover:underline font-bold">Retour</Link>
+                <button 
+                    onClick={handleBack} 
+                    className="text-sm text-primary hover:underline font-bold flex items-center gap-1"
+                >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+                    </svg>
+                    Retour
+                </button>
                 {oracleId && (
                      <button
                         onClick={() => setShowAllVersions(!showAllVersions)}
                         className="bg-secondary hover:bg-border text-foreground px-4 py-2 rounded-lg text-sm font-bold transition"
                      >
-                        {showAllVersions ? 'Afficher les Details' : 'Voir toutes les Editions'}
+                        {showAllVersions ? 'Afficher les Détails' : 'Voir toutes les Éditions'}
                      </button>
                 )}
             </div>
 
-            <h1 className="text-3xl font-bold text-foreground mb-8 border-b border-border pb-4">{name}</h1>
+            <h1 className="text-2xl md:text-3xl font-bold text-foreground mb-8 border-b border-border pb-4">
+                {name}
+            </h1>
 
             {showAllVersions && oracleId ? (
                 <CardVersionsGrid 
@@ -377,22 +397,34 @@ function CardDetailContent({ params }: CardDetailPageProps) {
                 <div className="grid md:grid-cols-3 gap-8">
                     <div className="md:col-span-1 flex flex-col items-center">
                         <div 
-                            className="w-full max-w-sm aspect-[2.5/3.5] rounded-[4.5%] overflow-hidden shadow-2xl ring-4 ring-primary/20 cursor-pointer"
+                            className="w-full max-w-sm aspect-[2.5/3.5] rounded-[4.5%] overflow-hidden shadow-2xl ring-4 ring-primary/20 cursor-pointer relative"
                             onClick={() => isDoubleSided && setIsFlipped(!isFlipped)}
                         >
-                            <Image src={displayImage} alt={name} className="w-full h-full object-cover" width={500} height={700} />
+                            <Image 
+                                src={displayImage} 
+                                alt={name} 
+                                fill 
+                                className="object-cover" 
+                                sizes="(max-width: 768px) 100vw, 400px" 
+                                priority 
+                            />
                         </div>
                         {isDoubleSided && (
-                            <button onClick={() => setIsFlipped(!isFlipped)} className="mt-4 text-sm text-primary hover:underline font-medium">
+                            <button 
+                                onClick={() => setIsFlipped(!isFlipped)} 
+                                className="mt-4 text-sm text-primary hover:underline font-medium"
+                            >
                                 {isFlipped ? 'Afficher le Recto' : 'Afficher le Verso'}
                             </button>
                         )}
                         <div className="mt-4 text-center">
                             <p className="text-lg font-semibold text-foreground">{setName}</p>
                             {isOwner ? (
-                                <p className="text-xs text-success font-bold mt-1">Possedee</p>
+                                <p className="text-xs text-success font-bold mt-1 uppercase tracking-widest">
+                                    ✓ En Collection
+                                </p>
                             ) : (
-                                <p className="text-sm text-muted italic">Non possedee</p>
+                                <p className="text-sm text-muted italic mt-1">Non possédée</p>
                             )}
                         </div>
                     </div>
@@ -410,7 +442,7 @@ function CardDetailContent({ params }: CardDetailPageProps) {
 // --- PAGE EXPORT ---
 export default function CardDetailPage(props: CardDetailPageProps) {
     return (
-        <Suspense fallback={<div className="flex h-screen items-center justify-center text-muted animate-pulse">Chargement de la carte...</div>}>
+        <Suspense fallback={<div className="flex h-screen items-center justify-center text-muted">Chargement...</div>}>
             <CardDetailContent {...props} />
         </Suspense>
     );

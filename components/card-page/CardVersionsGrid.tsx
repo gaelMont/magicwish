@@ -5,7 +5,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { normalizeCardData, ScryfallRawData } from '@/lib/cardUtils';
 import { CardType } from '@/hooks/useCardCollection';
 import toast from 'react-hot-toast';
-import Image from 'next/image'; // 1. IMPORT AJOUTÉ
+import Image from 'next/image';
 
 type Props = {
     oracleId: string;
@@ -70,12 +70,11 @@ export default function CardVersionsGrid({ oracleId, currentCardId, onVersionSel
     const displayImage = isFlipped && cardToDisplay.imageBackUrl ? cardToDisplay.imageBackUrl : cardToDisplay.imageUrl;
 
     return (
-        <div className="grid md:grid-cols-3 gap-8">
-            {/* GAUCHE : IMAGE */}
-            <div className="md:col-span-1 flex flex-col items-center sticky top-24 self-start">
+        <div className="flex flex-col md:grid md:grid-cols-3 gap-6 md:gap-8">
+            {/* GAUCHE : IMAGE - Centrée sur mobile, sticky sur desktop */}
+            <div className="md:col-span-1 flex flex-col items-center md:sticky md:top-24 self-start w-full">
                  <div 
-                    // Ajout de 'relative' ici pour que Image fill fonctionne
-                    className="w-full max-w-sm aspect-[2.5/3.5] rounded-xl overflow-hidden shadow-2xl ring-4 ring-primary/20 cursor-pointer relative"
+                    className="w-full max-w-[280px] md:max-w-sm aspect-[2.5/3.5] rounded-xl overflow-hidden shadow-2xl ring-4 ring-primary/20 cursor-pointer relative transition-transform active:scale-95"
                     onClick={() => isDoubleSided && setIsFlipped(!isFlipped)}
                 >
                     <Image 
@@ -83,38 +82,38 @@ export default function CardVersionsGrid({ oracleId, currentCardId, onVersionSel
                         alt={cardToDisplay.name} 
                         fill
                         className="object-cover"
-                        sizes="(max-width: 768px) 100vw, 400px" // Optimisation responsive
-                        priority // Priorité car c'est l'image principale visible tout de suite
+                        sizes="(max-width: 768px) 280px, 400px"
+                        priority
                     />
                 </div>
                 {isDoubleSided && (
                     <button 
                         onClick={() => setIsFlipped(!isFlipped)} 
-                        className="mt-4 text-sm text-primary hover:underline font-medium"
+                        className="mt-4 text-sm text-primary hover:underline font-bold bg-primary/10 px-4 py-2 rounded-full"
                     >
-                        {isFlipped ? 'Afficher le Recto' : 'Afficher le Verso'}
+                        {isFlipped ? 'Voir le Recto' : 'Voir le Verso'}
                     </button>
                 )}
             </div>
 
-            {/* DROITE : LISTE */}
-            <div className="md:col-span-2 space-y-6">
-                <div className="flex justify-between items-center bg-secondary p-3 rounded-xl border border-border">
-                    <h2 className="text-xl font-bold text-foreground">
-                        Impressions ({filteredVersions.length} / {allVersions.length})
+            {/* DROITE : LISTE DES IMPRESSIONS */}
+            <div className="md:col-span-2 space-y-4">
+                <div className="flex justify-between items-center bg-secondary/50 p-3 rounded-xl border border-border">
+                    <h2 className="text-lg md:text-xl font-bold text-foreground">
+                        Impressions ({filteredVersions.length})
                     </h2>
-                    <label className="flex items-center gap-2 cursor-pointer select-none bg-background px-3 py-1.5 rounded-lg border border-border hover:border-primary transition">
+                    <label className="flex items-center gap-2 cursor-pointer select-none bg-surface px-3 py-1.5 rounded-lg border border-border hover:border-primary transition">
                         <input 
                             type="checkbox" 
                             checked={showOwnedOnly} 
                             onChange={(e) => setShowOwnedOnly(e.target.checked)} 
-                            className="w-4 h-4 text-primary rounded border-border focus:ring-primary" 
+                            className="w-4 h-4 text-primary rounded border-border focus:ring-primary accent-primary" 
                         />
-                        <span className="text-sm font-medium text-foreground">Mes versions</span>
+                        <span className="text-xs md:text-sm font-medium text-foreground">Mes versions</span>
                     </label>
                 </div>
                 
-                <div className="space-y-3 max-h-[70vh] overflow-y-auto pr-3 custom-scrollbar">
+                <div className="space-y-2 max-h-[50vh] md:max-h-[70vh] overflow-y-auto pr-2 custom-scrollbar">
                     {filteredVersions.map(v => {
                         const normalized = normalizeCardData(v);
                         const isCurrentInCollection = v.id === currentCardId; 
@@ -124,44 +123,48 @@ export default function CardVersionsGrid({ oracleId, currentCardId, onVersionSel
 
                         const priceNormal = parseFloat(v.prices?.eur || "0");
                         const priceFoil = parseFloat(v.prices?.eur_foil || "0");
-                        const displayPrice = Math.max(priceNormal, priceFoil);
+                        const displayPrice = priceNormal > 0 ? priceNormal : priceFoil;
                         
                         return (
                             <div 
                                 key={v.id} 
                                 onClick={() => { setSelectedRawCard(v); setIsFlipped(false); }} 
                                 onDoubleClick={() => onVersionSelect(v)} 
-                                className={`flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-all ${
+                                className={`flex items-center gap-3 p-2 md:p-3 rounded-xl border cursor-pointer transition-all active:scale-[0.98] ${
                                     v.id === selectedRawCard?.id
-                                        ? 'bg-primary/10 border-primary shadow-lg ring-2 ring-primary/50' 
+                                        ? 'bg-primary/10 border-primary shadow-md ring-2 ring-primary/30' 
                                         : isOwned 
                                             ? 'bg-success/5 border-success/30 hover:bg-success/10' 
-                                            : 'bg-surface border-border hover:bg-primary/5' 
+                                            : 'bg-surface border-border hover:border-primary/50' 
                                 }`}
                             >
-                                {/* Ajout de 'relative' ici */}
-                                <div className="w-12 h-16 rounded overflow-hidden shrink-0 relative">
+                                <div className="w-10 h-14 md:w-12 md:h-16 rounded overflow-hidden shrink-0 relative border border-border/50">
                                     <Image 
                                         src={normalized.imageUrl} 
                                         alt={normalized.setName} 
                                         fill
                                         className="object-cover"
-                                        sizes="48px" // Petite taille pour les miniatures
+                                        sizes="48px"
                                     />
                                 </div>
                                 <div className="grow min-w-0">
-                                    <p className="font-bold text-foreground truncate flex items-center gap-2">
+                                    <p className="font-bold text-foreground text-xs md:text-sm truncate flex items-center gap-2">
                                         {v.set_name} 
-                                        {isOwned && <span className="text-xs bg-success text-white px-1.5 py-0.5 rounded font-bold">{ownedQty}x</span>} 
-                                        {isCurrentInCollection && <span className="text-xs text-primary font-normal">(Affichée)</span>}
+                                        {isOwned && <span className="text-[10px] bg-success text-white px-1.5 py-0.5 rounded-full font-black">{ownedQty}x</span>} 
                                     </p>
-                                    <p className="text-xs text-muted">Set: {v.set.toUpperCase()} | Num: {v.collector_number}</p>
+                                    <p className="text-[10px] text-muted truncate uppercase font-mono">
+                                        {v.set} • #{v.collector_number}
+                                    </p>
                                 </div>
-                                <div className="text-right shrink-0">
-                                    <span className={`font-bold text-sm ${isCurrentInCollection ? 'text-primary' : 'text-success'}`}>{displayPrice.toFixed(2)} €</span>
-                                    {v.finishes?.includes('foil') && <p className="text-xs text-amber-600">Foil</p>}
-                                    <button onClick={(e) => { e.stopPropagation(); onVersionSelect(v); }} className="text-xs text-primary hover:underline block mt-1 w-full text-right">
-                                        Sélectionner
+                                <div className="text-right shrink-0 flex flex-col items-end gap-1">
+                                    <span className={`font-bold text-xs md:text-sm ${isCurrentInCollection ? 'text-primary' : 'text-foreground'}`}>
+                                        {displayPrice > 0 ? `${displayPrice.toFixed(2)} €` : '-- €'}
+                                    </span>
+                                    <button 
+                                        onClick={(e) => { e.stopPropagation(); onVersionSelect(v); }} 
+                                        className="text-[10px] bg-primary text-primary-foreground px-2 py-1 rounded font-bold hover:opacity-80"
+                                    >
+                                        VOIR
                                     </button>
                                 </div>
                             </div>
@@ -169,11 +172,11 @@ export default function CardVersionsGrid({ oracleId, currentCardId, onVersionSel
                     })}
                 </div>
 
-                <div className="pt-4 border-t border-border">
+                <div className="pt-2">
                     <button 
                         onClick={() => selectedRawCard && onVersionSelect(selectedRawCard)}
                         disabled={!selectedRawCard}
-                        className="btn-primary w-full py-3 text-lg disabled:opacity-50"
+                        className="btn-primary w-full py-3 text-sm md:text-base font-bold shadow-lg disabled:opacity-50 active:scale-95 transition-transform"
                     >
                         Afficher les Détails de cette Impression
                     </button>

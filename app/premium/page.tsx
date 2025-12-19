@@ -1,108 +1,67 @@
-// app/premium/page.tsx
+// app/mentions-legales/page.tsx
 'use client';
 
-import { useAuth } from '@/lib/AuthContext';
-import { usePremium } from '@/hooks/usePremium';
-import { useState } from 'react';
-import toast from 'react-hot-toast';
-import { doc, getDoc } from 'firebase/firestore'; // Import supplémentaire
-import { db } from '@/lib/firebase';
+import React from 'react';
+import Header from '@/components/Header';
 
-export default function PremiumPage() {
-    const { user } = useAuth();
-    const { isPremium, loading } = usePremium();
-    const [isRedirecting, setIsRedirecting] = useState(false);
-
-    // Le lien de paiement avec le client_reference_id pour l'identification
-    const paymentLink = `${process.env.NEXT_PUBLIC_STRIPE_PAYMENT_LINK}?client_reference_id=${user?.uid}`;
-
-    // Gérer la redirection vers le portail client Stripe pour annuler/modifier
-    const handleManageSubscription = async () => {
-        if (!user) return;
-        setIsRedirecting(true);
-        try {
-            // On doit lire l'ID client Stripe stocké dans le profil de l'utilisateur
-            const docRef = await getDoc(doc(db, 'users', user.uid));
-            const customerId = docRef.data()?.stripeCustomerId;
-
-            if (!customerId) {
-                toast.error("Impossible de trouver votre abonnement. Contactez le support.");
-                setIsRedirecting(false);
-                return;
-            }
-
-            // Appel de l'API pour générer le lien de gestion du portail Stripe
-            const res = await fetch('/api/portal', { 
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ customerId })
-            });
-            
-            const data = await res.json();
-            if (data.url) {
-                window.location.href = data.url; // Redirection vers Stripe
-            } else {
-                throw new Error(data.error || "Erreur redirection Stripe");
-            }
-        } catch (e) {
-            console.error(e);
-            toast.error("Erreur gestion d'abonnement.");
-            setIsRedirecting(false);
-        }
-    };
-
-    if (loading) return <div className="p-10 text-center">Chargement...</div>;
-    if (!user) return <div className="p-10 text-center">Connectez-vous pour accéder au Premium.</div>;
-
+export default function MentionsLegales() {
     return (
-        <div className="container mx-auto p-8 text-center max-w-lg min-h-[80vh] flex flex-col justify-center">
-            
-            {isPremium ? (
-                // --- VUE DÉJÀ ABONNÉ ---
-                <div className="bg-green-50 dark:bg-green-900/20 p-8 rounded-2xl border border-green-200 dark:border-green-800">
-                    <div className="text-5xl mb-4">💎</div>
-                    <h1 className="text-3xl font-bold text-green-700 dark:text-green-400 mb-2">Vous êtes Premium !</h1>
-                    <p className="text-gray-600 dark:text-gray-300 mb-6">
-                        Merci de soutenir le projet.
-                    </p>
-                    <button 
-                        onClick={handleManageSubscription}
-                        disabled={isRedirecting}
-                        className="text-sm text-gray-500 underline hover:text-gray-700 dark:hover:text-gray-200 font-medium"
-                    >
-                        {isRedirecting ? 'Chargement...' : 'Gérer mon abonnement / Annuler'}
-                    </button>
-                </div>
-            ) : (
-                // --- VUE VENTE ---
-                <>
-                    <h1 className="text-4xl font-bold mb-4 bg-linear-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
-                        Passez Premium
-                    </h1>
-                    <p className="mb-8 text-gray-600 dark:text-gray-300 text-lg">
-                        Soutenez le développement pour 1€ / mois.
-                    </p>
-                    
-                    <ul className="text-left bg-white dark:bg-gray-800 p-6 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 mb-8 space-y-4">
-                        <li className="flex items-center gap-3">
-                            <span className="bg-green-100 text-green-700 p-1 rounded-full text-xs">✓</span>
-                            <span>Plus aucune publicité</span>
-                        </li>
-                        <li className="flex items-center gap-3">
-                            <span className="bg-purple-100 text-purple-700 p-1 rounded-full text-xs">♥</span>
-                            <span className="font-bold">Juste 1,00 € / mois</span>
-                        </li>
-                    </ul>
+        <main className="min-h-screen bg-background pb-20">
+            <Header />
+            <div className="max-w-4xl mx-auto px-4 py-8">
+                <h1 className="text-3xl font-bold mb-8 text-foreground border-b border-border pb-4 mt-8">
+                    Mentions Légales
+                </h1>
 
-                    <a 
-                        href={paymentLink} 
-                        className="block w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 rounded-xl shadow-lg hover:scale-105 transition transform"
-                    >
-                        Devenir Premium (1€)
-                    </a>
-                    <p className="text-xs text-gray-400 mt-4">Paiement sécurisé par Stripe.</p>
-                </>
-            )}
-        </div>
+                <section className="mb-8 p-6 bg-surface rounded-xl border border-border shadow-sm">
+                    <h2 className="text-xl font-bold mb-4 text-primary">1. Édition du site</h2>
+                    <p className="text-muted-foreground mb-4">
+                        En vertu de l&apos;article 6 de la loi n° 2004-575 du 21 juin 2004 pour la confiance dans l&apos;économie numérique, 
+                        il est précisé aux utilisateurs de l&apos;application MagicWish l&apos;identité des différents intervenants dans 
+                        le cadre de sa réalisation et de son suivi :
+                    </p>
+                    <ul className="list-disc pl-6 text-muted-foreground space-y-2">
+                        <li><strong>Propriétaire / Éditeur :</strong> Gaël Montpelier</li>
+                        <li><strong>Responsable de la publication :</strong> Gaël Montpelier</li>
+                        <li><strong>Contact :</strong> magicwish.be.contact@gmail.com</li>
+                        <li><strong>Webmaster :</strong> MagicWish Tech Team</li>
+                    </ul>
+                </section>
+
+                <section className="mb-8 p-6 bg-surface rounded-xl border border-border shadow-sm">
+                    <h2 className="text-xl font-bold mb-4 text-primary">2. Hébergement</h2>
+                    <p className="text-muted-foreground">
+                        Le site est hébergé par la société <strong>Vercel Inc.</strong>, située au 340 S Lemon Ave #1192, Walnut, CA 91789, USA. 
+                        Contact : https://vercel.com.
+                    </p>
+                </section>
+
+                <section className="mb-8 p-6 bg-surface rounded-xl border border-border shadow-sm">
+                    <h2 className="text-xl font-bold mb-4 text-primary">3. Propriété intellectuelle</h2>
+                    <p className="text-muted-foreground mb-4">
+                        MagicWish est une application indépendante. Les visuels des cartes, les noms, les symboles de rareté et 
+                        les textes des cartes sont la propriété de <strong>Wizards of the Coast LLC</strong> (filiale de Hasbro, Inc.). 
+                        MagicWish n&apos;est pas affilié, approuvé ou parrainé par Wizards of the Coast.
+                    </p>
+                    <p className="text-muted-foreground">
+                        La structure générale, les textes, les logos propres à MagicWish et le code source de l&apos;application 
+                        sont la propriété exclusive de l&apos;éditeur. Toute reproduction totale ou partielle est interdite.
+                    </p>
+                </section>
+
+                <section className="mb-8 p-6 bg-surface rounded-xl border border-border shadow-sm">
+                    <h2 className="text-xl font-bold mb-4 text-primary">4. Limitation de responsabilité</h2>
+                    <p className="text-muted-foreground">
+                        MagicWish s&apos;efforce de fournir des informations précises (prix Scryfall, base de données). Cependant, 
+                        l&apos;éditeur ne pourra être tenu responsable des omissions ou des lacunes dans la mise à jour des prix 
+                        ou des données de cartes provenant de sources tierces.
+                    </p>
+                </section>
+                
+                <p className="text-xs text-muted-foreground text-center mt-12">
+                    Dernière mise à jour : 19 Décembre 2025
+                </p>
+            </div>
+        </main>
     );
 }

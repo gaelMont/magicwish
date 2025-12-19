@@ -576,7 +576,8 @@ export default function DirectTradePage({ params }: { params: Promise<{ uid: str
                             ✕
                         </button>
                         <div className="w-[300px] h-[420px] shadow-2xl rounded-xl overflow-hidden pointer-events-none">
-                            <MagicCard {...previewCard} readOnly={true} quantity={previewCard.quantity} />
+                            {/* AJOUT DE HIDEFOOTER ICI */}
+                            <MagicCard {...previewCard} readOnly={true} quantity={previewCard.quantity} hideFooter={true} />
                         </div>
                     </div>
                 </div>

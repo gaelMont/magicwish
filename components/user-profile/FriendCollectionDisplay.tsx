@@ -34,7 +34,6 @@ export default function FriendCollectionDisplay({
     cards, loading, targetUid, myWishlistMap, columns, setColumns, sortBy, setSortBy,
 }: FriendCollectionDisplayProps) {
     
-    // --- ÉTATS ---
     const [searchQuery, setSearchQuery] = useState('');
     const [filterSet, setFilterSet] = useState<string>('all');
     const [filterTrade, setFilterTrade] = useState(false);
@@ -47,7 +46,6 @@ export default function FriendCollectionDisplay({
 
     const filteredAndSortedCards = useMemo(() => {
         if (!cards) return [];
-        
         let result: CardWithMatchStatus[] = cards.map((card) => ({
             ...card,
             isMatch: getMatchStatus(card, myWishlistMap) 
@@ -61,16 +59,13 @@ export default function FriendCollectionDisplay({
         if (filterTrade) result = result.filter(c => (c.quantityForTrade ?? 0) > 0);
         if (filterFoil) result = result.filter(c => c.isFoil);
         if (filterMatch) result = result.filter(c => c.isMatch);
-        
         if (!isNaN(minPrice) || !isNaN(maxPrice)) {
             result = result.filter(c => {
                 const p = c.customPrice ?? c.price ?? 0;
                 return (isNaN(minPrice) || p >= minPrice) && (isNaN(maxPrice) || p <= maxPrice);
             });
         }
-
         if (filterCMC) { const t = parseFloat(filterCMC); if (!isNaN(t)) result = result.filter(c => c.cmc === t); }
-
         if (filterColors.length > 0) {
             result = result.filter(c => {
                 if (!c.colors || c.colors.length === 0) return filterColors.includes('C');
@@ -78,37 +73,27 @@ export default function FriendCollectionDisplay({
             });
         }
 
-        // --- TRI MIS A JOUR ---
         result.sort((a, b) => {
             const priceA = a.customPrice ?? a.price ?? 0;
             const priceB = b.customPrice ?? b.price ?? 0;
-            const cmcA = a.cmc ?? 0;
-            const cmcB = b.cmc ?? 0;
-
             switch (sortBy) {
                 case 'name_asc': return a.name.localeCompare(b.name);
                 case 'name_desc': return b.name.localeCompare(a.name);
-                
                 case 'price_asc': return priceA - priceB;
                 case 'price_desc': return priceB - priceA;
-                
                 case 'quantity_asc': return a.quantity - b.quantity;
                 case 'quantity_desc': return b.quantity - a.quantity;
-                
-                case 'cmc_asc': return cmcA - cmcB;
-                case 'cmc_desc': return cmcB - cmcA;
-
+                case 'cmc_asc': return (a.cmc ?? 0) - (b.cmc ?? 0);
+                case 'cmc_desc': return (b.cmc ?? 0) - (a.cmc ?? 0);
                 case 'set_asc': return (a.setName || '').localeCompare(b.setName || '');
                 case 'set_desc': return (b.setName || '').localeCompare(a.setName || '');
-
                 default: return 0;
             }
         });
-
         return result;
     }, [cards, searchQuery, sortBy, filterSet, filterTrade, filterFoil, filterMatch, myWishlistMap, minPriceFilter, maxPriceFilter, filterCMC, filterColors]);
     
-    if (loading) return <p className="text-center p-10 text-muted">Chargement...</p>;
+    if (loading) return <p className="text-center p-10 text-muted font-bold uppercase text-xs animate-pulse">Chargement...</p>;
     
     return (
         <div className="space-y-6">
@@ -126,13 +111,14 @@ export default function FriendCollectionDisplay({
                 filterCMC={filterCMC} setFilterCMC={setFilterCMC}
                 filterColors={filterColors} setFilterColors={setFilterColors}
                 columns={columns} setColumns={setColumns}
+                hideSliderOnMobile={true}
             />
 
             {filteredAndSortedCards.length === 0 ? (
-                <div className="text-center py-16 bg-secondary/30 rounded-xl border-dashed border-2 border-border"><p className="text-muted italic">Aucun résultat.</p></div>
+                <div className="text-center py-16 bg-surface rounded-3xl border-dashed border-2 border-border shadow-inner"><p className="text-muted italic font-medium uppercase text-xs">Aucun résultat.</p></div>
             ) : (
                 <div 
-                    className="grid gap-4 animate-in fade-in grid-cols-2 md:grid-cols-[repeat(var(--cols),minmax(0,1fr))]" 
+                    className="grid gap-4 md:gap-6 animate-in fade-in grid-cols-2 md:grid-cols-[repeat(var(--cols),minmax(0,1fr))]" 
                     style={{ '--cols': columns } as React.CSSProperties}
                 >
                     {filteredAndSortedCards.map((card) => (
