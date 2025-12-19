@@ -43,6 +43,7 @@ The content is organized as follows:
 .firebaserc
 .gitignore
 app/actions/admin.ts
+app/actions/chat.ts
 app/actions/collection.ts
 app/actions/friends.ts
 app/actions/game.ts
@@ -89,6 +90,7 @@ components/card-page/CardVersionsGrid.tsx
 components/card-page/DualQuantityManager.tsx
 components/CardmarketExportModal.tsx
 components/CardVersionPickerModal.tsx
+components/chat/ChatWindow.tsx
 components/collection/CollectionToolbar.tsx
 components/CollectionToolsModal.tsx
 components/CollectionTransferModal.tsx
@@ -123,6 +125,7 @@ firebase.json
 firestore.indexes.json
 firestore.rules
 hooks/useCardCollection.ts
+hooks/useChat.ts
 hooks/useCollections.ts
 hooks/useColumnPreference.ts
 hooks/useDebounceUpdate.ts
@@ -139,6 +142,7 @@ lib/firebase.ts
 lib/globals.d.ts
 lib/importRules.ts
 lib/services/collectionService.ts
+lib/types/chat.ts
 lib/validators.ts
 next.config.ts
 package.json
@@ -2277,6 +2281,34 @@ export async function moveCardFromWishlistToCollection(
         if (error instanceof Error) msg = error.message;
         return { success: false, error: msg };
     }
+}
+</file>
+
+<file path="lib/types/chat.ts">
+// lib/types/chat.ts
+import { FieldValue, Timestamp } from 'firebase/firestore';
+
+export type ChatType = 'direct' | 'group';
+
+export interface Chat {
+  id: string;
+  type: ChatType;
+  participants: string[];
+  lastMessage?: {
+    text: string;
+    senderId: string;
+    createdAt: Timestamp | FieldValue;
+  };
+  playgroupId?: string; // Optionnel : lien avec un playgroup
+  createdAt: Timestamp | FieldValue;
+}
+
+export interface Message {
+  id?: string;
+  senderId: string;
+  senderName: string;
+  text: string;
+  createdAt: Timestamp | FieldValue;
 }
 </file>
 
@@ -66944,6 +66976,75 @@ export default function ImportModal({ isOpen, onClose, targetCollection = 'colle
 }
 </file>
 
+<file path="app/actions/chat.ts">
+// app/actions/chat.ts
+'use server';
+
+import { getAdminFirestore } from '@/lib/firebase-admin';
+import { FieldValue } from 'firebase-admin/firestore';
+
+export async function getOrCreateDirectChat(uid1: string, uid2: string) {
+  const db = getAdminFirestore();
+  const participants = [uid1, uid2].sort();
+
+  try {
+    const chatsRef = db.collection('chats');
+    
+    // On cherche un chat existant avec ces exacts participants
+    const q = await chatsRef
+      .where('type', '==', 'direct')
+      .where('participants', '==', participants)
+      .limit(1)
+      .get();
+
+    if (!q.empty) {
+      return { success: true, chatId: q.docs[0].id };
+    }
+
+    // CRUCIAL : On crée le document avec le champ 'participants'
+    // sinon les Security Rules bloqueront la lecture côté client.
+    const newChat = await chatsRef.add({
+      type: 'direct',
+      participants: participants, 
+      createdAt: FieldValue.serverTimestamp(),
+      lastMessage: null
+    });
+
+    return { success: true, chatId: newChat.id };
+  } catch (error) {
+    console.error("Erreur action chat:", error);
+    return { success: false };
+  }
+}
+
+export async function sendMessageAction(chatId: string, senderId: string, senderName: string, text: string) {
+  const db = getAdminFirestore();
+  
+  try {
+    const chatRef = db.collection('chats').doc(chatId);
+    const msgRef = chatRef.collection('messages').doc();
+
+    const messageData = {
+      senderId,
+      senderName,
+      text: text.trim(),
+      createdAt: FieldValue.serverTimestamp(),
+    };
+
+    const batch = db.batch();
+    batch.set(msgRef, messageData);
+    // On met à jour le parent pour les listes de discussion
+    batch.update(chatRef, { lastMessage: messageData });
+
+    await batch.commit();
+    return { success: true };
+  } catch (error) {
+    console.error("Erreur envoi message:", error);
+    return { success: false };
+  }
+}
+</file>
+
 <file path="app/actions/collection.ts">
 // app/actions/collection.ts
 'use server';
@@ -67662,6 +67763,83 @@ export default function PrivacyPolicyPage() {
 }
 </file>
 
+<file path="components/chat/ChatWindow.tsx">
+// components/chat/ChatWindow.tsx
+'use client';
+
+import { useState, useRef, useEffect } from 'react';
+import { useAuth } from '@/lib/AuthContext'; // Chemin corrigé selon repomix
+import { useChat } from '@/hooks/useChat';
+import { sendMessageAction } from '@/app/actions/chat';
+
+export default function ChatWindow({ chatId, recipientName }: { chatId: string, recipientName: string }) {
+  const { user } = useAuth();
+  const { messages, loading } = useChat(chatId);
+  const [inputText, setInputText] = useState('');
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    scrollRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
+
+  const handleSend = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!inputText.trim() || !user) return;
+
+    const textToSend = inputText;
+    setInputText(''); 
+    
+    // On utilise le displayName du contexte
+    const name = user.displayName || "Joueur";
+    await sendMessageAction(chatId, user.uid, name, textToSend);
+  };
+
+  return (
+    <div className="flex flex-col h-[450px] bg-surface border border-border rounded-2xl overflow-hidden shadow-xl mb-4 animate-in fade-in slide-in-from-bottom-2">
+      <div className="p-4 border-b border-border bg-secondary/10 flex justify-between items-center">
+        <span className="text-[10px] font-black uppercase tracking-widest text-primary">Chat avec {recipientName}</span>
+      </div>
+
+      <div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar">
+        {loading ? (
+          <div className="flex flex-col items-center justify-center h-full space-y-2">
+            <div className="w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+            <span className="text-[9px] font-bold text-muted uppercase">Canal sécurisé...</span>
+          </div>
+        ) : (
+          messages.map((msg, i) => {
+            const isMe = msg.senderId === user?.uid;
+            return (
+              <div key={i} className={`flex ${isMe ? 'justify-end' : 'justify-start'}`}>
+                <div className={`max-w-[80%] p-3 rounded-2xl text-[11px] font-bold shadow-sm ${
+                  isMe ? 'bg-primary text-white rounded-tr-none' : 'bg-background border border-border text-foreground rounded-tl-none'
+                }`}>
+                  <p>{msg.text}</p>
+                </div>
+              </div>
+            );
+          })
+        )}
+        <div ref={scrollRef} />
+      </div>
+
+      <form onSubmit={handleSend} className="p-3 bg-background border-t border-border flex gap-2">
+        <input
+          type="text"
+          value={inputText}
+          onChange={(e) => setInputText(e.target.value)}
+          placeholder="Écrire un message..."
+          className="flex-1 p-2.5 bg-secondary/20 border border-border rounded-xl text-xs font-bold outline-none focus:ring-1 focus:ring-primary"
+        />
+        <button type="submit" className="bg-primary text-white px-4 rounded-xl font-black text-[10px] uppercase transition-transform active:scale-95">
+          OK
+        </button>
+      </form>
+    </div>
+  );
+}
+</file>
+
 <file path="components/collection/CollectionToolbar.tsx">
 // components/collection/CollectionToolbar.tsx
 'use client';
@@ -68095,6 +68273,55 @@ export default function TradeSourceTable({
             </table>
         </div>
     );
+}
+</file>
+
+<file path="hooks/useChat.ts">
+// hooks/useChat.ts
+import { useState, useEffect } from 'react';
+import { db } from '@/lib/firebase'; // Vérifiez bien ce chemin vers votre config client
+import { collection, query, orderBy, limit, onSnapshot } from 'firebase/firestore';
+import { Message } from '@/lib/types/chat';
+
+export function useChat(chatId: string | null) {
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!chatId) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setLoading(false);
+      return;
+    }
+
+    setLoading(true);
+    
+    // Référence à la sous-collection : chats/{chatId}/messages
+    const messagesRef = collection(db, 'chats', chatId, 'messages');
+    const q = query(messagesRef, orderBy('createdAt', 'asc'), limit(100));
+
+    const unsubscribe = onSnapshot(q, 
+      (snapshot) => {
+        const msgs = snapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        } as Message));
+        setMessages(msgs);
+        setLoading(false);
+        setError(null);
+      },
+      (err) => {
+        console.error("Erreur Firestore Chat:", err);
+        setError(err.message);
+        setLoading(false);
+      }
+    );
+
+    return () => unsubscribe();
+  }, [chatId]);
+
+  return { messages, loading, error };
 }
 </file>
 
@@ -72806,239 +73033,6 @@ export default function TradeHistoryPage() {
 }
 </file>
 
-<file path="firestore.rules">
-'use client';
-
-import { useState, useEffect } from 'react';
-import { motion } from 'framer-motion';
-import { Trophy, Search, Users, Star, TrendingUp } from 'lucide-react';
-import { db } from '@/lib/firebase/config';
-import { collection, getDocs, query, where, orderBy, limit, doc, setDoc } from 'firebase/firestore';
-import PantheonRow from '@/components/pantheon/PantheonRow';
-import { useAuth } from '@/context/AuthContext';
-import { Input } from '@/components/ui/input';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { toast } from 'sonner';
-
-// Définition stricte du type utilisateur pour éviter 'any'
-interface PantheonUser {
-  id: string;
-  displayName?: string;
-  photoURL?: string;
-  cardCount: number;
-  totalValue?: number;
-  isCollectionPublic: boolean;
-  rank?: number;
-  // Ajoute d'autres propriétés si nécessaire selon ton schéma Firestore
-}
-
-export default function PantheonPage() {
-  const { user } = useAuth();
-  const [users, setUsers] = useState<PantheonUser[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [searchTerm, setSearchTerm] = useState('');
-  const [sortBy, setSortBy] = useState('cards'); // 'cards' | 'value'
-
-  useEffect(() => {
-    const fetchUsers = async () => {
-      try {
-        const q = query(
-          collection(db, 'users'),
-          where('cardCount', '>', 0),
-          orderBy('cardCount', 'desc'),
-          limit(50)
-        );
-        
-        const querySnapshot = await getDocs(q);
-        const usersData = querySnapshot.docs.map(doc => ({
-          id: doc.id,
-          ...doc.data()
-        })) as PantheonUser[];
-
-        setUsers(usersData);
-      } catch (error) {
-        console.error('Error fetching pantheon:', error);
-        toast.error('Erreur lors du chargement du panthéon');
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchUsers();
-  }, []);
-
-  const handleUpdateVisibility = async (userId: string, isPublic: boolean) => {
-    // 1. Sauvegarder l'état précédent pour le rollback en cas d'erreur
-    const previousUsers = [...users];
-
-    // 2. Mise à jour Optimiste : on met à jour l'UI immédiatement
-    setUsers(prevUsers => prevUsers.map(user => 
-      user.id === userId 
-        ? { ...user, isCollectionPublic: isPublic }
-        : user
-    ));
-
-    try {
-      const userRef = doc(db, 'users', userId);
-      
-      // 3. Utilisation de setDoc avec merge: true pour éviter l'erreur "No document to update"
-      // Si le document n'existe pas, il sera créé avec ce champ uniquement.
-      // S'il existe, seul le champ isCollectionPublic sera mis à jour.
-      await setDoc(userRef, {
-        isCollectionPublic: isPublic
-      }, { merge: true });
-
-      toast.success(isPublic ? 'Collection rendue publique' : 'Collection rendue privée');
-    } catch (error) {
-      console.error('Error updating visibility:', error);
-      
-      // 4. Rollback : on rétablit l'état précédent en cas d'erreur
-      setUsers(previousUsers);
-      toast.error('Impossible de modifier la visibilité');
-    }
-  };
-
-  const filteredUsers = users
-    .filter(u => u.displayName?.toLowerCase().includes(searchTerm.toLowerCase()))
-    .sort((a, b) => {
-      if (sortBy === 'value') {
-        return (b.totalValue || 0) - (a.totalValue || 0);
-      }
-      return b.cardCount - a.cardCount;
-    });
-
-  if (loading) {
-    return (
-      <div className="min-h-screen pt-24 pb-12 flex justify-center items-center">
-        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-primary"></div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="min-h-screen pt-24 pb-12 px-4 sm:px-6 lg:px-8 bg-background">
-      <div className="max-w-7xl mx-auto space-y-8">
-        {/* Header */}
-        <div className="text-center space-y-4">
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="flex items-center justify-center gap-3"
-          >
-            <Trophy className="w-10 h-10 text-yellow-500" />
-            <h1 className="text-4xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-yellow-500 to-amber-600">
-              Panthéon des Collectionneurs
-            </h1>
-          </motion.div>
-          <p className="text-muted-foreground max-w-2xl mx-auto">
-            Découvrez les plus grandes collections de la communauté MagicWish.
-            Classement basé sur le nombre de cartes et la rareté.
-          </p>
-        </div>
-
-        {/* Stats Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.1 }}
-            className="bg-card border border-border/50 rounded-xl p-6 shadow-sm"
-          >
-            <div className="flex items-center gap-4">
-              <div className="p-3 bg-primary/10 rounded-lg">
-                <Users className="w-6 h-6 text-primary" />
-              </div>
-              <div>
-                <p className="text-sm text-muted-foreground">Collectionneurs</p>
-                <p className="text-2xl font-bold">{users.length}</p>
-              </div>
-            </div>
-          </motion.div>
-
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.2 }}
-            className="bg-card border border-border/50 rounded-xl p-6 shadow-sm"
-          >
-            <div className="flex items-center gap-4">
-              <div className="p-3 bg-yellow-500/10 rounded-lg">
-                <Star className="w-6 h-6 text-yellow-500" />
-              </div>
-              <div>
-                <p className="text-sm text-muted-foreground">Top Collection</p>
-                <p className="text-2xl font-bold">
-                  {users[0]?.cardCount || 0} cartes
-                </p>
-              </div>
-            </div>
-          </motion.div>
-
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.3 }}
-            className="bg-card border border-border/50 rounded-xl p-6 shadow-sm"
-          >
-            <div className="flex items-center gap-4">
-              <div className="p-3 bg-green-500/10 rounded-lg">
-                <TrendingUp className="w-6 h-6 text-green-500" />
-              </div>
-              <div>
-                <p className="text-sm text-muted-foreground">Valeur Totale</p>
-                <p className="text-2xl font-bold">Soon</p>
-              </div>
-            </div>
-          </motion.div>
-        </div>
-
-        {/* Filters */}
-        <div className="flex flex-col sm:flex-row gap-4 justify-between items-center bg-card p-4 rounded-xl border border-border/50">
-          <div className="relative w-full sm:w-96">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-            <Input
-              placeholder="Rechercher un collectionneur..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="pl-9"
-            />
-          </div>
-          
-          <Select value={sortBy} onValueChange={setSortBy}>
-            <SelectTrigger className="w-full sm:w-[200px]">
-              <SelectValue placeholder="Trier par" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="cards">Nombre de cartes</SelectItem>
-              <SelectItem value="value">Valeur estimée</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-
-        {/* List */}
-        <div className="space-y-4">
-          {filteredUsers.map((pantheonUser, index) => (
-            <PantheonRow
-              key={pantheonUser.id}
-              user={pantheonUser}
-              rank={index + 1}
-              isCurrentUser={user?.uid === pantheonUser.id}
-              onUpdateVisibility={handleUpdateVisibility}
-            />
-          ))}
-          
-          {filteredUsers.length === 0 && (
-            <div className="text-center py-12 text-muted-foreground">
-              Aucun collectionneur trouvé
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-</file>
-
 <file path="hooks/useFriends.ts">
 // hooks/useFriends.ts
 import { useState, useEffect } from 'react';
@@ -73820,6 +73814,169 @@ export default function GlobalWishlistView({ lists }: Props) {
             )}
         </div>
     );
+}
+</file>
+
+<file path="firestore.rules">
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isAdmin() {
+      return isAuthenticated() && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isFriend(userId) {
+      return exists(/databases/$(database)/documents/users/$(userId)/friends/$(request.auth.uid));
+    }
+
+    // --- RÈGLES GLOBALES ---
+
+    match /admins/{userId} {
+      allow read: if isAuthenticated();
+      allow write: if false; 
+    }
+
+    match /app_feedback/{feedbackId} {
+      allow read, update, delete: if isAdmin();
+      allow create: if isAuthenticated() && request.resource.data.uid == request.auth.uid;
+    }
+
+    match /{path=**}/public_profile/{docId} {
+      allow read: if isAuthenticated();
+    }
+
+    match /usernames/{username} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() 
+                    && request.resource.data.uid == request.auth.uid
+                    && !exists(/databases/$(database)/documents/usernames/$(username));
+      allow update, delete: if false;
+    }
+
+    match /games/{gameId} {
+        allow read: if isAuthenticated();
+        allow create: if isAuthenticated(); 
+    }
+
+    // --- RÈGLES UTILISATEURS ---
+
+    match /users/{userId} {
+      // CHANGEMENT ICI :
+      // allow read: if isAuthenticated(); -> Tout le monde peut voir les infos de base (pour le Panthéon)
+      // allow write: if isOwner(userId); -> Seul moi peut modifier mon profil
+      allow read: if isAuthenticated();
+      allow write: if isOwner(userId);
+
+      // Ces sous-collections restent protégées ou semi-publiques selon le besoin
+      match /public_profile/info {
+        allow read: if isAuthenticated();
+        allow write: if isOwner(userId);
+      }
+      
+      match /public_profile/stats {
+        allow read: if isAuthenticated();
+        allow write: if isOwner(userId) || isAdmin();
+      }
+
+      // Ancienne collection (compatibilité)
+      match /collection/{cardId} {
+        allow read: if isOwner(userId) || isFriend(userId); 
+        allow write: if isOwner(userId);
+      }
+
+      match /wishlist/{cardId} {
+        allow read: if isOwner(userId) || isFriend(userId); 
+        allow write: if isOwner(userId);
+      }
+
+      // --- NOUVELLES RÈGLES POUR LES COLLECTIONS MULTIPLES ---
+      match /collections_meta/{listId} {
+        allow read: if isOwner(userId) || isFriend(userId);
+        allow write: if isOwner(userId);
+      }
+      
+      match /collections_data/{listId}/cards/{cardId} {
+        allow read: if isOwner(userId) || isFriend(userId);
+        allow write: if isOwner(userId);
+      }
+      // -------------------------------------------------------
+
+      // --- NOUVELLES RÈGLES POUR LES WISHLISTS MULTIPLES ---
+      match /wishlists_meta/{listId} {
+        allow read: if isOwner(userId) || isFriend(userId);
+        allow write: if isOwner(userId);
+      }
+      
+      match /wishlists_data/{listId}/cards/{cardId} {
+        allow read: if isOwner(userId) || isFriend(userId);
+        allow write: if isOwner(userId);
+      }
+      // -----------------------------------------------------
+
+      match /friends/{friendId} {
+        allow read, write: if isOwner(userId);
+        allow delete: if isOwner(userId) || request.auth.uid == friendId;
+      }
+
+      match /friend_requests_received/{senderId} {
+        allow read: if isOwner(userId);
+        allow write: if isAuthenticated() && request.resource.data.uid == request.auth.uid && request.auth.uid == senderId;
+        allow delete: if isOwner(userId) || request.auth.uid == senderId;
+      }
+      
+      match /notifications/{notifId} {
+        allow create, write, delete: if isAdmin(); 
+        allow read: if isOwner(userId); 
+      }
+    }
+
+    match /trades/{tradeId} {
+      allow read: if isAdmin() || (isAuthenticated() && (resource.data.senderUid == request.auth.uid || resource.data.receiverUid == request.auth.uid));
+      allow create: if isAuthenticated() && request.resource.data.senderUid == request.auth.uid;
+      allow delete: if isAdmin(); 
+      allow update: if isAdmin() 
+        || (
+        isAuthenticated() 
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status'])
+        && (
+          (resource.data.senderUid == request.auth.uid && request.resource.data.status == 'cancelled') ||
+          (resource.data.receiverUid == request.auth.uid && request.resource.data.status == 'rejected')
+        )
+      );
+    }
+
+    match /groups/{groupId} {
+      allow read: if isAuthenticated() && request.auth.uid in resource.data.members;
+      allow create: if isAuthenticated() && request.resource.data.ownerUid == request.auth.uid;
+      allow update: if false; 
+      allow delete: if isAuthenticated() && resource.data.ownerUid == request.auth.uid;
+    }
+    
+    // --- RÈGLES DE CHAT ---
+    match /chats/{chatId} {
+      // Lecture autorisée si l'UID est dans le tableau participants
+      allow read: if isAuthenticated() && request.auth.uid in resource.data.participants;
+      
+      match /messages/{messageId} {
+        // Autorise la lecture si l'utilisateur est participant du chat PARENT
+        allow read: if isAuthenticated() && 
+          request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants;
+        
+        // Autorise l'écriture si l'utilisateur est participant
+        allow create: if isAuthenticated() && 
+          request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants;
+      }
+    }
+  }
 }
 </file>
 
@@ -75311,168 +75468,6 @@ export default function SingleWishlistView({ listId, listName, onRename }: Props
 }
 </file>
 
-<file path="app/contacts/page.tsx">
-// app/contacts/page.tsx
-'use client';
-
-import { useState, useEffect } from 'react';
-import Link from 'next/link';
-import Image from 'next/image';
-import { useAuth } from '@/lib/AuthContext';
-import { useFriends, FriendProfile } from '@/hooks/useFriends';
-import toast from 'react-hot-toast';
-import { Search, UserPlus, Eye, X, UserMinus, Check } from 'lucide-react';
-
-const PLANESWALKERS = ["Jace", "Liliana", "Chandra", "Ajani", "Garruk", "Teferi", "Nissa", "Gideon"];
-
-export default function ContactsPage() {
-  const { user } = useAuth();
-  const { 
-    friends, requestsReceived, loading,
-    searchUsers, sendFriendRequest, acceptRequest, declineRequest, removeFriend
-  } = useFriends();
-
-  const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState<FriendProfile[]>([]);
-  const [isSearching, setIsSearching] = useState(false);
-  const [randomPlaceholder, setRandomPlaceholder] = useState("Chercher...");
-
-  useEffect(() => {
-    const randomName = PLANESWALKERS[Math.floor(Math.random() * PLANESWALKERS.length)];
-    setRandomPlaceholder(`@${randomName.toLowerCase()}...`);
-  }, []);
-
-  if (!user) return <div className="p-10 text-center text-muted font-bold uppercase text-xs">Veuillez vous connecter.</div>;
-
-  const handleSearch = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!searchQuery.trim()) return;
-    setIsSearching(true);
-    try {
-      const results = await searchUsers(searchQuery);
-      setSearchResults(results);
-      if (results.length === 0) toast("Aucun utilisateur trouvé");
-    } catch (err) { console.error(err); toast.error("Erreur recherche"); }
-    finally { setIsSearching(false); }
-  };
-
-  return (
-    <main className="container mx-auto p-4 max-w-5xl min-h-[80vh] pb-32">
-      <h1 className="text-3xl font-black mb-8 text-foreground uppercase tracking-tighter">Mes Contacts</h1>
-
-      <div className="grid md:grid-cols-2 gap-6 items-start">
-        
-        {/* RECHERCHE */}
-        <div className="bg-surface p-5 rounded-2xl shadow-sm border border-border">
-          <h2 className="font-black text-[10px] uppercase tracking-[0.2em] mb-4 text-muted flex items-center gap-2">
-            <Search className="w-3 h-3" /> Chercher un ami
-          </h2>
-          <form onSubmit={handleSearch} className="flex gap-2 mb-4">
-            <input 
-              type="text" 
-              placeholder={randomPlaceholder} 
-              className="grow p-3 border border-border rounded-xl bg-background text-foreground outline-none focus:ring-2 focus:ring-primary font-bold text-sm lowercase"
-              value={searchQuery}
-              onChange={e => setSearchQuery(e.target.value.toLowerCase())}
-            />
-            <button type="submit" disabled={isSearching} className="bg-primary text-white px-5 rounded-xl font-black uppercase text-[10px] tracking-widest disabled:opacity-50 transition-transform active:scale-95">
-              {isSearching ? '...' : 'OK'}
-            </button>
-          </form>
-          
-          <div className="space-y-2">
-            {searchResults.map(result => (
-              <div key={result.uid} className="flex items-center justify-between bg-background p-3 rounded-xl border border-border animate-in fade-in">
-                <div className="flex items-center gap-3 min-w-0">
-                  <div className="w-8 h-8 rounded-full bg-primary flex items-center justify-center text-white font-black text-xs shrink-0 overflow-hidden relative">
-                    {result.photoURL ? <Image src={result.photoURL} alt="" fill className="object-cover" /> : result.username[0].toUpperCase()}
-                  </div>
-                  <p className="font-bold text-xs truncate">@{result.username}</p>
-                </div>
-                <button onClick={() => sendFriendRequest(result)} className="p-2 bg-primary text-white rounded-lg transition-transform active:scale-90 shadow-sm" title="Ajouter">
-                  <UserPlus className="w-4 h-4" />
-                </button>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* LISTE D'AMIS */}
-        <div className="bg-surface p-5 rounded-2xl shadow-sm border border-border">
-          <h2 className="font-black text-[10px] uppercase tracking-[0.2em] mb-6 text-muted">Mes Amis ({friends.length})</h2>
-
-          {/* Demandes reçues */}
-          {requestsReceived.length > 0 && (
-            <div className="mb-8 space-y-2">
-              <p className="text-[9px] font-black text-orange-500 uppercase tracking-widest mb-2">Demandes en attente</p>
-              {requestsReceived.map(req => (
-                <div key={req.uid} className="flex items-center justify-between p-3 bg-orange-50/50 dark:bg-orange-950/10 border border-orange-200 dark:border-orange-900/30 rounded-xl">
-                  <p className="font-bold text-xs truncate grow mr-2">@{req.username}</p>
-                  <div className="flex gap-1 shrink-0">
-                    <button onClick={() => acceptRequest(req)} className="w-8 h-8 bg-success text-white rounded-lg flex items-center justify-center"><Check className="w-4 h-4" /></button>
-                    <button onClick={() => declineRequest(req.uid)} className="w-8 h-8 bg-danger text-white rounded-lg flex items-center justify-center"><X className="w-4 h-4" /></button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* Liste principale */}
-          <div className="grid gap-3">
-            {loading ? (
-              <p className="text-muted text-[10px] font-bold uppercase p-4 text-center animate-pulse tracking-widest">Chargement...</p>
-            ) : friends.length === 0 ? (
-              <p className="text-muted italic text-[10px] p-8 text-center bg-background rounded-xl border border-dashed border-border uppercase">Aucun ami.</p>
-            ) : (
-              friends.map(friend => (
-                <div key={friend.uid} className="flex flex-col p-4 bg-background rounded-2xl border border-border hover:border-primary/40 transition-all gap-4 shadow-xs">
-                  
-                  {/* Ligne 1 : Profil et Suppression Rapide */}
-                  <div className="flex items-center justify-between min-w-0">
-                    <div className="flex items-center gap-3 min-w-0">
-                      <div className="w-10 h-10 rounded-full bg-secondary border border-border shrink-0 overflow-hidden relative shadow-sm">
-                        {friend.photoURL && <Image src={friend.photoURL} alt="" fill className="object-cover" sizes="40px" />}
-                      </div>
-                      <div className="min-w-0">
-                        <p className="font-black text-sm text-foreground truncate tracking-tight">{friend.displayName}</p>
-                        <p className="text-[10px] text-primary font-black uppercase tracking-tighter">@{friend.username}</p>
-                      </div>
-                    </div>
-                    <button 
-                      onClick={() => removeFriend(friend.uid)} 
-                      className="w-8 h-8 flex items-center justify-center text-muted hover:text-danger transition-colors"
-                      title="Retirer des amis"
-                    >
-                      <UserMinus className="w-4 h-4" />
-                    </button>
-                  </div>
-
-                  {/* Ligne 2 : Actions Stacking (Comme Playgroup) */}
-                  <div className="flex items-center gap-2">
-                    <Link 
-                      href={`/user/${friend.uid}`} 
-                      className="flex-1 flex items-center justify-center gap-2 text-[10px] bg-secondary text-foreground py-2.5 rounded-xl font-black uppercase tracking-tighter border border-border/50 hover:bg-border transition-colors"
-                    >
-                      <Eye className="w-3.5 h-3.5" /> Voir
-                    </Link>
-                    <Link 
-                      href={`/trades/new/${friend.uid}`} 
-                      className="flex-1 flex items-center justify-center gap-2 text-[10px] bg-primary text-white py-2.5 rounded-xl font-black uppercase tracking-tighter shadow-sm active:scale-95 transition-transform"
-                    >
-                        Échanger
-                    </Link>
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
-        </div>
-      </div>
-    </main>
-  );
-}
-</file>
-
 <file path="app/search/page.tsx">
 'use client';
 
@@ -75785,6 +75780,338 @@ export default function SearchPage() {
       />
     </main>
   );
+}
+</file>
+
+<file path="app/wishlist/page.tsx">
+// app/wishlist/page.tsx
+'use client';
+
+import { useState, useMemo, useEffect, Suspense } from 'react';
+import { useAuth } from '@/lib/AuthContext';
+import { useWishlists } from '@/hooks/useWishlists';
+import { useCardCollection, CardType } from '@/hooks/useCardCollection';
+import { useSearchParams } from 'next/navigation';
+import { useColumnPreference } from '@/hooks/useColumnPreference';
+import { useSortPreference, SortOption } from '@/hooks/useSortPreference';
+import { moveCardFromWishlistToCollection } from '@/lib/services/collectionService';
+
+// Composants
+import MagicCard from '@/components/MagicCard';
+import GlobalWishlistView from '@/components/wishlist/GlobalWishlistView';
+import DataTransferHubModal from '@/components/DataTransferHubModal'; 
+import ImportModal from '@/components/ImportModal';
+import ExportModal from '@/components/ExportModal';
+import CollectionToolbar from '@/components/collection/CollectionToolbar';
+import CardListFilterBar from '@/components/common/CardListFilterBar';
+import ConfirmModal from '@/components/ConfirmModal';
+import toast from 'react-hot-toast';
+
+const ITEMS_PER_PAGE = 50;
+
+function WishlistContent() {
+  const { user } = useAuth();
+  const searchParams = useSearchParams();
+  
+  const selectedListId = searchParams.get('listId') || 'default';
+  const { lists, renameList, deleteList, loading: metaLoading } = useWishlists();
+
+  const { 
+      cards, loading, updateQuantity, removeCard, toggleAttribute, 
+      bulkRemoveCards, totalPrice 
+  } = useCardCollection('wishlist', selectedListId);
+
+  const [isHubOpen, setIsHubOpen] = useState(false);
+  const [isImportOpen, setIsImportOpen] = useState(false);
+  const [isExportOpen, setIsExportOpen] = useState(false);
+  
+  const [cardToDelete, setCardToDelete] = useState<string | null>(null);
+  const [listToDelete, setListToDelete] = useState<string | null>(null);
+
+  const [isRenaming, setIsRenaming] = useState(false);
+  const [renameValue, setRenameValue] = useState('');
+
+  const [isSelectMode, setIsSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [visibleCount, setVisibleCount] = useState(ITEMS_PER_PAGE);
+  const { columns, setColumns } = useColumnPreference('mw_cols_wishlist', 5);
+
+  const [searchQuery, setSearchQuery] = useState('');
+  const { sortBy, setSortBy } = useSortPreference('mw_sort_wishlist', 'date_desc' as SortOption); 
+  const [filterSet, setFilterSet] = useState<string>('all');
+  const [filterFoil, setFilterFoil] = useState(false);
+  const [minPriceFilter, setMinPriceFilter] = useState<string>('');
+  const [maxPriceFilter, setMaxPriceFilter] = useState<string>('');
+  const [filterCMC, setFilterCMC] = useState<string>('');
+  const [filterColors, setFilterColors] = useState<string[]>([]);
+
+  const currentListName = useMemo(() => {
+    return lists.find(l => l.id === selectedListId)?.name || 'Liste principale';
+  }, [lists, selectedListId]);
+
+  useEffect(() => {
+      setRenameValue(currentListName);
+  }, [currentListName]);
+
+  const closeAllModals = () => {
+    setIsHubOpen(false);
+    setIsImportOpen(false);
+    setIsExportOpen(false);
+  };
+  const openHub = () => {
+    setIsImportOpen(false);
+    setIsExportOpen(false);
+    setIsHubOpen(true);
+  };
+
+  const handleSelectImport = () => {
+    setIsHubOpen(false);
+    setIsImportOpen(true);
+  };
+  
+  const handleSelectExport = () => {
+    setIsHubOpen(false);
+    setIsExportOpen(true);
+  };
+
+  const handleRenameSubmit = async (e: React.FormEvent) => {
+      e.preventDefault();
+      if (renameValue.trim() && selectedListId !== 'default' && selectedListId !== 'GLOBAL_VIEW') {
+          await renameList(selectedListId, renameValue.trim());
+          setIsRenaming(false);
+      }
+  };
+
+  const handleDeleteCurrentList = async () => {
+      if (listToDelete) {
+          await deleteList(listToDelete);
+          setListToDelete(null);
+          window.location.href = '/wishlist';
+      }
+  };
+
+  const moveToCollection = async (card: CardType) => {
+    if (!user) return;
+    const toastId = toast.loading("Déplacement...");
+    const result = await moveCardFromWishlistToCollection(user.uid, card, selectedListId);
+    if (result.success) {
+        toast.success("Ajoutée à la collection !", { id: toastId });
+    } else {
+        toast.error(result.error || "Erreur technique", { id: toastId });
+    }
+  };
+
+  const filteredAndSortedCards = useMemo(() => {
+    let result = [...cards];
+    const minPrice = parseFloat(minPriceFilter);
+    const maxPrice = parseFloat(maxPriceFilter);
+
+    if (searchQuery) {
+        const lowerQ = searchQuery.toLowerCase();
+        result = result.filter(c => c.name.toLowerCase().includes(lowerQ));
+    }
+    if (filterSet !== 'all') result = result.filter(c => c.setName === filterSet);
+    if (filterFoil) result = result.filter(c => c.isFoil);
+    
+    if (!isNaN(minPrice) || !isNaN(maxPrice)) {
+        result = result.filter(c => {
+            const cardPrice = c.price ?? 0;
+            const isAboveMin = isNaN(minPrice) || cardPrice >= minPrice;
+            const isBelowMax = isNaN(maxPrice) || cardPrice <= maxPrice;
+            return isAboveMin && isBelowMax;
+        });
+    }
+
+    if (filterCMC) { 
+        const t = parseFloat(filterCMC); 
+        if (!isNaN(t)) result = result.filter(c => c.cmc === t); 
+    }
+
+    if (filterColors.length > 0) {
+        result = result.filter(c => {
+            if (!c.colors || c.colors.length === 0) return filterColors.includes('C');
+            return c.colors.every(col => filterColors.includes(col));
+        });
+    }
+
+    result.sort((a, b) => {
+        const priceA = a.price ?? 0;
+        const priceB = b.price ?? 0;
+        const dateA = a.lastPriceUpdate ? new Date(a.lastPriceUpdate).getTime() : 0;
+        const dateB = b.lastPriceUpdate ? new Date(b.lastPriceUpdate).getTime() : 0;
+        
+        switch (sortBy) {
+            case 'name_asc': return a.name.localeCompare(b.name);
+            case 'name_desc': return b.name.localeCompare(a.name);
+            case 'price_asc': return priceA - priceB;
+            case 'price_desc': return priceB - priceA;
+            case 'date_asc': return dateA - dateB;
+            case 'date_desc': return dateB - dateA;
+            case 'quantity_asc': return a.quantity - b.quantity;
+            case 'quantity_desc': return b.quantity - a.quantity;
+            case 'cmc_asc': return (a.cmc ?? 0) - (b.cmc ?? 0);
+            case 'cmc_desc': return (b.cmc ?? 0) - (a.cmc ?? 0);
+            default: return 0;
+        }
+    });
+
+    return result;
+  }, [cards, searchQuery, sortBy, filterSet, filterFoil, minPriceFilter, maxPriceFilter, filterCMC, filterColors]);
+
+  const visibleCards = filteredAndSortedCards.slice(0, visibleCount);
+
+  const toggleSelection = (id: string) => {
+      setSelectedIds(prev => prev.includes(id) ? prev.filter(pid => pid !== id) : [...prev, id]);
+  };
+
+  const handleSelectAll = () => {
+      if (selectedIds.length === filteredAndSortedCards.length) setSelectedIds([]); 
+      else setSelectedIds(filteredAndSortedCards.map(c => c.id)); 
+  };
+
+  const handleBulkDelete = async () => {
+      if (!confirm(`Supprimer ces ${selectedIds.length} cartes ?`)) return;
+      await bulkRemoveCards(selectedIds);
+      setSelectedIds([]);
+      setIsSelectMode(false);
+  };
+
+  if (!user) return <p className="p-10 text-center text-muted font-bold uppercase text-xs">Veuillez vous connecter.</p>;
+  
+  if (selectedListId === 'GLOBAL_VIEW') {
+      return (
+        <main className="container mx-auto p-4 min-h-[85vh]">
+            <div className="flex justify-end mb-4">
+                 <button onClick={openHub} className="btn-primary text-xs tracking-widest uppercase">Importer/Exporter</button>
+            </div>
+            <GlobalWishlistView lists={lists} />
+            <DataTransferHubModal isOpen={isHubOpen} onClose={closeAllModals} onSelectImport={handleSelectImport} onSelectExport={handleSelectExport} targetLabel="Wishlist" />
+        </main>
+      );
+  }
+
+  if (loading && metaLoading) return <div className="flex h-screen items-center justify-center text-muted animate-pulse font-bold uppercase text-xs">Chargement...</div>;
+
+  return (
+    <main className="container mx-auto p-4 pb-24 relative">
+      <div className="flex justify-between items-center mb-6">
+          <div className="overflow-hidden grow pr-4">
+              {isRenaming ? (
+                  <form onSubmit={handleRenameSubmit} className="flex items-center gap-2">
+                      <input type="text" value={renameValue} onChange={(e) => setRenameValue(e.target.value)} className="text-2xl font-black text-foreground bg-background border border-border rounded-xl px-2 py-1 outline-none focus:ring-2 focus:ring-primary w-full max-w-md" autoFocus />
+                      <button type="submit" className="bg-success-vif text-white px-3 py-1 rounded-lg font-bold text-sm uppercase">OK</button>
+                  </form>
+              ) : (
+                  <div>
+                      <h1 className="text-2xl md:text-3xl font-black text-foreground truncate uppercase tracking-tighter">
+                          {currentListName} <span className="text-base font-bold text-muted">({filteredAndSortedCards.length})</span>
+                      </h1>
+                      {selectedListId !== 'default' && (
+                          <button onClick={() => setListToDelete(selectedListId)} className="text-[10px] font-black text-danger hover:underline mt-1 block uppercase tracking-widest">Supprimer la liste</button>
+                      )}
+                  </div>
+              )}
+          </div>
+          <div className="shrink-0 bg-primary text-primary-foreground px-4 py-2 rounded-xl shadow-sm text-right">
+              <span className="text-[8px] uppercase tracking-widest font-black opacity-80 block mb-0.5">Valeur Totale</span>
+              <span className="font-black text-sm whitespace-nowrap">{totalPrice.toFixed(2)} EUR</span>
+          </div>
+      </div>
+
+      <CollectionToolbar
+          isSelectMode={isSelectMode}
+          setIsSelectMode={setIsSelectMode}
+          onOpenHub={openHub}
+          onOpenTools={() => {}} // Pas d'outils spécifiques wishlist pour l'instant
+      />
+
+      <CardListFilterBar
+        context="wishlist"
+        cards={cards}
+        searchQuery={searchQuery}
+        setSearchQuery={setSearchQuery}
+        sortBy={sortBy}
+        setSortBy={setSortBy}
+        filterSet={filterSet}
+        setFilterSet={setFilterSet}
+        filterTrade={false}
+        setFilterTrade={() => {}}
+        filterFoil={filterFoil}
+        setFilterFoil={setFilterFoil}
+        minPriceFilter={minPriceFilter}
+        setMinPriceFilter={setMinPriceFilter}
+        maxPriceFilter={maxPriceFilter}
+        setMaxPriceFilter={setMaxPriceFilter}
+        filterCMC={filterCMC}
+        setFilterCMC={setFilterCMC}
+        filterColors={filterColors}
+        setFilterColors={setFilterColors}
+        columns={columns} 
+        setColumns={setColumns}
+        hideSliderOnMobile={true}
+      />
+
+      {isSelectMode && (
+          <div className="mb-4 flex items-center justify-between bg-primary/10 p-3 rounded-xl border border-primary/30 animate-in fade-in">
+              <span className="font-bold text-primary pl-2 uppercase text-xs tracking-widest">{selectedIds.length} carte(s) sélectionnée(s)</span>
+              <button onClick={handleSelectAll} className="text-xs text-primary font-black px-3 py-1 rounded-lg hover:bg-primary/10 transition uppercase">Tout sélectionner</button>
+          </div>
+      )}
+
+      {filteredAndSortedCards.length === 0 ? (
+        <div className="text-center py-20 bg-secondary/50 rounded-3xl border-2 border-dashed border-border shadow-inner">
+          <p className="text-sm font-bold text-muted mb-4 uppercase italic">La liste est vide.</p>
+        </div>
+      ) : (
+        <>
+            <div 
+                className="grid gap-4 md:gap-6 grid-cols-2 md:grid-cols-[repeat(var(--cols),minmax(0,1fr))]" 
+                style={{ '--cols': columns } as React.CSSProperties}
+            >
+                {visibleCards.map((card) => (
+                    <MagicCard 
+                        key={card.id}
+                        {...card}
+                        isWishlist={true}
+                        onIncrement={() => updateQuantity(card.id, 1, card.quantity)}
+                        onDecrement={() => card.quantity <= 1 ? setCardToDelete(card.id) : updateQuantity(card.id, -1, card.quantity)}
+                        onMove={() => moveToCollection(card)}
+                        onToggleAttribute={(field, val) => toggleAttribute(card.id, field, val)}
+                        isSelectMode={isSelectMode}
+                        isSelected={selectedIds.includes(card.id)}
+                        onSelect={() => toggleSelection(card.id)}
+                    />
+                ))}
+            </div>
+            {filteredAndSortedCards.length > visibleCount && (
+                <div className="mt-8 flex justify-center pb-10">
+                    <button onClick={() => setVisibleCount(prev => prev + ITEMS_PER_PAGE)} className="bg-surface hover:bg-secondary text-foreground border border-border px-8 py-3 rounded-2xl font-black shadow-sm transition flex items-center gap-2 uppercase text-xs tracking-widest">Afficher plus</button>
+                </div>
+            )}
+        </>
+      )}
+
+      {isSelectMode && selectedIds.length > 0 && (
+          <div className="fixed bottom-6 left-4 right-4 md:left-1/2 md:right-auto md:-translate-x-1/2 bg-surface shadow-2xl border border-border p-2 rounded-2xl flex items-center justify-around gap-2 z-50 animate-in slide-in-from-bottom-6 duration-300">
+              <button onClick={handleBulkDelete} className="px-4 py-2 bg-danger hover:bg-red-600 text-white rounded-xl text-xs font-black transition flex flex-col items-center leading-none gap-1 shadow-md w-full uppercase"><span>Supprimer {selectedIds.length} cartes</span></button>
+          </div>
+      )}
+
+      <DataTransferHubModal isOpen={isHubOpen} onClose={closeAllModals} onSelectImport={handleSelectImport} onSelectExport={handleSelectExport} targetLabel="Wishlist" />
+      <ImportModal isOpen={isImportOpen} onClose={closeAllModals} onGoBack={openHub} onCloseAll={closeAllModals} targetCollection="wishlist" listId={selectedListId} />
+      <ExportModal isOpen={isExportOpen} onClose={closeAllModals} onGoBack={openHub} onCloseAll={closeAllModals} cards={cards} listName={currentListName} targetType="wishlist" />
+      <ConfirmModal isOpen={!!cardToDelete} onClose={() => setCardToDelete(null)} onConfirm={() => { if(cardToDelete) removeCard(cardToDelete); }} title="Retirer ?" message="Cette carte sera retirée de votre wishlist." />
+      <ConfirmModal isOpen={!!listToDelete} onClose={() => setListToDelete(null)} onConfirm={handleDeleteCurrentList} title="Supprimer la liste ?" message="Toutes les cartes seront supprimées définitivement." />
+    </main>
+  );
+}
+
+export default function WishlistPage() {
+    return (
+        <Suspense fallback={<div className="flex h-screen items-center justify-center text-muted animate-pulse font-bold uppercase text-xs">Chargement...</div>}>
+            <WishlistContent />
+        </Suspense>
+    );
 }
 </file>
 
@@ -76468,335 +76795,213 @@ export default function CardDetailPage(props: CardDetailPageProps) {
 }
 </file>
 
-<file path="app/wishlist/page.tsx">
-// app/wishlist/page.tsx
+<file path="app/contacts/page.tsx">
+// app/contacts/page.tsx
 'use client';
 
-import { useState, useMemo, useEffect, Suspense } from 'react';
+import { useState, useEffect } from 'react';
+import Link from 'next/link';
+import Image from 'next/image';
 import { useAuth } from '@/lib/AuthContext';
-import { useWishlists } from '@/hooks/useWishlists';
-import { useCardCollection, CardType } from '@/hooks/useCardCollection';
-import { useSearchParams } from 'next/navigation';
-import { useColumnPreference } from '@/hooks/useColumnPreference';
-import { useSortPreference, SortOption } from '@/hooks/useSortPreference';
-import { moveCardFromWishlistToCollection } from '@/lib/services/collectionService';
-
-// Composants
-import MagicCard from '@/components/MagicCard';
-import GlobalWishlistView from '@/components/wishlist/GlobalWishlistView';
-import DataTransferHubModal from '@/components/DataTransferHubModal'; 
-import ImportModal from '@/components/ImportModal';
-import ExportModal from '@/components/ExportModal';
-import CollectionToolbar from '@/components/collection/CollectionToolbar';
-import CardListFilterBar from '@/components/common/CardListFilterBar';
-import ConfirmModal from '@/components/ConfirmModal';
+import { useFriends, FriendProfile } from '@/hooks/useFriends';
 import toast from 'react-hot-toast';
+import { Search, UserPlus, Eye, X, UserMinus, Check, MessageSquare } from 'lucide-react';
+import { getOrCreateDirectChat } from '@/app/actions/chat';
+import ChatWindow from '@/components/chat/ChatWindow';
 
-const ITEMS_PER_PAGE = 50;
+const PLANESWALKERS = ["Jace", "Liliana", "Chandra", "Ajani", "Garruk", "Teferi", "Nissa", "Gideon"];
 
-function WishlistContent() {
+export default function ContactsPage() {
   const { user } = useAuth();
-  const searchParams = useSearchParams();
-  
-  const selectedListId = searchParams.get('listId') || 'default';
-  const { lists, renameList, deleteList, loading: metaLoading } = useWishlists();
-
   const { 
-      cards, loading, updateQuantity, removeCard, toggleAttribute, 
-      bulkRemoveCards, totalPrice 
-  } = useCardCollection('wishlist', selectedListId);
-
-  const [isHubOpen, setIsHubOpen] = useState(false);
-  const [isImportOpen, setIsImportOpen] = useState(false);
-  const [isExportOpen, setIsExportOpen] = useState(false);
-  
-  const [cardToDelete, setCardToDelete] = useState<string | null>(null);
-  const [listToDelete, setListToDelete] = useState<string | null>(null);
-
-  const [isRenaming, setIsRenaming] = useState(false);
-  const [renameValue, setRenameValue] = useState('');
-
-  const [isSelectMode, setIsSelectMode] = useState(false);
-  const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const [visibleCount, setVisibleCount] = useState(ITEMS_PER_PAGE);
-  const { columns, setColumns } = useColumnPreference('mw_cols_wishlist', 5);
+    friends, requestsReceived, loading,
+    searchUsers, sendFriendRequest, acceptRequest, declineRequest, removeFriend
+  } = useFriends();
 
   const [searchQuery, setSearchQuery] = useState('');
-  const { sortBy, setSortBy } = useSortPreference('mw_sort_wishlist', 'date_desc' as SortOption); 
-  const [filterSet, setFilterSet] = useState<string>('all');
-  const [filterFoil, setFilterFoil] = useState(false);
-  const [minPriceFilter, setMinPriceFilter] = useState<string>('');
-  const [maxPriceFilter, setMaxPriceFilter] = useState<string>('');
-  const [filterCMC, setFilterCMC] = useState<string>('');
-  const [filterColors, setFilterColors] = useState<string[]>([]);
-
-  const currentListName = useMemo(() => {
-    return lists.find(l => l.id === selectedListId)?.name || 'Liste principale';
-  }, [lists, selectedListId]);
+  const [searchResults, setSearchResults] = useState<FriendProfile[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [randomPlaceholder, setRandomPlaceholder] = useState("Chercher...");
+  
+  // État pour le chat actif
+  const [activeChat, setActiveChat] = useState<{ chatId: string; recipientName: string } | null>(null);
 
   useEffect(() => {
-      setRenameValue(currentListName);
-  }, [currentListName]);
+    const randomName = PLANESWALKERS[Math.floor(Math.random() * PLANESWALKERS.length)];
+    setRandomPlaceholder(`@${randomName.toLowerCase()}...`);
+  }, []);
 
-  const closeAllModals = () => {
-    setIsHubOpen(false);
-    setIsImportOpen(false);
-    setIsExportOpen(false);
-  };
-  const openHub = () => {
-    setIsImportOpen(false);
-    setIsExportOpen(false);
-    setIsHubOpen(true);
-  };
+  if (!user) return <div className="p-10 text-center text-muted font-bold uppercase text-xs">Veuillez vous connecter.</div>;
 
-  const handleSelectImport = () => {
-    setIsHubOpen(false);
-    setIsImportOpen(true);
-  };
-  
-  const handleSelectExport = () => {
-    setIsHubOpen(false);
-    setIsExportOpen(true);
+  const handleSearch = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!searchQuery.trim()) return;
+    setIsSearching(true);
+    try {
+      const results = await searchUsers(searchQuery);
+      setSearchResults(results);
+      if (results.length === 0) toast("Aucun utilisateur trouvé");
+    } catch (err) { 
+      console.error(err); 
+      toast.error("Erreur recherche"); 
+    } finally { 
+      setIsSearching(false); 
+    }
   };
 
-  const handleRenameSubmit = async (e: React.FormEvent) => {
-      e.preventDefault();
-      if (renameValue.trim() && selectedListId !== 'default' && selectedListId !== 'GLOBAL_VIEW') {
-          await renameList(selectedListId, renameValue.trim());
-          setIsRenaming(false);
+  const handleOpenChat = async (friendUid: string, friendName: string) => {
+    try {
+      const res = await getOrCreateDirectChat(user.uid, friendUid);
+      if (res.success && res.chatId) {
+        setActiveChat({ chatId: res.chatId, recipientName: friendName });
+      } else {
+        toast.error("Impossible d'ouvrir la discussion");
       }
-  };
-
-  const handleDeleteCurrentList = async () => {
-      if (listToDelete) {
-          await deleteList(listToDelete);
-          setListToDelete(null);
-          window.location.href = '/wishlist';
-      }
-  };
-
-  const moveToCollection = async (card: CardType) => {
-    if (!user) return;
-    const toastId = toast.loading("Déplacement...");
-    const result = await moveCardFromWishlistToCollection(user.uid, card, selectedListId);
-    if (result.success) {
-        toast.success("Ajoutée à la collection !", { id: toastId });
-    } else {
-        toast.error(result.error || "Erreur technique", { id: toastId });
+    } catch (err) {
+      console.error(err);
+      toast.error("Erreur lors de l'ouverture du chat");
     }
   };
-
-  const filteredAndSortedCards = useMemo(() => {
-    let result = [...cards];
-    const minPrice = parseFloat(minPriceFilter);
-    const maxPrice = parseFloat(maxPriceFilter);
-
-    if (searchQuery) {
-        const lowerQ = searchQuery.toLowerCase();
-        result = result.filter(c => c.name.toLowerCase().includes(lowerQ));
-    }
-    if (filterSet !== 'all') result = result.filter(c => c.setName === filterSet);
-    if (filterFoil) result = result.filter(c => c.isFoil);
-    
-    if (!isNaN(minPrice) || !isNaN(maxPrice)) {
-        result = result.filter(c => {
-            const cardPrice = c.price ?? 0;
-            const isAboveMin = isNaN(minPrice) || cardPrice >= minPrice;
-            const isBelowMax = isNaN(maxPrice) || cardPrice <= maxPrice;
-            return isAboveMin && isBelowMax;
-        });
-    }
-
-    if (filterCMC) { 
-        const t = parseFloat(filterCMC); 
-        if (!isNaN(t)) result = result.filter(c => c.cmc === t); 
-    }
-
-    if (filterColors.length > 0) {
-        result = result.filter(c => {
-            if (!c.colors || c.colors.length === 0) return filterColors.includes('C');
-            return c.colors.every(col => filterColors.includes(col));
-        });
-    }
-
-    result.sort((a, b) => {
-        const priceA = a.price ?? 0;
-        const priceB = b.price ?? 0;
-        const dateA = a.lastPriceUpdate ? new Date(a.lastPriceUpdate).getTime() : 0;
-        const dateB = b.lastPriceUpdate ? new Date(b.lastPriceUpdate).getTime() : 0;
-        
-        switch (sortBy) {
-            case 'name_asc': return a.name.localeCompare(b.name);
-            case 'name_desc': return b.name.localeCompare(a.name);
-            case 'price_asc': return priceA - priceB;
-            case 'price_desc': return priceB - priceA;
-            case 'date_asc': return dateA - dateB;
-            case 'date_desc': return dateB - dateA;
-            case 'quantity_asc': return a.quantity - b.quantity;
-            case 'quantity_desc': return b.quantity - a.quantity;
-            case 'cmc_asc': return (a.cmc ?? 0) - (b.cmc ?? 0);
-            case 'cmc_desc': return (b.cmc ?? 0) - (a.cmc ?? 0);
-            default: return 0;
-        }
-    });
-
-    return result;
-  }, [cards, searchQuery, sortBy, filterSet, filterFoil, minPriceFilter, maxPriceFilter, filterCMC, filterColors]);
-
-  const visibleCards = filteredAndSortedCards.slice(0, visibleCount);
-
-  const toggleSelection = (id: string) => {
-      setSelectedIds(prev => prev.includes(id) ? prev.filter(pid => pid !== id) : [...prev, id]);
-  };
-
-  const handleSelectAll = () => {
-      if (selectedIds.length === filteredAndSortedCards.length) setSelectedIds([]); 
-      else setSelectedIds(filteredAndSortedCards.map(c => c.id)); 
-  };
-
-  const handleBulkDelete = async () => {
-      if (!confirm(`Supprimer ces ${selectedIds.length} cartes ?`)) return;
-      await bulkRemoveCards(selectedIds);
-      setSelectedIds([]);
-      setIsSelectMode(false);
-  };
-
-  if (!user) return <p className="p-10 text-center text-muted font-bold uppercase text-xs">Veuillez vous connecter.</p>;
-  
-  if (selectedListId === 'GLOBAL_VIEW') {
-      return (
-        <main className="container mx-auto p-4 min-h-[85vh]">
-            <div className="flex justify-end mb-4">
-                 <button onClick={openHub} className="btn-primary text-xs tracking-widest uppercase">Importer/Exporter</button>
-            </div>
-            <GlobalWishlistView lists={lists} />
-            <DataTransferHubModal isOpen={isHubOpen} onClose={closeAllModals} onSelectImport={handleSelectImport} onSelectExport={handleSelectExport} targetLabel="Wishlist" />
-        </main>
-      );
-  }
-
-  if (loading && metaLoading) return <div className="flex h-screen items-center justify-center text-muted animate-pulse font-bold uppercase text-xs">Chargement...</div>;
 
   return (
-    <main className="container mx-auto p-4 pb-24 relative">
-      <div className="flex justify-between items-center mb-6">
-          <div className="overflow-hidden grow pr-4">
-              {isRenaming ? (
-                  <form onSubmit={handleRenameSubmit} className="flex items-center gap-2">
-                      <input type="text" value={renameValue} onChange={(e) => setRenameValue(e.target.value)} className="text-2xl font-black text-foreground bg-background border border-border rounded-xl px-2 py-1 outline-none focus:ring-2 focus:ring-primary w-full max-w-md" autoFocus />
-                      <button type="submit" className="bg-success-vif text-white px-3 py-1 rounded-lg font-bold text-sm uppercase">OK</button>
-                  </form>
-              ) : (
-                  <div>
-                      <h1 className="text-2xl md:text-3xl font-black text-foreground truncate uppercase tracking-tighter">
-                          {currentListName} <span className="text-base font-bold text-muted">({filteredAndSortedCards.length})</span>
-                      </h1>
-                      {selectedListId !== 'default' && (
-                          <button onClick={() => setListToDelete(selectedListId)} className="text-[10px] font-black text-danger hover:underline mt-1 block uppercase tracking-widest">Supprimer la liste</button>
-                      )}
+    <main className="container mx-auto p-4 max-w-5xl min-h-[80vh] pb-32">
+      <h1 className="text-3xl font-black mb-8 text-foreground uppercase tracking-tighter">Mes Contacts</h1>
+
+      <div className="grid md:grid-cols-2 gap-6 items-start">
+        
+        {/* RECHERCHE */}
+        <div className="bg-surface p-5 rounded-2xl shadow-sm border border-border">
+          <h2 className="font-black text-[10px] uppercase tracking-[0.2em] mb-4 text-muted flex items-center gap-2">
+            <Search className="w-3 h-3" /> Chercher un ami
+          </h2>
+          <form onSubmit={handleSearch} className="flex gap-2 mb-4">
+            <input 
+              type="text" 
+              placeholder={randomPlaceholder} 
+              className="grow p-3 border border-border rounded-xl bg-background text-foreground outline-none focus:ring-2 focus:ring-primary font-bold text-sm lowercase"
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value.toLowerCase())}
+            />
+            <button type="submit" disabled={isSearching} className="bg-primary text-white px-5 rounded-xl font-black uppercase text-[10px] tracking-widest disabled:opacity-50 transition-transform active:scale-95">
+              {isSearching ? '...' : 'OK'}
+            </button>
+          </form>
+          
+          <div className="space-y-2">
+            {searchResults.map(result => (
+              <div key={result.uid} className="flex items-center justify-between bg-background p-3 rounded-xl border border-border animate-in fade-in">
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="w-8 h-8 rounded-full bg-primary flex items-center justify-center text-white font-black text-xs shrink-0 overflow-hidden relative">
+                    {result.photoURL ? <Image src={result.photoURL} alt="" fill className="object-cover" /> : result.username[0].toUpperCase()}
                   </div>
-              )}
-          </div>
-          <div className="shrink-0 bg-primary text-primary-foreground px-4 py-2 rounded-xl shadow-sm text-right">
-              <span className="text-[8px] uppercase tracking-widest font-black opacity-80 block mb-0.5">Valeur Totale</span>
-              <span className="font-black text-sm whitespace-nowrap">{totalPrice.toFixed(2)} EUR</span>
-          </div>
-      </div>
-
-      <CollectionToolbar
-          isSelectMode={isSelectMode}
-          setIsSelectMode={setIsSelectMode}
-          onOpenHub={openHub}
-          onOpenTools={() => {}} // Pas d'outils spécifiques wishlist pour l'instant
-      />
-
-      <CardListFilterBar
-        context="wishlist"
-        cards={cards}
-        searchQuery={searchQuery}
-        setSearchQuery={setSearchQuery}
-        sortBy={sortBy}
-        setSortBy={setSortBy}
-        filterSet={filterSet}
-        setFilterSet={setFilterSet}
-        filterTrade={false}
-        setFilterTrade={() => {}}
-        filterFoil={filterFoil}
-        setFilterFoil={setFilterFoil}
-        minPriceFilter={minPriceFilter}
-        setMinPriceFilter={setMinPriceFilter}
-        maxPriceFilter={maxPriceFilter}
-        setMaxPriceFilter={setMaxPriceFilter}
-        filterCMC={filterCMC}
-        setFilterCMC={setFilterCMC}
-        filterColors={filterColors}
-        setFilterColors={setFilterColors}
-        columns={columns} 
-        setColumns={setColumns}
-        hideSliderOnMobile={true}
-      />
-
-      {isSelectMode && (
-          <div className="mb-4 flex items-center justify-between bg-primary/10 p-3 rounded-xl border border-primary/30 animate-in fade-in">
-              <span className="font-bold text-primary pl-2 uppercase text-xs tracking-widest">{selectedIds.length} carte(s) sélectionnée(s)</span>
-              <button onClick={handleSelectAll} className="text-xs text-primary font-black px-3 py-1 rounded-lg hover:bg-primary/10 transition uppercase">Tout sélectionner</button>
-          </div>
-      )}
-
-      {filteredAndSortedCards.length === 0 ? (
-        <div className="text-center py-20 bg-secondary/50 rounded-3xl border-2 border-dashed border-border shadow-inner">
-          <p className="text-sm font-bold text-muted mb-4 uppercase italic">La liste est vide.</p>
-        </div>
-      ) : (
-        <>
-            <div 
-                className="grid gap-4 md:gap-6 grid-cols-2 md:grid-cols-[repeat(var(--cols),minmax(0,1fr))]" 
-                style={{ '--cols': columns } as React.CSSProperties}
-            >
-                {visibleCards.map((card) => (
-                    <MagicCard 
-                        key={card.id}
-                        {...card}
-                        isWishlist={true}
-                        onIncrement={() => updateQuantity(card.id, 1, card.quantity)}
-                        onDecrement={() => card.quantity <= 1 ? setCardToDelete(card.id) : updateQuantity(card.id, -1, card.quantity)}
-                        onMove={() => moveToCollection(card)}
-                        onToggleAttribute={(field, val) => toggleAttribute(card.id, field, val)}
-                        isSelectMode={isSelectMode}
-                        isSelected={selectedIds.includes(card.id)}
-                        onSelect={() => toggleSelection(card.id)}
-                    />
-                ))}
-            </div>
-            {filteredAndSortedCards.length > visibleCount && (
-                <div className="mt-8 flex justify-center pb-10">
-                    <button onClick={() => setVisibleCount(prev => prev + ITEMS_PER_PAGE)} className="bg-surface hover:bg-secondary text-foreground border border-border px-8 py-3 rounded-2xl font-black shadow-sm transition flex items-center gap-2 uppercase text-xs tracking-widest">Afficher plus</button>
+                  <p className="font-bold text-xs truncate">@{result.username}</p>
                 </div>
-            )}
-        </>
-      )}
-
-      {isSelectMode && selectedIds.length > 0 && (
-          <div className="fixed bottom-6 left-4 right-4 md:left-1/2 md:right-auto md:-translate-x-1/2 bg-surface shadow-2xl border border-border p-2 rounded-2xl flex items-center justify-around gap-2 z-50 animate-in slide-in-from-bottom-6 duration-300">
-              <button onClick={handleBulkDelete} className="px-4 py-2 bg-danger hover:bg-red-600 text-white rounded-xl text-xs font-black transition flex flex-col items-center leading-none gap-1 shadow-md w-full uppercase"><span>Supprimer {selectedIds.length} cartes</span></button>
+                <button onClick={() => sendFriendRequest(result)} className="p-2 bg-primary text-white rounded-lg transition-transform active:scale-90 shadow-sm" title="Ajouter">
+                  <UserPlus className="w-4 h-4" />
+                </button>
+              </div>
+            ))}
           </div>
-      )}
+        </div>
 
-      <DataTransferHubModal isOpen={isHubOpen} onClose={closeAllModals} onSelectImport={handleSelectImport} onSelectExport={handleSelectExport} targetLabel="Wishlist" />
-      <ImportModal isOpen={isImportOpen} onClose={closeAllModals} onGoBack={openHub} onCloseAll={closeAllModals} targetCollection="wishlist" listId={selectedListId} />
-      <ExportModal isOpen={isExportOpen} onClose={closeAllModals} onGoBack={openHub} onCloseAll={closeAllModals} cards={cards} listName={currentListName} targetType="wishlist" />
-      <ConfirmModal isOpen={!!cardToDelete} onClose={() => setCardToDelete(null)} onConfirm={() => { if(cardToDelete) removeCard(cardToDelete); }} title="Retirer ?" message="Cette carte sera retirée de votre wishlist." />
-      <ConfirmModal isOpen={!!listToDelete} onClose={() => setListToDelete(null)} onConfirm={handleDeleteCurrentList} title="Supprimer la liste ?" message="Toutes les cartes seront supprimées définitivement." />
+        {/* LISTE D'AMIS & CHAT */}
+        <div className="space-y-6">
+          {/* Fenêtre de Chat active */}
+          {activeChat && (
+            <div className="animate-in slide-in-from-top duration-300">
+              <div className="flex justify-end mb-2">
+                <button 
+                  onClick={() => setActiveChat(null)}
+                  className="text-[10px] font-black uppercase text-muted hover:text-foreground flex items-center gap-1"
+                >
+                  <X className="w-3 h-3" /> Fermer le chat
+                </button>
+              </div>
+              <ChatWindow chatId={activeChat.chatId} recipientName={activeChat.recipientName} />
+            </div>
+          )}
+
+          <div className="bg-surface p-5 rounded-2xl shadow-sm border border-border">
+            <h2 className="font-black text-[10px] uppercase tracking-[0.2em] mb-6 text-muted">Mes Amis ({friends.length})</h2>
+
+            {/* Demandes reçues */}
+            {requestsReceived.length > 0 && (
+              <div className="mb-8 space-y-2">
+                <p className="text-[9px] font-black text-orange-500 uppercase tracking-widest mb-2">Demandes en attente</p>
+                {requestsReceived.map(req => (
+                  <div key={req.uid} className="flex items-center justify-between p-3 bg-orange-50/50 dark:bg-orange-950/10 border border-orange-200 dark:border-orange-900/30 rounded-xl">
+                    <p className="font-bold text-xs truncate grow mr-2">@{req.username}</p>
+                    <div className="flex gap-1 shrink-0">
+                      <button onClick={() => acceptRequest(req)} className="w-8 h-8 bg-success text-white rounded-lg flex items-center justify-center"><Check className="w-4 h-4" /></button>
+                      <button onClick={() => declineRequest(req.uid)} className="w-8 h-8 bg-danger text-white rounded-lg flex items-center justify-center"><X className="w-4 h-4" /></button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Liste principale */}
+            <div className="grid gap-3">
+              {loading ? (
+                <p className="text-muted text-[10px] font-bold uppercase p-4 text-center animate-pulse tracking-widest">Chargement...</p>
+              ) : friends.length === 0 ? (
+                <p className="text-muted italic text-[10px] p-8 text-center bg-background rounded-xl border border-dashed border-border uppercase">Aucun ami.</p>
+              ) : (
+                friends.map(friend => (
+                  <div key={friend.uid} className="flex flex-col p-4 bg-background rounded-2xl border border-border hover:border-primary/40 transition-all gap-4 shadow-xs">
+                    
+                    <div className="flex items-center justify-between min-w-0">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="w-10 h-10 rounded-full bg-secondary border border-border shrink-0 overflow-hidden relative shadow-sm">
+                          {friend.photoURL && <Image src={friend.photoURL} alt="" fill className="object-cover" sizes="40px" />}
+                        </div>
+                        <div className="min-w-0">
+                          <p className="font-black text-sm text-foreground truncate tracking-tight">{friend.displayName}</p>
+                          <p className="text-[10px] text-primary font-black uppercase tracking-tighter">@{friend.username}</p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        {/* Bouton Message ajouté */}
+                        <button 
+                          onClick={() => handleOpenChat(friend.uid, friend.displayName || friend.username)}
+                          className="w-8 h-8 flex items-center justify-center text-primary hover:bg-primary/10 rounded-full transition-colors"
+                          title="Envoyer un message"
+                        >
+                          <MessageSquare className="w-4 h-4" />
+                        </button>
+                        <button 
+                          onClick={() => removeFriend(friend.uid)} 
+                          className="w-8 h-8 flex items-center justify-center text-muted hover:text-danger transition-colors"
+                          title="Retirer des amis"
+                        >
+                          <UserMinus className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <Link 
+                        href={`/user/${friend.uid}`} 
+                        className="flex-1 flex items-center justify-center gap-2 text-[10px] bg-secondary text-foreground py-2.5 rounded-xl font-black uppercase tracking-tighter border border-border/50 hover:bg-border transition-colors"
+                      >
+                        <Eye className="w-3.5 h-3.5" /> Voir
+                      </Link>
+                      <Link 
+                        href={`/trades/new/${friend.uid}`} 
+                        className="flex-1 flex items-center justify-center gap-2 text-[10px] bg-primary text-white py-2.5 rounded-xl font-black uppercase tracking-tighter shadow-sm active:scale-95 transition-transform"
+                      >
+                          Échanger
+                      </Link>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
     </main>
   );
-}
-
-export default function WishlistPage() {
-    return (
-        <Suspense fallback={<div className="flex h-screen items-center justify-center text-muted animate-pulse font-bold uppercase text-xs">Chargement...</div>}>
-            <WishlistContent />
-        </Suspense>
-    );
 }
 </file>
 
@@ -77086,6 +77291,301 @@ export default function CardVersionPickerModal({
                 <span>{anyVersion ? 'Ajouter (Generique)' : 'Ajouter (Exact)'}</span>
                 {quantity > 1 && <span className="bg-black/20 px-2 py-0.5 rounded text-sm">{quantity}x</span>}
             </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+</file>
+
+<file path="components/ImportModal.tsx">
+// components/ImportModal.tsx
+'use client';
+
+import React, { useState, useEffect } from 'react';
+import Papa from 'papaparse';
+import { useAuth } from '@/lib/AuthContext';
+import toast from 'react-hot-toast';
+import { importCardsAction, ImportItemInput } from '@/app/actions/import';
+import AdContainer from './AdContainer'; 
+
+type CsvRow = {
+  "Name": string;
+  "Set code": string;
+  "Collector number": string;
+  "Foil": string;
+  "Quantity": string;
+  "Scryfall ID": string; 
+  [key: string]: string; 
+};
+
+type ImportModalProps = {
+  isOpen: boolean;
+  onClose: () => void;
+  targetCollection?: 'collection' | 'wishlist'; 
+  listId?: string;
+  onGoBack?: () => void; 
+  onCloseAll?: () => void;
+};
+
+export default function ImportModal({ 
+    isOpen, 
+    onClose,
+    targetCollection = 'collection',
+    listId = 'default',
+    onGoBack,
+    onCloseAll
+}: ImportModalProps) {
+  const { user } = useAuth();
+  
+  const [inputType, setInputType] = useState<'csv' | 'text'>('csv'); 
+  const [textInput, setTextInput] = useState('');
+  
+  const [data, setData] = useState<CsvRow[]>([]);
+  const [step, setStep] = useState<'upload' | 'preview' | 'importing'>('upload');
+  const [importMode, setImportMode] = useState<'add' | 'sync'>('add'); 
+
+  useEffect(() => {
+    if (isOpen) {
+        // eslint-disable-next-line react-hooks/set-state-in-effect
+        setStep('upload');
+        setData([]);
+        setTextInput('');
+        setInputType('csv');
+        setImportMode('add');
+    }
+  }, [isOpen]);
+
+  const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    Papa.parse(file, {
+      header: true,
+      skipEmptyLines: true,
+      delimiter: ",", 
+      encoding: "UTF-8",
+      complete: (results) => {
+        const fields = results.meta.fields || [];
+        if (!fields.includes("Name") && !fields.includes("Scryfall ID")) {
+            toast.error("Format CSV non reconnu (Manabox ou Deckbox requis)");
+            return;
+        }
+        setData(results.data as CsvRow[]);
+        setStep('preview');
+      },
+      error: (error) => toast.error("Erreur lecture CSV : " + error.message)
+    });
+  };
+
+  const handleTextParse = () => {
+    if (!textInput.trim()) return;
+
+    const rows: CsvRow[] = [];
+    const lines = textInput.split('\n');
+    
+    const regex = /^(\d+)x?\s+(.+?)\s+\(([a-zA-Z0-9]+)\)\s+(\S+)(?:\s+\*(F)\*)?/i;
+
+    lines.forEach(line => {
+        const cleanLine = line.trim();
+        if (!cleanLine) return;
+        
+        const match = cleanLine.match(regex);
+        if (match) {
+            rows.push({
+                "Quantity": match[1],
+                "Name": match[2],
+                "Set code": match[3].toLowerCase(),
+                "Collector number": match[4] || '',
+                "Foil": match[5] === 'F' ? "true" : "false",
+                "Scryfall ID": ""
+            });
+        }
+    });
+
+    if (rows.length === 0) {
+        toast.error("Aucune ligne valide reconnue.");
+        return;
+    }
+    setData(rows);
+    setStep('preview');
+  };
+
+  const startImport = async () => {
+    if (!user) return;
+    setStep('importing');
+
+    const cleanItems: ImportItemInput[] = data.map(row => ({
+        scryfallId: row["Scryfall ID"] || undefined,
+        name: row["Name"] || "Unknown",
+        set: row["Set code"] || "",
+        collectorNumber: row["Collector number"] || "",
+        quantity: parseInt(row["Quantity"]) || 1,
+        isFoil: row["Foil"]?.toLowerCase() === "true"
+    })).filter(item => item.name !== "Unknown" || item.scryfallId);
+
+    if (cleanItems.length === 0) {
+        toast.error("Aucune donnée valide à importer.");
+        setStep('preview');
+        return;
+    }
+
+    try {
+        const result = await importCardsAction(
+            user.uid,
+            targetCollection,
+            importMode,
+            cleanItems,
+            listId 
+        );
+
+        if (result.success) {
+            toast.success(`Opération terminée. ${result.count} cartes traitées.`);
+            if (onCloseAll) onCloseAll();
+            else onClose();
+        } else {
+            toast.error(`Erreur: ${result.error}`);
+            setStep('preview');
+        }
+
+    } catch (e) {
+        console.error("Erreur client import:", e);
+        toast.error("Erreur de communication avec le serveur.");
+        setStep('preview');
+    }
+  };
+
+  const handleBackdropClick = () => {
+      if (step !== 'importing') {
+          if (onGoBack) onGoBack();
+          else onClose();
+      }
+  };
+
+  if (!isOpen) return null;
+
+  const targetLabel = targetCollection === 'collection' ? 'Collection' : 'Wishlist';
+
+  return (
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 backdrop-blur-sm" onClick={handleBackdropClick}>
+      <div 
+        className="bg-surface rounded-xl p-6 max-w-5xl w-full shadow-2xl border border-border flex flex-col max-h-[90vh]"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex-none flex justify-between items-center mb-4 border-b border-border pb-3">
+            <div className="flex items-center gap-3">
+                {step !== 'importing' && onGoBack && (
+                    <button onClick={onGoBack} className="text-muted hover:text-foreground text-xl p-1 rounded transition">←</button>
+                )}
+                <h2 className="text-xl font-bold text-foreground">
+                    Importer : {targetLabel} {listId !== 'default' && <span className="text-xs font-normal text-muted ml-2">({listId})</span>}
+                </h2>
+            </div>
+            {step !== 'importing' && onCloseAll && (
+                <button onClick={onCloseAll} className="text-muted hover:text-danger text-lg p-2">✕</button>
+            )}
+        </div>
+
+        <div className="grow overflow-hidden flex flex-col min-h-0">
+            {step === 'upload' && (
+                <div className="flex flex-col h-full overflow-hidden">
+                    <p className="text-sm text-muted mb-4 flex-none">
+                        Formats supportés : Manabox (CSV), Deckbox (CSV), ou texte copié.
+                    </p>
+                    <div className="flex-none flex border-b border-border mb-4">
+                        <button onClick={() => setInputType('csv')} className={`px-4 py-2 font-medium text-sm border-b-2 transition-colors ${inputType === 'csv' ? 'border-primary text-primary' : 'border-transparent text-muted'}`}>Fichier CSV</button>
+                        <button onClick={() => setInputType('text')} className={`px-4 py-2 font-medium text-sm border-b-2 transition-colors ${inputType === 'text' ? 'border-primary text-primary' : 'border-transparent text-muted'}`}>Coller Texte</button>
+                    </div>
+                    
+                    {inputType === 'csv' ? (
+                        <div className="grow p-12 border-2 border-dashed border-border rounded-xl text-center hover:bg-secondary transition relative cursor-pointer group flex flex-col items-center justify-center">
+                            <input type="file" accept=".csv" onChange={handleFileUpload} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-50" />
+                            <div className="text-6xl mb-4 text-muted">[CSV]</div>
+                            <p className="font-bold text-lg text-foreground">Déposer un fichier CSV</p>
+                        </div>
+                    ) : (
+                        <div className="grow flex flex-col min-h-0">
+                            <textarea 
+                                value={textInput} 
+                                onChange={(e) => setTextInput(e.target.value)} 
+                                rows={15} 
+                                placeholder="Ex: 1x Sol Ring (CMD) 100 *F*" 
+                                className="grow w-full p-4 rounded-lg border border-border bg-background text-foreground font-mono text-xs focus:ring-2 focus:ring-primary outline-none resize-none" 
+                            />
+                            <button 
+                                onClick={handleTextParse} 
+                                disabled={!textInput.trim()} 
+                                className="flex-none mt-4 bg-primary hover:opacity-90 disabled:opacity-50 text-primary-foreground font-bold py-3 rounded-xl shadow-md transition"
+                            >
+                                Analyser le texte
+                            </button>
+                        </div>
+                    )}
+                </div>
+            )}
+
+            {step === 'preview' && (
+                <div className="flex flex-col h-full overflow-hidden">
+                    <p className="text-sm text-muted mb-4 flex-none">
+                        {data.length} cartes détectées.
+                    </p>
+                    <div className="flex-none grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                        <div onClick={() => setImportMode('add')} className={`p-4 rounded-xl border-2 cursor-pointer transition flex flex-col gap-1 ${importMode === 'add' ? 'border-primary bg-primary/5' : 'border-border hover:border-primary/50'}`}>
+                            <div className="flex items-center gap-2 font-bold text-primary text-sm">
+                                <span className={`w-4 h-4 rounded-full border flex items-center justify-center ${importMode === 'add' ? 'border-primary bg-primary' : 'border-muted'}`}>{importMode === 'add' && <span className="w-2 h-2 rounded-full bg-white"></span>}</span> 
+                                Mode Ajout (Add)
+                            </div>
+                        </div>
+                        <div onClick={() => setImportMode('sync')} className={`p-4 rounded-xl border-2 cursor-pointer transition flex flex-col gap-1 ${importMode === 'sync' ? 'border-purple-600 bg-purple-500/5' : 'border-border hover:border-purple-500/50'}`}>
+                            <div className="flex items-center gap-2 font-bold text-purple-600 dark:text-purple-300 text-sm">
+                                <span className={`w-4 h-4 rounded-full border flex items-center justify-center ${importMode === 'sync' ? 'border-purple-600 bg-purple-600' : 'border-muted'}`}>{importMode === 'sync' && <span className="w-2 h-2 rounded-full bg-white"></span>}</span> 
+                                Mode Complétion (Smart Sync)
+                            </div>
+                        </div>
+                    </div>
+                    <div className="grow overflow-auto min-h-0 border border-border rounded-lg bg-background mb-4">
+                        <table className="w-full text-xs text-left text-muted">
+                            <thead className="text-foreground bg-secondary sticky top-0 z-10">
+                                <tr>
+                                    <th className="px-4 py-2">Nom</th>
+                                    <th className="px-4 py-2">Set</th>
+                                    <th className="px-4 py-2">Num</th>
+                                    <th className="px-4 py-2">Qté</th>
+                                    <th className="px-4 py-2">Foil</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {data.slice(0, 100).map((row, i) => (
+                                    <tr key={i} className="bg-surface border-b border-border">
+                                        <td className="px-4 py-1 truncate max-w-[150px] text-foreground">{row["Name"]}</td>
+                                        <td className="px-4 py-1">{row["Set code"]}</td>
+                                        <td className="px-4 py-1">{row["Collector number"]}</td>
+                                        <td className="px-4 py-1 font-bold">{row["Quantity"]}</td>
+                                        <td className="px-4 py-1">{row["Foil"]}</td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                    <div className="flex-none pt-2">
+                        <button onClick={startImport} className="w-full text-white font-bold py-3 rounded-xl shadow-lg bg-primary hover:opacity-90">
+                            {importMode === 'add' ? 'Valider l\'Ajout' : 'Valider la Synchronisation'}
+                        </button>
+                    </div>
+                </div>
+            )}
+
+           {step === 'importing' && (
+                <div className="flex flex-col items-center justify-center h-full py-10 text-center">
+                    <div className="w-16 h-16 border-4 border-primary border-t-transparent rounded-full animate-spin mb-6"></div>
+                    <h3 className="text-xl font-bold text-foreground mb-2">Importation en cours...</h3>
+                    <p className="text-muted text-sm max-w-md mb-8">Ne fermez pas cette fenêtre.</p>
+                    <div className="w-full max-w-md">
+                        {/* CORRECTION : Utilisation de la prop 'slot' uniquement */}
+                        <AdContainer slot="1234567890" />
+                    </div>
+                </div>
+            )}
         </div>
       </div>
     </div>
@@ -77773,301 +78273,6 @@ export default function Header() {
         )}
       </div>
     </header>
-  );
-}
-</file>
-
-<file path="components/ImportModal.tsx">
-// components/ImportModal.tsx
-'use client';
-
-import React, { useState, useEffect } from 'react';
-import Papa from 'papaparse';
-import { useAuth } from '@/lib/AuthContext';
-import toast from 'react-hot-toast';
-import { importCardsAction, ImportItemInput } from '@/app/actions/import';
-import AdContainer from './AdContainer'; 
-
-type CsvRow = {
-  "Name": string;
-  "Set code": string;
-  "Collector number": string;
-  "Foil": string;
-  "Quantity": string;
-  "Scryfall ID": string; 
-  [key: string]: string; 
-};
-
-type ImportModalProps = {
-  isOpen: boolean;
-  onClose: () => void;
-  targetCollection?: 'collection' | 'wishlist'; 
-  listId?: string;
-  onGoBack?: () => void; 
-  onCloseAll?: () => void;
-};
-
-export default function ImportModal({ 
-    isOpen, 
-    onClose,
-    targetCollection = 'collection',
-    listId = 'default',
-    onGoBack,
-    onCloseAll
-}: ImportModalProps) {
-  const { user } = useAuth();
-  
-  const [inputType, setInputType] = useState<'csv' | 'text'>('csv'); 
-  const [textInput, setTextInput] = useState('');
-  
-  const [data, setData] = useState<CsvRow[]>([]);
-  const [step, setStep] = useState<'upload' | 'preview' | 'importing'>('upload');
-  const [importMode, setImportMode] = useState<'add' | 'sync'>('add'); 
-
-  useEffect(() => {
-    if (isOpen) {
-        // eslint-disable-next-line react-hooks/set-state-in-effect
-        setStep('upload');
-        setData([]);
-        setTextInput('');
-        setInputType('csv');
-        setImportMode('add');
-    }
-  }, [isOpen]);
-
-  const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-
-    Papa.parse(file, {
-      header: true,
-      skipEmptyLines: true,
-      delimiter: ",", 
-      encoding: "UTF-8",
-      complete: (results) => {
-        const fields = results.meta.fields || [];
-        if (!fields.includes("Name") && !fields.includes("Scryfall ID")) {
-            toast.error("Format CSV non reconnu (Manabox ou Deckbox requis)");
-            return;
-        }
-        setData(results.data as CsvRow[]);
-        setStep('preview');
-      },
-      error: (error) => toast.error("Erreur lecture CSV : " + error.message)
-    });
-  };
-
-  const handleTextParse = () => {
-    if (!textInput.trim()) return;
-
-    const rows: CsvRow[] = [];
-    const lines = textInput.split('\n');
-    
-    const regex = /^(\d+)x?\s+(.+?)\s+\(([a-zA-Z0-9]+)\)\s+(\S+)(?:\s+\*(F)\*)?/i;
-
-    lines.forEach(line => {
-        const cleanLine = line.trim();
-        if (!cleanLine) return;
-        
-        const match = cleanLine.match(regex);
-        if (match) {
-            rows.push({
-                "Quantity": match[1],
-                "Name": match[2],
-                "Set code": match[3].toLowerCase(),
-                "Collector number": match[4] || '',
-                "Foil": match[5] === 'F' ? "true" : "false",
-                "Scryfall ID": ""
-            });
-        }
-    });
-
-    if (rows.length === 0) {
-        toast.error("Aucune ligne valide reconnue.");
-        return;
-    }
-    setData(rows);
-    setStep('preview');
-  };
-
-  const startImport = async () => {
-    if (!user) return;
-    setStep('importing');
-
-    const cleanItems: ImportItemInput[] = data.map(row => ({
-        scryfallId: row["Scryfall ID"] || undefined,
-        name: row["Name"] || "Unknown",
-        set: row["Set code"] || "",
-        collectorNumber: row["Collector number"] || "",
-        quantity: parseInt(row["Quantity"]) || 1,
-        isFoil: row["Foil"]?.toLowerCase() === "true"
-    })).filter(item => item.name !== "Unknown" || item.scryfallId);
-
-    if (cleanItems.length === 0) {
-        toast.error("Aucune donnée valide à importer.");
-        setStep('preview');
-        return;
-    }
-
-    try {
-        const result = await importCardsAction(
-            user.uid,
-            targetCollection,
-            importMode,
-            cleanItems,
-            listId 
-        );
-
-        if (result.success) {
-            toast.success(`Opération terminée. ${result.count} cartes traitées.`);
-            if (onCloseAll) onCloseAll();
-            else onClose();
-        } else {
-            toast.error(`Erreur: ${result.error}`);
-            setStep('preview');
-        }
-
-    } catch (e) {
-        console.error("Erreur client import:", e);
-        toast.error("Erreur de communication avec le serveur.");
-        setStep('preview');
-    }
-  };
-
-  const handleBackdropClick = () => {
-      if (step !== 'importing') {
-          if (onGoBack) onGoBack();
-          else onClose();
-      }
-  };
-
-  if (!isOpen) return null;
-
-  const targetLabel = targetCollection === 'collection' ? 'Collection' : 'Wishlist';
-
-  return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 backdrop-blur-sm" onClick={handleBackdropClick}>
-      <div 
-        className="bg-surface rounded-xl p-6 max-w-5xl w-full shadow-2xl border border-border flex flex-col max-h-[90vh]"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex-none flex justify-between items-center mb-4 border-b border-border pb-3">
-            <div className="flex items-center gap-3">
-                {step !== 'importing' && onGoBack && (
-                    <button onClick={onGoBack} className="text-muted hover:text-foreground text-xl p-1 rounded transition">←</button>
-                )}
-                <h2 className="text-xl font-bold text-foreground">
-                    Importer : {targetLabel} {listId !== 'default' && <span className="text-xs font-normal text-muted ml-2">({listId})</span>}
-                </h2>
-            </div>
-            {step !== 'importing' && onCloseAll && (
-                <button onClick={onCloseAll} className="text-muted hover:text-danger text-lg p-2">✕</button>
-            )}
-        </div>
-
-        <div className="grow overflow-hidden flex flex-col min-h-0">
-            {step === 'upload' && (
-                <div className="flex flex-col h-full overflow-hidden">
-                    <p className="text-sm text-muted mb-4 flex-none">
-                        Formats supportés : Manabox (CSV), Deckbox (CSV), ou texte copié.
-                    </p>
-                    <div className="flex-none flex border-b border-border mb-4">
-                        <button onClick={() => setInputType('csv')} className={`px-4 py-2 font-medium text-sm border-b-2 transition-colors ${inputType === 'csv' ? 'border-primary text-primary' : 'border-transparent text-muted'}`}>Fichier CSV</button>
-                        <button onClick={() => setInputType('text')} className={`px-4 py-2 font-medium text-sm border-b-2 transition-colors ${inputType === 'text' ? 'border-primary text-primary' : 'border-transparent text-muted'}`}>Coller Texte</button>
-                    </div>
-                    
-                    {inputType === 'csv' ? (
-                        <div className="grow p-12 border-2 border-dashed border-border rounded-xl text-center hover:bg-secondary transition relative cursor-pointer group flex flex-col items-center justify-center">
-                            <input type="file" accept=".csv" onChange={handleFileUpload} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-50" />
-                            <div className="text-6xl mb-4 text-muted">[CSV]</div>
-                            <p className="font-bold text-lg text-foreground">Déposer un fichier CSV</p>
-                        </div>
-                    ) : (
-                        <div className="grow flex flex-col min-h-0">
-                            <textarea 
-                                value={textInput} 
-                                onChange={(e) => setTextInput(e.target.value)} 
-                                rows={15} 
-                                placeholder="Ex: 1x Sol Ring (CMD) 100 *F*" 
-                                className="grow w-full p-4 rounded-lg border border-border bg-background text-foreground font-mono text-xs focus:ring-2 focus:ring-primary outline-none resize-none" 
-                            />
-                            <button 
-                                onClick={handleTextParse} 
-                                disabled={!textInput.trim()} 
-                                className="flex-none mt-4 bg-primary hover:opacity-90 disabled:opacity-50 text-primary-foreground font-bold py-3 rounded-xl shadow-md transition"
-                            >
-                                Analyser le texte
-                            </button>
-                        </div>
-                    )}
-                </div>
-            )}
-
-            {step === 'preview' && (
-                <div className="flex flex-col h-full overflow-hidden">
-                    <p className="text-sm text-muted mb-4 flex-none">
-                        {data.length} cartes détectées.
-                    </p>
-                    <div className="flex-none grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-                        <div onClick={() => setImportMode('add')} className={`p-4 rounded-xl border-2 cursor-pointer transition flex flex-col gap-1 ${importMode === 'add' ? 'border-primary bg-primary/5' : 'border-border hover:border-primary/50'}`}>
-                            <div className="flex items-center gap-2 font-bold text-primary text-sm">
-                                <span className={`w-4 h-4 rounded-full border flex items-center justify-center ${importMode === 'add' ? 'border-primary bg-primary' : 'border-muted'}`}>{importMode === 'add' && <span className="w-2 h-2 rounded-full bg-white"></span>}</span> 
-                                Mode Ajout (Add)
-                            </div>
-                        </div>
-                        <div onClick={() => setImportMode('sync')} className={`p-4 rounded-xl border-2 cursor-pointer transition flex flex-col gap-1 ${importMode === 'sync' ? 'border-purple-600 bg-purple-500/5' : 'border-border hover:border-purple-500/50'}`}>
-                            <div className="flex items-center gap-2 font-bold text-purple-600 dark:text-purple-300 text-sm">
-                                <span className={`w-4 h-4 rounded-full border flex items-center justify-center ${importMode === 'sync' ? 'border-purple-600 bg-purple-600' : 'border-muted'}`}>{importMode === 'sync' && <span className="w-2 h-2 rounded-full bg-white"></span>}</span> 
-                                Mode Complétion (Smart Sync)
-                            </div>
-                        </div>
-                    </div>
-                    <div className="grow overflow-auto min-h-0 border border-border rounded-lg bg-background mb-4">
-                        <table className="w-full text-xs text-left text-muted">
-                            <thead className="text-foreground bg-secondary sticky top-0 z-10">
-                                <tr>
-                                    <th className="px-4 py-2">Nom</th>
-                                    <th className="px-4 py-2">Set</th>
-                                    <th className="px-4 py-2">Num</th>
-                                    <th className="px-4 py-2">Qté</th>
-                                    <th className="px-4 py-2">Foil</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {data.slice(0, 100).map((row, i) => (
-                                    <tr key={i} className="bg-surface border-b border-border">
-                                        <td className="px-4 py-1 truncate max-w-[150px] text-foreground">{row["Name"]}</td>
-                                        <td className="px-4 py-1">{row["Set code"]}</td>
-                                        <td className="px-4 py-1">{row["Collector number"]}</td>
-                                        <td className="px-4 py-1 font-bold">{row["Quantity"]}</td>
-                                        <td className="px-4 py-1">{row["Foil"]}</td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    </div>
-                    <div className="flex-none pt-2">
-                        <button onClick={startImport} className="w-full text-white font-bold py-3 rounded-xl shadow-lg bg-primary hover:opacity-90">
-                            {importMode === 'add' ? 'Valider l\'Ajout' : 'Valider la Synchronisation'}
-                        </button>
-                    </div>
-                </div>
-            )}
-
-           {step === 'importing' && (
-                <div className="flex flex-col items-center justify-center h-full py-10 text-center">
-                    <div className="w-16 h-16 border-4 border-primary border-t-transparent rounded-full animate-spin mb-6"></div>
-                    <h3 className="text-xl font-bold text-foreground mb-2">Importation en cours...</h3>
-                    <p className="text-muted text-sm max-w-md mb-8">Ne fermez pas cette fenêtre.</p>
-                    <div className="w-full max-w-md">
-                        {/* CORRECTION : Utilisation de la prop 'slot' uniquement */}
-                        <AdContainer slot="1234567890" />
-                    </div>
-                </div>
-            )}
-        </div>
-      </div>
-    </div>
   );
 }
 </file>

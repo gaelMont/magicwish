@@ -10,6 +10,8 @@ export async function getOrCreateDirectChat(uid1: string, uid2: string) {
 
   try {
     const chatsRef = db.collection('chats');
+    
+    // On cherche un chat existant avec ces exacts participants
     const q = await chatsRef
       .where('type', '==', 'direct')
       .where('participants', '==', participants)
@@ -20,18 +22,19 @@ export async function getOrCreateDirectChat(uid1: string, uid2: string) {
       return { success: true, chatId: q.docs[0].id };
     }
 
-    // Création du document parent avec les participants
-    const newChatRef = await chatsRef.add({
+    // CRUCIAL : On crée le document avec le champ 'participants'
+    // sinon les Security Rules bloqueront la lecture côté client.
+    const newChat = await chatsRef.add({
       type: 'direct',
-      participants,
+      participants: participants, 
       createdAt: FieldValue.serverTimestamp(),
       lastMessage: null
     });
 
-    return { success: true, chatId: newChatRef.id };
+    return { success: true, chatId: newChat.id };
   } catch (error) {
-    console.error("Action getOrCreateDirectChat Error:", error);
-    return { success: false, error: "Erreur création chat" };
+    console.error("Erreur action chat:", error);
+    return { success: false };
   }
 }
 
@@ -39,6 +42,9 @@ export async function sendMessageAction(chatId: string, senderId: string, sender
   const db = getAdminFirestore();
   
   try {
+    const chatRef = db.collection('chats').doc(chatId);
+    const msgRef = chatRef.collection('messages').doc();
+
     const messageData = {
       senderId,
       senderName,
@@ -47,16 +53,14 @@ export async function sendMessageAction(chatId: string, senderId: string, sender
     };
 
     const batch = db.batch();
-    const chatRef = db.collection('chats').doc(chatId);
-    const msgRef = chatRef.collection('messages').doc();
-
     batch.set(msgRef, messageData);
+    // On met à jour le parent pour les listes de discussion
     batch.update(chatRef, { lastMessage: messageData });
 
     await batch.commit();
     return { success: true };
   } catch (error) {
-    console.error("Action sendMessage Error:", error);
+    console.error("Erreur envoi message:", error);
     return { success: false };
   }
 }

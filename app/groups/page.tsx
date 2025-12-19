@@ -1,8 +1,7 @@
-// app/groups/page.tsx
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useAuth } from '@/lib/AuthContext';
+import { useAuth } from '@/context/AuthContext'; // Ajusté selon votre repomix
 import { db } from '@/lib/firebase';
 import { collection, query, where, onSnapshot, doc, getDoc } from 'firebase/firestore';
 import { createGroupAction, addMemberAction, promoteMemberAction, removeMemberAction } from '@/app/actions/groups';
@@ -10,8 +9,9 @@ import toast from 'react-hot-toast';
 import { FriendProfile, useFriends } from '@/hooks/useFriends'; 
 import Image from 'next/image';
 import Link from 'next/link';
-// Ajout des imports Lucide React
-import { Shield, X, Users, ArrowRight } from 'lucide-react';
+import { Shield, X, Users, ArrowRight, MessageSquare } from 'lucide-react'; // Ajout MessageSquare
+import { getOrCreateDirectChat } from '@/app/actions/chat'; // Import Action Chat
+import ChatWindow from '@/components/chat/ChatWindow'; // Import Composant Chat
 
 type Group = {
     id: string;
@@ -36,6 +36,9 @@ export default function GroupsPage() {
     
     const [isInviteOpen, setIsInviteOpen] = useState(false);
 
+    // ÉTAT : Chat actif pour l'intégration
+    const [activeChat, setActiveChat] = useState<{ chatId: string; recipientName: string } | null>(null);
+
     // Écoute des groupes auxquels l'utilisateur appartient
     useEffect(() => {
         if (!user) return;
@@ -44,7 +47,6 @@ export default function GroupsPage() {
             const list = snap.docs.map(d => ({ id: d.id, ...d.data() } as Group));
             setGroups(list);
             
-            // Mise à jour automatique des données du groupe sélectionné si elles changent
             if (selectedGroup) {
                 const updated = list.find(g => g.id === selectedGroup.id);
                 if (updated) setSelectedGroup(updated);
@@ -52,7 +54,6 @@ export default function GroupsPage() {
             setLoading(false);
         });
         return () => unsub();
-        // Ajout de selectedGroup dans les dépendances pour corriger l'avertissement ESLint
     }, [user, selectedGroup]);
 
     // Chargement des profils détaillés des membres du groupe
@@ -83,6 +84,20 @@ export default function GroupsPage() {
         };
         fetchMembers();
     }, [selectedGroup, friends]);
+
+    const handleOpenChat = async (targetUid: string, targetName: string) => {
+        if (!user) return toast.error("Connectez-vous pour discuter");
+        if (user.uid === targetUid) return;
+
+        try {
+            const res = await getOrCreateDirectChat(user.uid, targetUid);
+            if (res.success && res.chatId) {
+                setActiveChat({ chatId: res.chatId, recipientName: targetName });
+            }
+        } catch (error) {
+            toast.error("Erreur lors de l'ouverture du chat");
+        }
+    };
 
     const handleCreate = async () => {
         if (!user || !newGroupName.trim()) return;
@@ -138,6 +153,18 @@ export default function GroupsPage() {
             {/* GAUCHE : LISTE & CRÉATION */}
             <div className="w-full md:w-1/3 space-y-6">
                 <h1 className="text-3xl font-black text-foreground uppercase tracking-tighter">Playgroups</h1>
+
+                {/* Bloc Chat Actif si ouvert */}
+                {activeChat && (
+                    <div className="animate-in slide-in-from-top-2 duration-300">
+                        <div className="flex justify-end mb-2">
+                            <button onClick={() => setActiveChat(null)} className="text-[9px] font-black uppercase text-muted hover:text-danger flex items-center gap-1">
+                                <X className="w-3 h-3" /> Fermer le chat
+                            </button>
+                        </div>
+                        <ChatWindow chatId={activeChat.chatId} recipientName={activeChat.recipientName} />
+                    </div>
+                )}
 
                 <div className="bg-surface p-5 rounded-2xl border border-border shadow-sm">
                     <h3 className="text-[10px] font-black text-muted uppercase tracking-widest mb-4">Nouveau Groupe</h3>
@@ -218,7 +245,19 @@ export default function GroupsPage() {
                                                     <p className="text-[10px] text-primary font-black uppercase tracking-tighter">@{member.username}</p>
                                                 </div>
                                             </div>
-                                            {isMemberAdmin && <span className="text-[8px] bg-primary/20 text-primary px-2 py-1 rounded-lg font-black uppercase tracking-widest">Admin</span>}
+                                            <div className="flex items-center gap-2">
+                                                {/* Bouton Chat ajouté par membre */}
+                                                {member.uid !== user.uid && (
+                                                    <button 
+                                                        onClick={() => handleOpenChat(member.uid, member.displayName)}
+                                                        className="w-8 h-8 flex items-center justify-center text-primary hover:bg-primary/10 rounded-full transition-colors"
+                                                        title="Envoyer un message"
+                                                    >
+                                                        <MessageSquare className="w-4 h-4" />
+                                                    </button>
+                                                )}
+                                                {isMemberAdmin && <span className="text-[8px] bg-primary/20 text-primary px-2 py-1 rounded-lg font-black uppercase tracking-widest">Admin</span>}
+                                            </div>
                                         </div>
 
                                         <div className="flex items-center gap-2">
@@ -259,9 +298,6 @@ export default function GroupsPage() {
                                     <button onClick={() => handleInvite(friend.uid)} className="text-[10px] bg-primary text-white px-4 py-2 rounded-lg font-black uppercase tracking-widest shrink-0">Ajouter</button>
                                 </div>
                             ))}
-                            {friends.filter(f => !selectedGroup?.members.includes(f.uid)).length === 0 && (
-                                <p className="text-[10px] text-muted font-black text-center py-4 uppercase">Aucun ami disponible.</p>
-                            )}
                         </div>
                         <button onClick={() => setIsInviteOpen(false)} className="mt-4 w-full text-[10px] font-black text-muted uppercase tracking-widest py-2">Fermer</button>
                     </div>
