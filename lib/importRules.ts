@@ -1,6 +1,6 @@
+// lib/importRules.ts
 import { ScryfallRawData } from '@/lib/cardUtils';
 
-// Note le mot-clé "export" ici
 export type ValidationResult = {
   isValid: boolean;
   reason?: string;
@@ -11,7 +11,6 @@ export type ValidationResult = {
  * Vérifie si une demande d'import est valide par rapport aux données Scryfall.
  * Empêche d'importer une version qui n'existe pas physiquement.
  */
-// Note le mot-clé "export" ici aussi !
 export function validateImport(
   cardData: ScryfallRawData, 
   requestedFoil: boolean
@@ -22,8 +21,10 @@ export function validateImport(
   const priceFoil = parseFloat(cardData.prices?.eur_foil || "0");
 
   // Une version existe si elle est dans 'finishes' OU si elle a un prix
+  // (Parfois finishes est incomplet sur les vieux sets, le prix est un bon indicateur de backup)
   const hasNonFoil = cardData.finishes?.includes('nonfoil') || priceNormal > 0;
-  const hasFoil = cardData.finishes?.includes('foil') || priceFoil > 0;
+  // On ajoute 'etched' comme valide pour le foil
+  const hasFoil = cardData.finishes?.includes('foil') || cardData.finishes?.includes('etched') || priceFoil > 0;
 
   // Cas 1 : L'utilisateur VEUT du Foil
   if (requestedFoil) {

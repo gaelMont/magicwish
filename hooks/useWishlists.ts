@@ -1,15 +1,18 @@
 // hooks/useWishlists.ts
+'use client';
+
 import { useState, useEffect, useCallback } from 'react';
-import { db } from '@/lib/firebase';
-import { collection, onSnapshot, addDoc, doc, serverTimestamp, setDoc, updateDoc } from 'firebase/firestore';
 import { useAuth } from '@/lib/AuthContext';
-import { deleteWishlistAction } from '@/app/actions/wishlist'; 
+import { collection, onSnapshot, query, orderBy, doc, deleteDoc, updateDoc, writeBatch, getDocs } from 'firebase/firestore';
+import { db } from '@/lib/firebase';
+import { createListAction } from '@/app/actions/lists';
 import toast from 'react-hot-toast';
 
 export type WishlistMeta = {
   id: string;
   name: string;
-  isDefault?: boolean;
+  // AJOUT : Indispensable pour le tri
+  createdAt?: { seconds: number; nanoseconds: number };
 };
 
 export function useWishlists() {
@@ -17,92 +20,99 @@ export function useWishlists() {
   const [lists, setLists] = useState<WishlistMeta[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Stabilisation de createList avec useCallback
-  const createList = useCallback(async (name: string, customId?: string) => {
+  // Utilisation de l'action serveur pour la création
+  const createList = useCallback(async (name: string) => {
     if (!user) return;
+    const toastId = toast.loading("Création...");
     try {
-      const data = { name, createdAt: serverTimestamp() };
-      if (customId) {
-        await setDoc(doc(db, 'users', user.uid, 'wishlists_meta', customId), { ...data, isDefault: true });
+      const res = await createListAction(user.uid, name, 'wishlist');
+      
+      if (res.success) {
+        toast.success(`Liste "${name}" créée`, { id: toastId });
       } else {
-        await addDoc(collection(db, 'users', user.uid, 'wishlists_meta'), data);
+        toast.error(res.error || "Erreur création", { id: toastId });
       }
-      toast.success(`Liste "${name}" créée`);
-    } catch (err) {
-      console.error(err);
-      toast.error("Erreur création liste");
+    } catch (e) {
+      console.error(e);
+      toast.error("Erreur technique", { id: toastId });
     }
   }, [user]);
 
   useEffect(() => {
     if (!user) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setLists([]);
       setLoading(false);
       return;
     }
 
-    const metaRef = collection(db, 'users', user.uid, 'wishlists_meta');
-    
-    const unsubscribe = onSnapshot(metaRef, (snapshot) => {
+    const q = query(
+      collection(db, 'users', user.uid, 'wishlists_meta'),
+      orderBy('createdAt', 'asc')
+    );
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
       const fetchedLists = snapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
       })) as WishlistMeta[];
-
-      // Utilisation de createList stable ici
+      
+      // Auto-création de la première liste si aucune n'existe
       if (fetchedLists.length === 0 && !snapshot.metadata.fromCache) {
-        createList("Liste principale", "default");
+         // On appelle l'action, pas besoin d'ID "default" forcé, 
+         // la première créée sera la plus ancienne donc la "gratuite"
+         createList("Liste principale");
       } else {
-        fetchedLists.sort((a, b) => {
-          if (a.id === 'default') return -1;
-          if (b.id === 'default') return 1;
-          return a.name.localeCompare(b.name);
-        });
-        setLists(fetchedLists);
+         setLists(fetchedLists);
       }
+      
+      setLoading(false);
+    }, (error) => {
+      console.error("Erreur fetch wishlists:", error);
       setLoading(false);
     });
 
     return () => unsubscribe();
-  }, [user, createList]); // createList est maintenant une dépendance stable
+  }, [user, createList]);
 
   const renameList = async (listId: string, newName: string) => {
-    if (!user || listId === 'default') {
-        toast.error("Impossible de renommer la liste principale.");
-        return;
-    }
-    
+    if (!user) return;
     try {
-        const listRef = doc(db, 'users', user.uid, 'wishlists_meta', listId);
-        await updateDoc(listRef, { name: newName });
-        toast.success("Liste renommée");
-    } catch (err) {
-        console.error(err);
-        toast.error("Erreur lors du renommage");
+      await updateDoc(doc(db, 'users', user.uid, 'wishlists_meta', listId), {
+        name: newName
+      });
+      toast.success("Renommé !");
+    } catch (e) {
+      console.error(e);
+      toast.error("Erreur renommage");
     }
   };
 
   const deleteList = async (listId: string) => {
-    if (!user || listId === 'default') return; 
+    if (!user) return;
     if (!confirm("Supprimer cette liste et toutes ses cartes ?")) return;
     
-    const toastId = toast.loading("Suppression en cours...");
-
+    const toastId = toast.loading("Suppression...");
     try {
-        const result = await deleteWishlistAction(user.uid, listId);
+      // 1. Supprimer les cartes
+      const cardsRef = collection(db, 'users', user.uid, 'wishlists', listId, 'cards');
+      const cardsSnap = await getDocs(cardsRef);
+      
+      const batch = writeBatch(db);
+      cardsSnap.docs.forEach((doc) => {
+        batch.delete(doc.ref);
+      });
+      await batch.commit();
 
-        if (result.success) {
-            toast.success("Liste supprimée", { id: toastId });
-        } else {
-            throw new Error(result.error);
-        }
-    } catch (err: unknown) {
-        console.error(err);
-        let msg = "Erreur suppression";
-        if (err instanceof Error) msg = err.message;
-        toast.error(msg, { id: toastId });
+      // 2. Supprimer la méta
+      await deleteDoc(doc(db, 'users', user.uid, 'wishlists_meta', listId));
+      
+      toast.success("Liste supprimée", { id: toastId });
+    } catch (e) {
+      console.error(e);
+      toast.error("Erreur suppression", { id: toastId });
     }
   };
 
-  return { lists, loading, createList, renameList, deleteList };
+  return { lists, createList, renameList, deleteList, loading };
 }

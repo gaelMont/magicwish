@@ -1,7 +1,7 @@
 // components/Header.tsx
 'use client';
 
-import { useState, useRef } from 'react';
+import { useState, useRef, useMemo } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
 import { useAuth } from '@/lib/AuthContext';
@@ -9,9 +9,11 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import ThemeToggle from './ThemeToggle';
 import { useCollections } from '@/hooks/useCollections';
 import { useWishlists } from '@/hooks/useWishlists';
+import { CreditsDisplay } from '@/components/CreditsDisplay';
+import { Lock } from 'lucide-react'; // Icône professionnelle
 
 export default function Header() {
-  const { user, friendRequestCount, logOut } = useAuth();
+  const { user, userProfile, friendRequestCount, logOut } = useAuth();
   
   const { lists: collectionLists, createList: createCollection } = useCollections();
   const { lists: wishlistLists, createList: createWishlist } = useWishlists();
@@ -22,18 +24,33 @@ export default function Header() {
   
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   
-  // États des sous-menus Desktop
   const [showCollectionSubmenu, setShowCollectionSubmenu] = useState(false);
   const [showWishlistSubmenu, setShowWishlistSubmenu] = useState(false);
   
-  // Timers pour gérer le délai de fermeture (UX)
   const collectionTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const wishlistTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   
-  // États des sous-menus Mobile
   const [isMobileCollectionOpen, setIsMobileCollectionOpen] = useState(false);
   const [isMobileWishlistOpen, setIsMobileWishlistOpen] = useState(false);
   const [isMobileSocialOpen, setIsMobileSocialOpen] = useState(false);
+
+  // --- LOGIQUE PREMIUM ---
+  const isPremium = userProfile?.isPremium ?? false;
+  const MAX_FREE_LISTS = 1;
+
+  // Création bloquée si limite atteinte
+  const canCreateCollection = isPremium || collectionLists.length < MAX_FREE_LISTS;
+  const canCreateWishlist = isPremium || wishlistLists.length < MAX_FREE_LISTS;
+
+  // --- TRI DES LISTES ---
+  // On trie par date pour que la liste "Gratuite" (la plus ancienne) soit toujours en premier
+  const sortedWishlists = useMemo(() => {
+    return [...wishlistLists].sort((a, b) => (a.createdAt?.seconds || 0) - (b.createdAt?.seconds || 0));
+  }, [wishlistLists]);
+
+  const sortedCollections = useMemo(() => {
+    return [...collectionLists].sort((a, b) => (a.createdAt?.seconds || 0) - (b.createdAt?.seconds || 0));
+  }, [collectionLists]);
 
   const linkClass = (path: string) => `
     text-sm font-medium transition-colors block py-2 md:py-0
@@ -48,8 +65,15 @@ export default function Header() {
 
   if (!showHeader) return null;
   
-  // --- GESTION COLLECTIONS ---
+  // --- ACTIONS ---
+
   const handleCreateCollection = () => {
+      if (!canCreateCollection) {
+          if (confirm("Limite atteinte (1 collection max). Passez Premium pour créer des collections illimitées.")) {
+             router.push('/pricing');
+          }
+          return;
+      }
       const listName = prompt("Nom de la nouvelle collection:");
       if (listName && listName.trim()) {
           createCollection(listName.trim());
@@ -65,8 +89,13 @@ export default function Header() {
       setIsMenuOpen(false);
   };
 
-  // --- GESTION WISHLISTS ---
   const handleCreateWishlist = () => {
+      if (!canCreateWishlist) {
+        if (confirm("Limite atteinte (1 wishlist max). Passez Premium pour créer des listes illimitées.")) {
+           router.push('/pricing');
+        }
+        return;
+      }
       const listName = prompt("Nom de la nouvelle wishlist:");
       if (listName && listName.trim()) {
           createWishlist(listName.trim());
@@ -88,7 +117,8 @@ export default function Header() {
   const currentWishlistId = pathname.startsWith('/wishlist') 
     ? (searchParams.get('listId') || 'default') : 'default';
 
-  // --- LOGIQUE HOVER AVEC DÉLAI ---
+  // --- MOUSE EVENTS ---
+
   const openCollectionMenu = () => {
       if (collectionTimeoutRef.current) clearTimeout(collectionTimeoutRef.current);
       setShowCollectionSubmenu(true);
@@ -119,11 +149,14 @@ export default function Header() {
           </Link>
 
           <div className="flex items-center gap-4">
+            <div className="hidden md:block">
+               <CreditsDisplay />
+            </div>
+
             <ThemeToggle />
 
             {user ? (
               <>
-                {/* NAVIGATION DESKTOP */}
                 <nav className="hidden md:flex gap-6 mr-4 items-center h-full">
                   <Link href="/search" className={linkClass('/search')}>Recherche</Link> 
                   
@@ -134,30 +167,47 @@ export default function Header() {
                       onMouseLeave={closeWishlistMenu}
                   >
                       <Link href="/wishlist" className={linkClass('/wishlist')}>
-                          Wishlist
+                          Ma Wishlist
                       </Link>
                       
                       {showWishlistSubmenu && (
-                           <div className="absolute top-full left-0 pt-2 w-56 z-50">
+                           <div className="absolute top-full left-0 pt-2 w-64 z-50">
                                <div className="bg-surface border border-border rounded-lg shadow-xl overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+                                  <div className="px-3 py-2 text-xs font-bold text-muted uppercase tracking-wider bg-secondary/30">
+                                      Mes Listes
+                                  </div>
                                   <div className="py-1 max-h-64 overflow-y-auto custom-scrollbar">
-                                      {wishlistLists.map(list => (
-                                          <button 
-                                              key={list.id}
-                                              onClick={() => handleWishlistSelect(list.id)}
-                                              className={`w-full text-left px-4 py-2 text-sm transition truncate ${currentWishlistId === list.id ? 'text-primary font-bold bg-secondary' : 'text-foreground hover:bg-secondary'}`}
-                                              title={list.name}
-                                          >
-                                              {list.name}
-                                          </button>
-                                      ))}
+                                      {sortedWishlists.map((list, index) => {
+                                          // Une liste est "Verrouillée" si index >= 1 et User non premium
+                                          const isLocked = !isPremium && index >= MAX_FREE_LISTS;
+                                          
+                                          return (
+                                              <button 
+                                                  key={list.id}
+                                                  onClick={() => handleWishlistSelect(list.id)}
+                                                  className={`w-full text-left px-4 py-2 text-sm transition flex justify-between items-center group
+                                                      ${currentWishlistId === list.id ? 'text-primary font-bold bg-secondary' : 'text-foreground hover:bg-secondary'}
+                                                      ${isLocked ? 'opacity-70' : ''}
+                                                  `}
+                                                  title={list.name}
+                                              >
+                                                  <span className="truncate pr-2">{list.name}</span>
+                                                  {isLocked && (
+                                                      <Lock className="w-3.5 h-3.5 text-muted-foreground/60" />
+                                                  )}
+                                              </button>
+                                          );
+                                      })}
                                   </div>
                                   <div className="border-t border-border">
                                       <button 
                                           onClick={handleCreateWishlist} 
-                                          className="w-full text-left px-4 py-2 text-sm text-primary hover:bg-secondary font-bold"
+                                          className={`w-full text-left px-4 py-2 text-sm font-bold flex justify-between items-center ${
+                                            canCreateWishlist ? 'text-primary hover:bg-secondary' : 'text-muted bg-secondary/50 cursor-not-allowed'
+                                          }`}
                                       >
-                                          + Nouvelle Liste
+                                          <span>+ Nouvelle Liste</span>
+                                          {!canCreateWishlist && <span className="text-[10px] bg-muted text-surface px-1 rounded">MAX</span>}
                                       </button>
                                   </div>
                               </div>
@@ -172,30 +222,46 @@ export default function Header() {
                       onMouseLeave={closeCollectionMenu}
                   >
                       <Link href="/collection" className={linkClass('/collection')}>
-                          Collection
+                          Ma Collection
                       </Link>
                       
                       {showCollectionSubmenu && (
-                           <div className="absolute top-full left-0 pt-2 w-56 z-50">
+                           <div className="absolute top-full left-0 pt-2 w-64 z-50">
                                <div className="bg-surface border border-border rounded-lg shadow-xl overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+                                  <div className="px-3 py-2 text-xs font-bold text-muted uppercase tracking-wider bg-secondary/30">
+                                      Mes Classeurs
+                                  </div>
                                   <div className="py-1 max-h-64 overflow-y-auto custom-scrollbar">
-                                      {collectionLists.map(list => (
-                                          <button 
-                                              key={list.id}
-                                              onClick={() => handleCollectionSelect(list.id)}
-                                              className={`w-full text-left px-4 py-2 text-sm transition truncate ${currentCollectionId === list.id ? 'text-primary font-bold bg-secondary' : 'text-foreground hover:bg-secondary'}`}
-                                              title={list.name}
-                                          >
-                                              {list.name}
-                                          </button>
-                                      ))}
+                                      {sortedCollections.map((list, index) => {
+                                          const isLocked = !isPremium && index >= MAX_FREE_LISTS;
+
+                                          return (
+                                              <button 
+                                                  key={list.id}
+                                                  onClick={() => handleCollectionSelect(list.id)}
+                                                  className={`w-full text-left px-4 py-2 text-sm transition flex justify-between items-center group
+                                                      ${currentCollectionId === list.id ? 'text-primary font-bold bg-secondary' : 'text-foreground hover:bg-secondary'}
+                                                      ${isLocked ? 'opacity-70' : ''}
+                                                  `}
+                                                  title={list.name}
+                                              >
+                                                  <span className="truncate pr-2">{list.name}</span>
+                                                  {isLocked && (
+                                                      <Lock className="w-3.5 h-3.5 text-muted-foreground/60" />
+                                                  )}
+                                              </button>
+                                          );
+                                      })}
                                   </div>
                                   <div className="border-t border-border">
                                       <button 
                                           onClick={handleCreateCollection} 
-                                          className="w-full text-left px-4 py-2 text-sm text-primary hover:bg-secondary font-bold"
+                                          className={`w-full text-left px-4 py-2 text-sm font-bold flex justify-between items-center ${
+                                            canCreateCollection ? 'text-primary hover:bg-secondary' : 'text-muted bg-secondary/50 cursor-not-allowed'
+                                          }`}
                                       >
-                                          + Nouvelle Collection
+                                          <span>+ Nouveau Classeur</span>
+                                          {!canCreateCollection && <span className="text-[10px] bg-muted text-surface px-1 rounded">MAX</span>}
                                       </button>
                                   </div>
                               </div>
@@ -205,7 +271,7 @@ export default function Header() {
                   
                   <Link href="/trades" className={linkClass('/trades')}>Echanges</Link>
                     
-                  {/* --- MENU SOCIAL DESKTOP --- */}
+                  {/* --- SOCIAL --- */}
                   <div className="relative group h-full flex items-center">
                     <button className={`text-sm font-medium transition-colors flex items-center gap-1 ${isSocialActive ? 'text-primary font-bold' : 'text-muted hover:text-foreground'}`}>
                       Social
@@ -220,7 +286,6 @@ export default function Header() {
                     <div className="absolute top-full right-0 pt-2 w-48 z-50 invisible group-hover:visible opacity-0 group-hover:opacity-100 transition-all duration-200">
                       <div className="bg-surface border border-border rounded-lg shadow-xl overflow-hidden">
                         <div className="py-1">
-                            {/* Suppression de la séparation ici pour un bloc Social uni */}
                             <Link href="/stats" className="flex w-full px-4 py-2 text-sm text-foreground hover:bg-secondary transition items-center">
                             Panthéon
                             </Link>
@@ -285,6 +350,10 @@ export default function Header() {
         {/* MOBILE MENU */}
         {user && isMenuOpen && (
           <div className="md:hidden mt-4 pt-4 border-t border-border animate-in slide-in-from-top-2">
+             <div className="mb-4 flex justify-center">
+                 <CreditsDisplay />
+             </div>
+             
              <nav className="flex flex-col space-y-3">
                <Link href="/search" className={linkClass('/search')} onClick={() => setIsMenuOpen(false)}>Recherche</Link>
                
@@ -294,27 +363,36 @@ export default function Header() {
                       onClick={() => setIsMobileWishlistOpen(!isMobileWishlistOpen)}
                       className={`${linkClass('/wishlist')} w-full text-left py-2 flex justify-between items-center`}
                   >
-                      Wishlist
+                      Ma Wishlist
                       <span className={`text-[10px] transform transition-transform ${isMobileWishlistOpen ? 'rotate-180' : ''}`}>▼</span>
                   </button>
                   
                   {isMobileWishlistOpen && (
                       <div className="bg-background/50 p-2 space-y-1 animate-in fade-in slide-in-from-top-2 mb-2 rounded-lg">
-                          {wishlistLists.map(list => (
-                              <button 
-                                  key={list.id}
-                                  onClick={() => handleWishlistSelect(list.id)}
-                                  className={`w-full text-left px-2 py-2 text-sm rounded transition ${currentWishlistId === list.id ? 'text-primary font-bold bg-secondary' : 'text-foreground hover:bg-secondary'}`}
-                              >
-                                  {list.name}
-                              </button>
-                          ))}
+                          <div className="text-xs font-bold text-muted uppercase tracking-wider px-2 py-1">Mes Listes</div>
+                          {sortedWishlists.map((list, index) => {
+                              const isLocked = !isPremium && index >= MAX_FREE_LISTS;
+                              return (
+                                  <button 
+                                      key={list.id}
+                                      onClick={() => handleWishlistSelect(list.id)}
+                                      className={`w-full text-left px-2 py-2 text-sm rounded transition flex justify-between items-center
+                                          ${currentWishlistId === list.id ? 'text-primary font-bold bg-secondary' : 'text-foreground hover:bg-secondary'}
+                                          ${isLocked ? 'opacity-70' : ''}
+                                      `}
+                                  >
+                                      <span>{list.name}</span>
+                                      {isLocked && <Lock className="w-3.5 h-3.5 text-muted-foreground/60" />}
+                                  </button>
+                              );
+                          })}
                           <div className="border-t border-border my-1"></div>
                           <button 
                               onClick={handleCreateWishlist} 
-                              className="w-full text-left px-2 py-2 text-sm text-primary hover:bg-secondary font-bold"
+                              className={`w-full text-left px-2 py-2 text-sm font-bold flex justify-between ${canCreateWishlist ? 'text-primary hover:bg-secondary' : 'text-muted cursor-not-allowed'}`}
                           >
-                              + Nouvelle Liste
+                              <span>+ Nouvelle Liste</span>
+                              {!canCreateWishlist && <span className="text-[10px] bg-muted text-surface px-1 rounded">MAX</span>}
                           </button>
                       </div>
                   )}
@@ -326,27 +404,36 @@ export default function Header() {
                       onClick={() => setIsMobileCollectionOpen(!isMobileCollectionOpen)}
                       className={`${linkClass('/collection')} w-full text-left py-2 flex justify-between items-center`}
                   >
-                      Collection
+                      Ma Collection
                       <span className={`text-[10px] transform transition-transform ${isMobileCollectionOpen ? 'rotate-180' : ''}`}>▼</span>
                   </button>
                   
                   {isMobileCollectionOpen && (
                       <div className="bg-background/50 p-2 space-y-1 animate-in fade-in slide-in-from-top-2 mb-2 rounded-lg">
-                          {collectionLists.map(list => (
-                              <button 
-                                  key={list.id}
-                                  onClick={() => handleCollectionSelect(list.id)}
-                                  className={`w-full text-left px-2 py-2 text-sm rounded transition ${currentCollectionId === list.id ? 'text-primary font-bold bg-secondary' : 'text-foreground hover:bg-secondary'}`}
-                              >
-                                  {list.name}
-                              </button>
-                          ))}
+                          <div className="text-xs font-bold text-muted uppercase tracking-wider px-2 py-1">Mes Classeurs</div>
+                          {sortedCollections.map((list, index) => {
+                              const isLocked = !isPremium && index >= MAX_FREE_LISTS;
+                              return (
+                                  <button 
+                                      key={list.id}
+                                      onClick={() => handleCollectionSelect(list.id)}
+                                      className={`w-full text-left px-2 py-2 text-sm rounded transition flex justify-between items-center
+                                          ${currentCollectionId === list.id ? 'text-primary font-bold bg-secondary' : 'text-foreground hover:bg-secondary'}
+                                          ${isLocked ? 'opacity-70' : ''}
+                                      `}
+                                  >
+                                      <span>{list.name}</span>
+                                      {isLocked && <Lock className="w-3.5 h-3.5 text-muted-foreground/60" />}
+                                  </button>
+                              );
+                          })}
                           <div className="border-t border-border my-1"></div>
                           <button 
                               onClick={handleCreateCollection} 
-                              className="w-full text-left px-2 py-2 text-sm text-primary hover:bg-secondary font-bold"
+                              className={`w-full text-left px-2 py-2 text-sm font-bold flex justify-between ${canCreateCollection ? 'text-primary hover:bg-secondary' : 'text-muted cursor-not-allowed'}`}
                           >
-                              + Nouvelle Collection
+                              <span>+ Nouveau Classeur</span>
+                              {!canCreateCollection && <span className="text-[10px] bg-muted text-surface px-1 rounded">MAX</span>}
                           </button>
                       </div>
                   )}
@@ -354,7 +441,7 @@ export default function Header() {
                
                <Link href="/trades" className={linkClass('/trades')} onClick={() => setIsMenuOpen(false)}>Echanges</Link>
                
-               {/* --- MOBILE SOCIAL (REDUIT) --- */}
+               {/* --- MOBILE SOCIAL --- */}
                <div className="border-b border-border/50">
                   <button 
                       onClick={() => setIsMobileSocialOpen(!isMobileSocialOpen)}
@@ -373,12 +460,12 @@ export default function Header() {
                   
                   {isMobileSocialOpen && (
                     <div className="bg-background/50 p-2 space-y-1 animate-in fade-in slide-in-from-top-2 mb-2 rounded-lg">
-                       <Link href="/stats" className="block w-full text-left px-2 py-2 text-sm text-foreground hover:bg-secondary rounded" onClick={() => setIsMenuOpen(false)}>Panthéon</Link>
-                       <Link href="/contacts" className="flex justify-between items-center w-full text-left px-2 py-2 text-sm text-foreground hover:bg-secondary rounded" onClick={() => setIsMenuOpen(false)}>
+                        <Link href="/stats" className="block w-full text-left px-2 py-2 text-sm text-foreground hover:bg-secondary rounded" onClick={() => setIsMenuOpen(false)}>Panthéon</Link>
+                        <Link href="/contacts" className="flex justify-between items-center w-full text-left px-2 py-2 text-sm text-foreground hover:bg-secondary rounded" onClick={() => setIsMenuOpen(false)}>
                           Mes Contacts
                           {friendRequestCount > 0 && <span className="bg-primary text-white text-[10px] px-1.5 rounded-full">{friendRequestCount}</span>}
-                       </Link>
-                       <Link href="/groups" className="block w-full text-left px-2 py-2 text-sm text-foreground hover:bg-secondary rounded" onClick={() => setIsMenuOpen(false)}>Mes Playgroups</Link>
+                        </Link>
+                        <Link href="/groups" className="block w-full text-left px-2 py-2 text-sm text-foreground hover:bg-secondary rounded" onClick={() => setIsMenuOpen(false)}>Mes Playgroups</Link>
                     </div>
                   )}
                </div>

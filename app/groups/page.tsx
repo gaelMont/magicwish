@@ -94,6 +94,7 @@ export default function GroupsPage() {
             if (res.success && res.chatId) {
                 setActiveChat({ chatId: res.chatId, recipientName: targetName });
             }
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
         } catch (error) {
             toast.error("Erreur lors de l'ouverture du chat");
         }

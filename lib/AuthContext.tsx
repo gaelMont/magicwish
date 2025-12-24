@@ -10,15 +10,16 @@ import {
   signOut, 
   User,
   Unsubscribe,
-  sendEmailVerification // 1. IMPORT AJOUTÉ
+  sendEmailVerification 
 } from 'firebase/auth';
-import { doc, onSnapshot, collection, getDoc, setDoc, serverTimestamp } from 'firebase/firestore'; 
+import { doc, onSnapshot, collection, getDoc, setDoc, serverTimestamp, updateDoc } from 'firebase/firestore'; 
 import { auth, db } from './firebase'; 
 import toast from 'react-hot-toast';
+import { UserProfile } from '@/lib/types';
 
-// Typage strict
 type AuthContextType = {
   user: User | null;
+  userProfile: UserProfile | null;
   username: string | null;
   loading: boolean;
   friendRequestCount: number;
@@ -27,13 +28,13 @@ type AuthContextType = {
   signInWithEmail: (email: string, pass: string) => Promise<boolean>;
   signUpWithEmail: (email: string, pass: string) => Promise<boolean>;
   logOut: () => Promise<void>;
-  // 2. NOUVELLES MÉTHODES AJOUTÉES AU TYPE
   sendVerificationEmail: () => Promise<boolean>;
   reloadUser: () => Promise<void>;
 };
 
 const AuthContext = createContext<AuthContextType>({
   user: null,
+  userProfile: null,
   username: null,
   loading: true,
   friendRequestCount: 0,
@@ -46,7 +47,6 @@ const AuthContext = createContext<AuthContextType>({
   reloadUser: async () => {},
 });
 
-// Helper pour traduire les erreurs Firebase
 const getErrorMessage = (code: string) => {
     switch (code) {
         case 'auth/email-already-in-use': return "Cet email est déjà utilisé.";
@@ -64,6 +64,7 @@ export const useAuth = () => useContext(AuthContext);
 
 export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const [user, setUser] = useState<User | null>(null);
+  const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const [username, setUsername] = useState<string | null>(null);
   const [friendRequestCount, setFriendRequestCount] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -71,45 +72,74 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
   useEffect(() => {
     let unsubProfile: Unsubscribe | null = null;
+    let unsubUserData: Unsubscribe | null = null;
     let unsubRequests: Unsubscribe | null = null;
     let unsubAdmin: Unsubscribe | null = null;
 
     const unsubscribeAuth = onAuthStateChanged(auth, async (currentUser) => {
       
-      // Nettoyage des anciens listeners si l'user change
       if (unsubProfile) { unsubProfile(); unsubProfile = null; }
+      if (unsubUserData) { unsubUserData(); unsubUserData = null; }
       if (unsubRequests) { unsubRequests(); unsubRequests = null; }
       if (unsubAdmin) { unsubAdmin(); unsubAdmin = null; }
 
       setUser(currentUser);
 
       if (currentUser) {
-        // --- 0. CRUCIAL : Vérification/Création du Document Racine (Anti-Fantôme) ---
-        // (Code conservé intact pour éviter les bugs)
-        try {
-          const userRootRef = doc(db, 'users', currentUser.uid);
-          const userRootSnap = await getDoc(userRootRef);
-          
-          if (!userRootSnap.exists()) {
-            // Création du document racine s'il n'existe pas
-            await setDoc(userRootRef, {
-              uid: currentUser.uid,
-              email: currentUser.email,
-              displayName: currentUser.displayName,
-              photoURL: currentUser.photoURL,
-              createdAt: serverTimestamp(),
-              lastLogin: serverTimestamp(),
-              // Champs par défaut pour éviter les erreurs ailleurs
-              cardCount: 0,
-              isCollectionPublic: false
-            }, { merge: true });
-            console.log("Document utilisateur racine initialisé.");
-          }
-        } catch (err) {
-          console.error("Erreur lors de l'init user racine:", err);
-        }
+        const userRef = doc(db, 'users', currentUser.uid);
 
-        // --- 1. Vérification Admin (Via Firestore) ---
+        // --- Check & Reset Daily Credits ---
+        const checkDailyCredits = async () => {
+             try {
+                 const userSnap = await getDoc(userRef);
+                 
+                 // Initialisation si nouveau user
+                 if (!userSnap.exists()) {
+                    await setDoc(userRef, {
+                        uid: currentUser.uid,
+                        email: currentUser.email,
+                        displayName: currentUser.displayName,
+                        photoURL: currentUser.photoURL,
+                        createdAt: serverTimestamp(),
+                        lastLogin: serverTimestamp(),
+                        cardCount: 0,
+                        isCollectionPublic: false,
+                        isPremium: false,
+                        dailyCredits: 5,
+                        lastCreditReset: new Date().toISOString().split('T')[0]
+                    }, { merge: true });
+                    return; // Le listener prendra le relais
+                 }
+
+                 // Logique de reset
+                 const data = userSnap.data() as UserProfile;
+                 const todayStr = new Date().toISOString().split('T')[0];
+                 
+                 // Si pas premium et nouvelle journée => Reset
+                 if (!data.isPremium && data.lastCreditReset !== todayStr) {
+                     await updateDoc(userRef, {
+                         dailyCredits: 5,
+                         lastCreditReset: todayStr
+                     });
+                 }
+             } catch (err) {
+                 console.error("Erreur checkDailyCredits:", err);
+             }
+        };
+        
+        // On lance la vérification sans bloquer le reste
+        checkDailyCredits();
+
+        // --- Listeners ---
+
+        // 1. User Data (Credits, Premium)
+        unsubUserData = onSnapshot(userRef, (docSnap) => {
+            if (docSnap.exists()) {
+                setUserProfile(docSnap.data() as UserProfile);
+            }
+        });
+
+        // 2. Admin Check
         const adminRef = doc(db, 'admins', currentUser.uid);
         unsubAdmin = onSnapshot(adminRef, (docSnap) => {
             setIsAdmin(docSnap.exists());
@@ -118,7 +148,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
             setIsAdmin(false);
         });
 
-        // --- 2. Profil Public ---
+        // 3. Public Profile
         const profileRef = doc(db, 'users', currentUser.uid, 'public_profile', 'info');
         unsubProfile = onSnapshot(profileRef, (docSnap) => {
           if (docSnap.exists()) {
@@ -127,12 +157,11 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
             setUsername(null);
           }
           setLoading(false);
-        }, (error) => {
-            console.log("Info: Profil non chargé (peut-être nouvelle inscription)", error.code);
+        }, () => {
             setLoading(false);
         });
 
-        // --- 3. Notifications ---
+        // 4. Friend Requests
         const requestsRef = collection(db, 'users', currentUser.uid, 'friend_requests_received');
         unsubRequests = onSnapshot(requestsRef, (snap) => {
           setFriendRequestCount(snap.docs.length);
@@ -141,7 +170,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         });
 
       } else {
-        // Reset complet
+        setUserProfile(null);
         setUsername(null);
         setFriendRequestCount(0);
         setIsAdmin(false);
@@ -152,6 +181,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     return () => {
       unsubscribeAuth();
       if (unsubProfile) unsubProfile();
+      if (unsubUserData) unsubUserData();
       if (unsubRequests) unsubRequests();
       if (unsubAdmin) unsubAdmin();
     };
@@ -193,11 +223,9 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
   const signUpWithEmail = async (email: string, pass: string) => {
     try {
-        // 3. MODIFICATION : Récupérer l'objet userCredential
         const userCred = await createUserWithEmailAndPassword(auth, email, pass);
         toast.success("Compte créé avec succès !");
         
-        // 4. MODIFICATION : Envoi automatique de la vérification
         if (userCred.user) {
             try {
                 await sendEmailVerification(userCred.user);
@@ -229,8 +257,6 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     }
   };
 
-  // --- 5. NOUVELLES FONCTIONS ---
-
   const sendVerificationEmail = async () => {
     if (!auth.currentUser) return false;
     try {
@@ -248,7 +274,6 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     if (!auth.currentUser) return;
     try {
         await auth.currentUser.reload();
-        // On force la mise à jour de l'état local pour que l'UI réagisse
         setUser({ ...auth.currentUser });
         
         if (auth.currentUser.emailVerified) {
@@ -263,6 +288,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
   const value = useMemo(() => ({
     user,
+    userProfile,
     username,
     friendRequestCount,
     loading,
@@ -271,10 +297,9 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     signInWithEmail,
     signUpWithEmail,
     logOut,
-    // Export des nouvelles fonctions
     sendVerificationEmail,
     reloadUser
-  }), [user, username, loading, friendRequestCount, isAdmin]);
+  }), [user, userProfile, username, loading, friendRequestCount, isAdmin]);
 
   return (
     <AuthContext.Provider value={value}>

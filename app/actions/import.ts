@@ -1,3 +1,4 @@
+// app/actions/import.ts
 'use server';
 
 import { getAdminFirestore } from '@/lib/firebase-admin';
@@ -5,6 +6,7 @@ import { FieldValue } from 'firebase-admin/firestore';
 import { updateUserStats } from '@/app/actions/stats';
 import { validateImport } from '@/lib/importRules';
 import { ScryfallRawData } from '@/lib/cardUtils';
+import { checkAndConsumeCredits } from '@/lib/limits';
 
 export type ImportItemInput = {
     scryfallId?: string;
@@ -22,7 +24,7 @@ interface ScryfallIdentifier {
     collector_number?: string;
 }
 
-// Typage strict de la réponse API en utilisant le type partagé
+// Interface de réponse Scryfall alignée avec ScryfallRawData
 interface ScryfallResponse {
     data: ScryfallRawData[];
     not_found?: Array<{
@@ -40,6 +42,13 @@ export async function importCardsAction(
     targetListId: string = 'default'
 ): Promise<{ success: boolean; count: number; error?: string; report?: { imported: number; errors: Array<{ name: string; reason: string }> } }> {
     
+    // --- VERIFICATION CREDIT ---
+    const creditCheck = await checkAndConsumeCredits(userId, 'IMPORT');
+    if (!creditCheck.allowed) {
+        return { success: false, count: 0, error: creditCheck.error };
+    }
+    // ---------------------------
+
     const db = getAdminFirestore();
     
     let collectionPath = '';
@@ -123,8 +132,7 @@ export async function importCardsAction(
                 });
 
                 if (originalItem) {
-                    // --- VALIDATION (Plus de 'as any' ici !) ---
-                    // scryCard est déjà de type ScryfallRawData grâce à l'interface ScryfallResponse
+                    // Appel correct avec 2 arguments : ScryfallRawData et boolean
                     const validation = validateImport(scryCard, originalItem.isFoil);
                     
                     if (!validation.isValid) {

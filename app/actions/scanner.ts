@@ -3,6 +3,7 @@
 
 import { getAdminFirestore } from '@/lib/firebase-admin';
 import { CardType } from '@/hooks/useCardCollection';
+import { checkAndConsumeCredits } from '@/lib/limits';
 
 // Définition stricte des types de retour
 export type ScannedPartnerInfo = {
@@ -26,13 +27,13 @@ export type ScannerResult = {
 
 // Interfaces internes Firestore
 interface FirestoreUserData {
-    displayName?: unknown; // Devrait être string
-    username?: unknown;    // Devrait être string
-    photoURL?: unknown;    // Devrait être string | null
+    displayName?: unknown;
+    username?: unknown;
+    photoURL?: unknown;
 }
 
 interface FirestoreGroupData {
-    members?: unknown;     // Devrait être string[]
+    members?: unknown;
 }
 
 // Typage strict pour les données brutes de la carte Firestore
@@ -64,7 +65,7 @@ interface FirestoreCardData {
 const serializeCard = (docId: string, data: FirestoreCardData, forceIsWishlist: boolean): CardType => {
     
     const toDate = (val: unknown): Date | null => {
-        if (val && typeof val === 'object' && typeof (val as { toDate: () => Date }).toDate === 'function') {
+        if (val && typeof val === 'object' && 'toDate' in val && typeof (val as { toDate: () => Date }).toDate === 'function') {
             return (val as { toDate: () => Date }).toDate();
         }
         if (val instanceof Date) return val;
@@ -75,13 +76,18 @@ const serializeCard = (docId: string, data: FirestoreCardData, forceIsWishlist: 
     const isNumber = (val: unknown): number | undefined => typeof val === 'number' ? val : undefined;
     const isBoolean = (val: unknown): boolean => typeof val === 'boolean' ? val : false;
 
+    // Pré-calcul pour éviter les assertions non nulles (!) plus bas
+    const rawQuantity = isNumber(data.quantity);
+    const rawQuantityForTrade = isNumber(data.quantityForTrade);
+    const isForTradeBool = isBoolean(data.isForTrade);
+
     return {
         id: docId,
         name: isString(data.name) || 'Carte Inconnue',
         imageUrl: isString(data.imageUrl) || '',
         imageBackUrl: isString(data.imageBackUrl) ?? null,
         
-        quantity: isNumber(data.quantity) || 1,
+        quantity: rawQuantity !== undefined ? rawQuantity : 1,
         price: isNumber(data.price) || 0,
         customPrice: isNumber(data.customPrice),
         
@@ -91,9 +97,10 @@ const serializeCard = (docId: string, data: FirestoreCardData, forceIsWishlist: 
         isFoil: isBoolean(data.isFoil),
         isSpecificVersion: isBoolean(data.isSpecificVersion),
         
-        quantityForTrade: isNumber(data.quantityForTrade) !== undefined
-            ? isNumber(data.quantityForTrade)!
-            : (isBoolean(data.isForTrade) && isNumber(data.quantity) !== undefined ? isNumber(data.quantity)! : 0),
+        // Logique stricte pour la quantité d'échange sans "any" ni "!"
+        quantityForTrade: rawQuantityForTrade !== undefined
+            ? rawQuantityForTrade
+            : (isForTradeBool && rawQuantity !== undefined ? rawQuantity : 0),
         
         wishlistId: forceIsWishlist ? (isString(data.wishlistId) || 'default') : null,
         
@@ -107,6 +114,14 @@ const serializeCard = (docId: string, data: FirestoreCardData, forceIsWishlist: 
 
 export async function runServerScan(userId: string): Promise<ScannerResult> {
     const db = getAdminFirestore();
+
+    // --- VERIFICATION CREDIT ---
+    // On vérifie et consomme le crédit AVANT de lancer les requêtes lourdes
+    const creditCheck = await checkAndConsumeCredits(userId, 'TRADE_MATCH');
+    if (!creditCheck.allowed) {
+        return { success: false, error: creditCheck.error };
+    }
+    // ---------------------------
 
     try {
         // 1. Identifier tous les partenaires (Amis + Groupes)
@@ -131,7 +146,9 @@ export async function runServerScan(userId: string): Promise<ScannerResult> {
             const d = g.data() as FirestoreGroupData;
             const members = Array.isArray(d.members) ? d.members : [];
             members.forEach((m: unknown) => {
-                if (typeof m === 'string' && m !== userId && !partnersMap.has(m)) memberUids.add(m);
+                if (typeof m === 'string' && m !== userId && !partnersMap.has(m)) {
+                    memberUids.add(m);
+                }
             });
         });
 

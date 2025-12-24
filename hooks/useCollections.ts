@@ -1,15 +1,18 @@
 // hooks/useCollections.ts
+'use client';
+
 import { useState, useEffect } from 'react';
-import { db } from '@/lib/firebase';
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-import { collection, onSnapshot, addDoc, doc, serverTimestamp, setDoc, deleteDoc, updateDoc } from 'firebase/firestore';
 import { useAuth } from '@/lib/AuthContext';
+import { collection, onSnapshot, query, orderBy, doc, deleteDoc, writeBatch, getDocs } from 'firebase/firestore';
+import { db } from '@/lib/firebase';
+import { createListAction } from '@/app/actions/lists';
 import toast from 'react-hot-toast';
 
 export type CollectionMeta = {
   id: string;
   name: string;
-  isDefault?: boolean;
+  // AJOUT : Indispensable pour le tri dans le Header
+  createdAt?: { seconds: number; nanoseconds: number };
 };
 
 export function useCollections() {
@@ -19,37 +22,28 @@ export function useCollections() {
 
   useEffect(() => {
     if (!user) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setLists([]); 
+      setLists([]);
       setLoading(false);
       return;
     }
 
-    const metaRef = collection(db, 'users', user.uid, 'collections_meta');
-    
-    const unsubscribe = onSnapshot(metaRef, (snapshot) => {
-      const fetchedLists: CollectionMeta[] = snapshot.docs.map(doc => ({
+    // On trie directement par date de création côté Firestore
+    const q = query(
+      collection(db, 'users', user.uid, 'collections_meta'),
+      orderBy('createdAt', 'asc')
+    );
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const data = snapshot.docs.map(doc => ({
         id: doc.id,
-        ...(doc.data() as Omit<CollectionMeta, 'id'>) 
-      }));
-
-      const hasDefault = fetchedLists.some(l => l.id === 'default');
-      if (!hasDefault) {
-          fetchedLists.unshift({ 
-              id: 'default', 
-              name: 'Collection Principale (Binder)', 
-              isDefault: true 
-          });
-      }
-
-      fetchedLists.sort((a, b) => {
-          if (a.id === 'default') return -1;
-          if (b.id === 'default') return 1;
-          return a.name.localeCompare(b.name);
-      });
+        ...doc.data()
+      })) as CollectionMeta[];
       
-      setLists(fetchedLists);
-      setLoading(false); 
+      setLists(data);
+      setLoading(false);
+    }, (error) => {
+      console.error("Erreur fetch collections:", error);
+      setLoading(false);
     });
 
     return () => unsubscribe();
@@ -57,49 +51,66 @@ export function useCollections() {
 
   const createList = async (name: string) => {
     if (!user) return;
+    const toastId = toast.loading("Création...");
     try {
-      const data = { name, createdAt: serverTimestamp() };
-      await addDoc(collection(db, 'users', user.uid, 'collections_meta'), data);
-      toast.success(`Collection "${name}" créée`);
-    } catch (err) {
-      console.error(err);
-      toast.error("Erreur création collection");
+      // Utilisation de l'action serveur pour vérifier les limites (Gratuit vs Premium)
+      const res = await createListAction(user.uid, name, 'collection');
+      
+      if (res.success) {
+        toast.success(`Collection "${name}" créée`, { id: toastId });
+      } else {
+        toast.error(res.error || "Erreur création", { id: toastId });
+      }
+    } catch (e) {
+      console.error(e);
+      toast.error("Erreur technique", { id: toastId });
     }
   };
 
   const renameList = async (listId: string, newName: string) => {
-    if (!user || listId === 'default') {
-        toast.error("Impossible de renommer la collection principale.");
-        return;
-    }
+    // Note: Pour renommer, on peut utiliser updateDoc directement car pas de logique de limite ici
+    // Mais on pourrait aussi créer une Server Action si besoin de sécu supplémentaire
+    // Pour l'instant on garde votre logique qui fonctionnait (via import dynamique ou adaptation)
+    // Comme votre code original utilisait updateDoc, je le réintègre ici :
+    const { updateDoc } = await import('firebase/firestore'); // Import dynamique pour alléger ou standard
     
+    if (!user) return;
     try {
-        const listRef = doc(db, 'users', user.uid, 'collections_meta', listId);
-        await updateDoc(listRef, { name: newName });
-        toast.success("Collection renommée");
-    } catch (err) {
-        console.error(err);
-        toast.error("Erreur lors du renommage");
+      await updateDoc(doc(db, 'users', user.uid, 'collections_meta', listId), {
+        name: newName
+      });
+      toast.success("Renommé !");
+    } catch (e) {
+      console.error(e);
+      toast.error("Erreur renommage");
     }
   };
 
   const deleteList = async (listId: string) => {
-    if (!user || listId === 'default') {
-        toast.error("Impossible de supprimer la collection principale.");
-        return; 
-    }
-    if (!confirm("Supprimer cette collection et TOUTES ses cartes ?")) return;
+    if (!user) return;
+    if (!confirm("Attention : Cela supprimera TOUTES les cartes de ce classeur. Continuer ?")) return;
     
-    const toastId = toast.loading("Suppression en cours...");
-
+    const toastId = toast.loading("Suppression...");
     try {
-        await deleteDoc(doc(db, 'users', user.uid, 'collections_meta', listId));
-        toast.success("Collection supprimée (Le contenu sera nettoyé en arrière-plan).", { id: toastId });
-    } catch (err) {
-        console.error(err);
-        toast.error("Erreur suppression", { id: toastId });
+      // 1. Supprimer les cartes (sous-collection)
+      const cardsRef = collection(db, 'users', user.uid, 'collections', listId, 'cards');
+      const cardsSnap = await getDocs(cardsRef);
+      
+      const batch = writeBatch(db);
+      cardsSnap.docs.forEach((doc) => {
+        batch.delete(doc.ref);
+      });
+      await batch.commit();
+
+      // 2. Supprimer la méta
+      await deleteDoc(doc(db, 'users', user.uid, 'collections_meta', listId));
+      
+      toast.success("Classeur supprimé", { id: toastId });
+    } catch (e) {
+      console.error(e);
+      toast.error("Erreur suppression", { id: toastId });
     }
   };
 
-  return { lists, loading, createList, renameList, deleteList };
+  return { lists, createList, renameList, deleteList, loading };
 }

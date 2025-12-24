@@ -1,4 +1,4 @@
-// app/privacy-policy/page.tsx
+// app/politique-confidentialite/page.tsx
 'use client';
 
 import React from 'react';
@@ -22,10 +22,29 @@ export default function PrivacyPolicyPage() {
                         </ul>
                     </section>
 
+                    {/* --- NOUVELLE SECTION STRIPE --- */}
                     <section className="bg-primary/5 p-6 rounded-lg border border-primary/20">
-                        <h2 className="text-xl font-bold text-primary mb-3">2. Publicité et Cookies Google AdSense</h2>
+                        <h2 className="text-xl font-bold text-primary mb-3">2. Paiements et Données Bancaires (Stripe)</h2>
                         <p className="mb-4 text-foreground">
-                            Nous utilisons des fournisseurs tiers, y compris Google, pour diffuser des annonces sur notre application.
+                            Pour la gestion des abonnements Premium, nous utilisons les services de paiement sécurisés de <strong>Stripe</strong>.
+                        </p>
+                        <ul className="list-disc list-inside ml-4 space-y-3 text-sm">
+                            <li>
+                                <strong>Sécurité des données :</strong> MagicWish ne collecte, ne stocke et ne traite <strong>aucune</strong> donnée bancaire complète (numéro de carte, cryptogramme). Ces données sont saisies directement dans le module sécurisé de Stripe.
+                            </li>
+                            <li>
+                                <strong>Partage de données :</strong> Seules les informations strictement nécessaires à la facturation et à la gestion de l&apos;abonnement (adresse email, identifiant utilisateur, statut du paiement) sont partagées avec Stripe.
+                            </li>
+                            <li>
+                                <a href="https://stripe.com/privacy" target="_blank" rel="noopener noreferrer" className="underline text-primary font-bold">Consulter la politique de confidentialité de Stripe</a>
+                            </li>
+                        </ul>
+                    </section>
+
+                    <section>
+                        <h2 className="text-xl font-bold text-primary mb-3">3. Publicité et Cookies Google AdSense</h2>
+                        <p className="mb-4 text-foreground">
+                            Pour les utilisateurs de la version gratuite, nous utilisons des fournisseurs tiers, y compris Google, pour diffuser des annonces.
                         </p>
                         <ul className="list-disc list-inside ml-4 space-y-3 text-sm">
                             <li>
@@ -38,13 +57,13 @@ export default function PrivacyPolicyPage() {
                     </section>
 
                     <section>
-                        <h2 className="text-xl font-bold text-primary mb-3">3. Données Collectées</h2>
-                        <p>Nous collectons l&apos;email, le pseudonyme et les listes de cartes uniquement pour assurer le service de matching et d&apos;échanges.</p>
+                        <h2 className="text-xl font-bold text-primary mb-3">4. Données Collectées</h2>
+                        <p>Nous collectons l&apos;email, le pseudonyme et les listes de cartes pour assurer le service de matching, de gestion de collection et d&apos;échanges.</p>
                     </section>
 
                     <div className="pt-8 border-t border-border mt-8 flex flex-col md:flex-row justify-between items-center gap-4">
-                        <p className="text-xs">Dernière mise à jour : 19 Décembre 2025</p>
-                        <Link href="/mentions-legales" className="text-xs text-primary hover:underline font-bold">Mentions Légales</Link>
+                        <p className="text-xs">Dernière mise à jour : 24 Décembre 2025</p>
+                        <Link href="/mentions-legales" className="text-xs text-primary hover:underline font-bold">Mentions Légales & CGV</Link>
                     </div>
                 </div>
             </div>

@@ -5,7 +5,7 @@ import { useState, useMemo, useEffect, Suspense } from 'react';
 import { useAuth } from '@/lib/AuthContext';
 import { useWishlists } from '@/hooks/useWishlists';
 import { useCardCollection, CardType } from '@/hooks/useCardCollection';
-import { useSearchParams } from 'next/navigation';
+import { useSearchParams, useRouter } from 'next/navigation';
 import { useColumnPreference } from '@/hooks/useColumnPreference';
 import { useSortPreference, SortOption } from '@/hooks/useSortPreference';
 import { moveCardFromWishlistToCollection } from '@/lib/services/collectionService';
@@ -19,13 +19,16 @@ import ExportModal from '@/components/ExportModal';
 import CollectionToolbar from '@/components/collection/CollectionToolbar';
 import CardListFilterBar from '@/components/common/CardListFilterBar';
 import ConfirmModal from '@/components/ConfirmModal';
+import { LockedListModal } from '@/components/LockedListModal';
+import { Lock } from 'lucide-react'; // AJOUT DE L'IMPORT
 import toast from 'react-hot-toast';
 
 const ITEMS_PER_PAGE = 50;
 
 function WishlistContent() {
-  const { user } = useAuth();
+  const { user, userProfile } = useAuth();
   const searchParams = useSearchParams();
+  const router = useRouter();
   
   const selectedListId = searchParams.get('listId') || 'default';
   const { lists, renameList, deleteList, loading: metaLoading } = useWishlists();
@@ -34,6 +37,16 @@ function WishlistContent() {
       cards, loading, updateQuantity, removeCard, toggleAttribute, 
       bulkRemoveCards, totalPrice 
   } = useCardCollection('wishlist', selectedListId);
+
+  const isLocked = useMemo(() => {
+    if (selectedListId === 'default' || selectedListId === 'GLOBAL_VIEW') return false;
+    if (userProfile?.isPremium) return false;
+
+    const sortedLists = [...lists].sort((a, b) => (a.createdAt?.seconds || 0) - (b.createdAt?.seconds || 0));
+    const index = sortedLists.findIndex(l => l.id === selectedListId);
+    
+    return index >= 1;
+  }, [selectedListId, lists, userProfile]);
 
   const [isHubOpen, setIsHubOpen] = useState(false);
   const [isImportOpen, setIsImportOpen] = useState(false);
@@ -67,26 +80,10 @@ function WishlistContent() {
       setRenameValue(currentListName);
   }, [currentListName]);
 
-  const closeAllModals = () => {
-    setIsHubOpen(false);
-    setIsImportOpen(false);
-    setIsExportOpen(false);
-  };
-  const openHub = () => {
-    setIsImportOpen(false);
-    setIsExportOpen(false);
-    setIsHubOpen(true);
-  };
-
-  const handleSelectImport = () => {
-    setIsHubOpen(false);
-    setIsImportOpen(true);
-  };
-  
-  const handleSelectExport = () => {
-    setIsHubOpen(false);
-    setIsExportOpen(true);
-  };
+  const closeAllModals = () => { setIsHubOpen(false); setIsImportOpen(false); setIsExportOpen(false); };
+  const openHub = () => { setIsImportOpen(false); setIsExportOpen(false); setIsHubOpen(true); };
+  const handleSelectImport = () => { setIsHubOpen(false); setIsImportOpen(true); };
+  const handleSelectExport = () => { setIsHubOpen(false); setIsExportOpen(true); };
 
   const handleRenameSubmit = async (e: React.FormEvent) => {
       e.preventDefault();
@@ -100,12 +97,12 @@ function WishlistContent() {
       if (listToDelete) {
           await deleteList(listToDelete);
           setListToDelete(null);
-          window.location.href = '/wishlist';
+          router.push('/wishlist');
       }
   };
 
   const moveToCollection = async (card: CardType) => {
-    if (!user) return;
+    if (!user || isLocked) return;
     const toastId = toast.loading("Déplacement...");
     const result = await moveCardFromWishlistToCollection(user.uid, card, selectedListId);
     if (result.success) {
@@ -175,15 +172,18 @@ function WishlistContent() {
   const visibleCards = filteredAndSortedCards.slice(0, visibleCount);
 
   const toggleSelection = (id: string) => {
+      if (isLocked) return;
       setSelectedIds(prev => prev.includes(id) ? prev.filter(pid => pid !== id) : [...prev, id]);
   };
 
   const handleSelectAll = () => {
+      if (isLocked) return;
       if (selectedIds.length === filteredAndSortedCards.length) setSelectedIds([]); 
       else setSelectedIds(filteredAndSortedCards.map(c => c.id)); 
   };
 
   const handleBulkDelete = async () => {
+      if (isLocked) return;
       if (!confirm(`Supprimer ces ${selectedIds.length} cartes ?`)) return;
       await bulkRemoveCards(selectedIds);
       setSelectedIds([]);
@@ -208,19 +208,24 @@ function WishlistContent() {
 
   return (
     <main className="container mx-auto p-4 pb-24 relative">
+      <LockedListModal isOpen={isLocked} listName={currentListName} />
+
       <div className="flex justify-between items-center mb-6">
           <div className="overflow-hidden grow pr-4">
-              {isRenaming ? (
+              {isRenaming && !isLocked ? (
                   <form onSubmit={handleRenameSubmit} className="flex items-center gap-2">
                       <input type="text" value={renameValue} onChange={(e) => setRenameValue(e.target.value)} className="text-2xl font-black text-foreground bg-background border border-border rounded-xl px-2 py-1 outline-none focus:ring-2 focus:ring-primary w-full max-w-md" autoFocus />
                       <button type="submit" className="bg-success-vif text-white px-3 py-1 rounded-lg font-bold text-sm uppercase">OK</button>
                   </form>
               ) : (
                   <div>
-                      <h1 className="text-2xl md:text-3xl font-black text-foreground truncate uppercase tracking-tighter">
-                          {currentListName} <span className="text-base font-bold text-muted">({filteredAndSortedCards.length})</span>
+                      <h1 className="text-2xl md:text-3xl font-black text-foreground truncate uppercase tracking-tighter flex items-center gap-2">
+                          {currentListName} 
+                          <span className="text-base font-bold text-muted">({filteredAndSortedCards.length})</span>
+                          {/* UTILISATION DE L'ICÔNE LOCK */}
+                          {isLocked && <Lock className="w-5 h-5 text-muted-foreground" />}
                       </h1>
-                      {selectedListId !== 'default' && (
+                      {selectedListId !== 'default' && !isLocked && (
                           <button onClick={() => setListToDelete(selectedListId)} className="text-[10px] font-black text-danger hover:underline mt-1 block uppercase tracking-widest">Supprimer la liste</button>
                       )}
                   </div>
@@ -232,12 +237,14 @@ function WishlistContent() {
           </div>
       </div>
 
-      <CollectionToolbar
-          isSelectMode={isSelectMode}
-          setIsSelectMode={setIsSelectMode}
-          onOpenHub={openHub}
-          onOpenTools={() => {}} // Pas d'outils spécifiques wishlist pour l'instant
-      />
+      {!isLocked && (
+          <CollectionToolbar
+              isSelectMode={isSelectMode}
+              setIsSelectMode={setIsSelectMode}
+              onOpenHub={openHub}
+              onOpenTools={() => {}} 
+          />
+      )}
 
       <CardListFilterBar
         context="wishlist"
@@ -265,7 +272,7 @@ function WishlistContent() {
         hideSliderOnMobile={true}
       />
 
-      {isSelectMode && (
+      {isSelectMode && !isLocked && (
           <div className="mb-4 flex items-center justify-between bg-primary/10 p-3 rounded-xl border border-primary/30 animate-in fade-in">
               <span className="font-bold text-primary pl-2 uppercase text-xs tracking-widest">{selectedIds.length} carte(s) sélectionnée(s)</span>
               <button onClick={handleSelectAll} className="text-xs text-primary font-black px-3 py-1 rounded-lg hover:bg-primary/10 transition uppercase">Tout sélectionner</button>
@@ -287,13 +294,14 @@ function WishlistContent() {
                         key={card.id}
                         {...card}
                         isWishlist={true}
-                        onIncrement={() => updateQuantity(card.id, 1, card.quantity)}
-                        onDecrement={() => card.quantity <= 1 ? setCardToDelete(card.id) : updateQuantity(card.id, -1, card.quantity)}
-                        onMove={() => moveToCollection(card)}
-                        onToggleAttribute={(field, val) => toggleAttribute(card.id, field, val)}
-                        isSelectMode={isSelectMode}
+                        hideFooter={isLocked}
+                        isSelectMode={isSelectMode && !isLocked}
                         isSelected={selectedIds.includes(card.id)}
                         onSelect={() => toggleSelection(card.id)}
+                        onIncrement={!isLocked ? () => updateQuantity(card.id, 1, card.quantity) : undefined}
+                        onDecrement={!isLocked ? () => card.quantity <= 1 ? setCardToDelete(card.id) : updateQuantity(card.id, -1, card.quantity) : undefined}
+                        onMove={!isLocked ? () => moveToCollection(card) : undefined}
+                        onToggleAttribute={!isLocked ? (field, val) => toggleAttribute(card.id, field, val) : undefined}
                     />
                 ))}
             </div>
@@ -305,7 +313,7 @@ function WishlistContent() {
         </>
       )}
 
-      {isSelectMode && selectedIds.length > 0 && (
+      {isSelectMode && selectedIds.length > 0 && !isLocked && (
           <div className="fixed bottom-6 left-4 right-4 md:left-1/2 md:right-auto md:-translate-x-1/2 bg-surface shadow-2xl border border-border p-2 rounded-2xl flex items-center justify-around gap-2 z-50 animate-in slide-in-from-bottom-6 duration-300">
               <button onClick={handleBulkDelete} className="px-4 py-2 bg-danger hover:bg-red-600 text-white rounded-xl text-xs font-black transition flex flex-col items-center leading-none gap-1 shadow-md w-full uppercase"><span>Supprimer {selectedIds.length} cartes</span></button>
           </div>

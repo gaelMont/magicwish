@@ -1,11 +1,21 @@
+// components/CardVersionPickerModal.tsx
 'use client';
 
 import { useState, useEffect, useMemo } from 'react';
 import Image from 'next/image';
 import { CardType } from '@/hooks/useCardCollection';
 import { normalizeCardData, ScryfallRawData } from '@/lib/cardUtils'; 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 import { WishlistMeta } from '@/hooks/useWishlists'; 
+// On réutilise le type WishlistMeta car CollectionMeta a la même structure (id, name, createdAt)
+import { useAuth } from '@/lib/AuthContext'; 
 import toast from 'react-hot-toast';
+
+type ListMeta = {
+  id: string;
+  name: string;
+  createdAt?: { seconds: number; nanoseconds: number };
+};
 
 type Props = {
   isOpen: boolean;
@@ -13,7 +23,7 @@ type Props = {
   baseCard: ScryfallRawData | null; 
   onConfirm: (card: CardType, targetListId?: string) => void;
   destination?: 'collection' | 'wishlist'; 
-  availableLists?: WishlistMeta[];
+  availableLists?: ListMeta[]; // Peut être des collections ou des wishlists
 };
 
 interface ScryfallSearchResponse {
@@ -26,6 +36,7 @@ interface ScryfallSearchResponse {
 export default function CardVersionPickerModal({ 
   isOpen, onClose, baseCard, onConfirm, destination, availableLists 
 }: Props) {
+  const { userProfile } = useAuth();
   const [versions, setVersions] = useState<ScryfallRawData[]>([]);
   const [loading, setLoading] = useState(false);
   
@@ -36,6 +47,15 @@ export default function CardVersionPickerModal({
   const [anyVersion, setAnyVersion] = useState(false);
   
   const [selectedListId, setSelectedListId] = useState<string>('default');
+
+  // Tri pour cohérence index 0 = gratuit
+  const sortedAvailableLists = useMemo(() => {
+      if (!availableLists) return [];
+      return [...availableLists].sort((a, b) => (a.createdAt?.seconds || 0) - (b.createdAt?.seconds || 0));
+  }, [availableLists]);
+
+  const isPremium = userProfile?.isPremium ?? false;
+  const MAX_FREE_LISTS = 1;
 
   useEffect(() => {
     const fetchVersions = async (oracleId: string) => {
@@ -64,8 +84,14 @@ export default function CardVersionPickerModal({
     setQuantity(1);
     setIsFlipped(false);
     setAnyVersion(false);
-    setSelectedListId('default'); 
-  }, [isOpen, baseCard]); 
+    
+    // On sélectionne par défaut la première liste accessible (la gratuite)
+    if (sortedAvailableLists.length > 0) {
+        setSelectedListId(sortedAvailableLists[0].id);
+    } else {
+        setSelectedListId('default');
+    }
+  }, [isOpen, baseCard, sortedAvailableLists]); 
 
   const currentCardRaw = useMemo(() => {
     return versions.find(v => v.id === selectedVersionId) || baseCard;
@@ -108,7 +134,9 @@ export default function CardVersionPickerModal({
         isFoil: isFoil,
         isSpecificVersion: !anyVersion,
         scryfallData: currentCardRaw,
+        // On assigne l'ID de la liste cible selon la destination
         wishlistId: destination === 'wishlist' ? selectedListId : undefined,
+        // Note: Pour 'collection', l'ID est géré par le parent (onConfirm) via le second argument
         uid: '',
         quantityForTrade: 0
     };
@@ -119,7 +147,6 @@ export default function CardVersionPickerModal({
 
   const handleAnyVersionChange = (checked: boolean) => {
       setAnyVersion(checked);
-      
       if (checked && versions.length > 0) {
           const sorted = [...versions].sort((a, b) => 
               (b.released_at || '').localeCompare(a.released_at || '')
@@ -136,16 +163,13 @@ export default function CardVersionPickerModal({
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 backdrop-blur-sm animate-in fade-in duration-200">
       <div className="bg-surface w-full max-w-md rounded-2xl overflow-hidden shadow-2xl border border-border flex flex-col max-h-[90vh]">
         
-        {/* HEADER */}
         <div className="p-4 flex justify-between items-center border-b border-border bg-surface">
             <h3 className="text-foreground font-bold truncate pr-4">{name}</h3>
             <button onClick={onClose} className="text-muted hover:text-foreground px-2 text-sm font-bold">Fermer</button>
         </div>
 
-        {/* CONTENT */}
         <div className="overflow-y-auto p-6 flex flex-col items-center space-y-6 custom-scrollbar bg-background">
             
-            {/* IMAGE - FORMAT NORMAL SANS CADRE VISIBLE */}
             <div 
               className="relative w-72 aspect-[2.5/3.5] group cursor-pointer bg-transparent" 
               onClick={() => imageBackUrl && setIsFlipped(!isFlipped)}
@@ -162,14 +186,11 @@ export default function CardVersionPickerModal({
                           priority
                           className={`object-cover transition-transform duration-300 ${anyVersion ? 'opacity-80 grayscale-50' : ''}`} 
                         />
-                        
-                        {/* EFFET FOIL PHYSIQUE */}
                         {isFoil && !anyVersion && (
                             <div className="absolute inset-0 bg-linear-to-tr from-purple-500/20 via-transparent to-white/10 mix-blend-overlay pointer-events-none" />
                         )}
                     </div>
                 )}
-                
                 {anyVersion && (
                     <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
                         <span className="bg-primary text-primary-foreground font-bold px-3 py-1 rounded-full text-sm shadow-lg border border-white/20">Generique</span>
@@ -177,23 +198,35 @@ export default function CardVersionPickerModal({
                 )}
             </div>
 
-            {/* WISHLIST SELECTOR */}
-            {destination === 'wishlist' && availableLists && availableLists.length > 0 && (
+            {/* SÉLECTEUR DE LISTE (COLLECTION OU WISHLIST) */}
+            {sortedAvailableLists.length > 0 && (
                 <div className="w-full space-y-1 bg-purple-500/10 p-3 rounded-xl border border-purple-500/30">
-                    <label className="text-xs text-purple-600 dark:text-purple-300 font-bold uppercase tracking-wider">Ajouter a la liste :</label>
+                    <label className="text-xs text-purple-600 dark:text-purple-300 font-bold uppercase tracking-wider">
+                        Ajouter a la {destination === 'wishlist' ? 'liste' : 'collection'} :
+                    </label>
                     <select 
                         value={selectedListId}
                         onChange={(e) => setSelectedListId(e.target.value)}
                         className="w-full bg-surface text-foreground border border-border rounded-lg p-2 text-sm focus:ring-2 focus:ring-purple-500 outline-none"
                     >
-                        {availableLists.map(list => (
-                            <option key={list.id} value={list.id}>{list.name}</option>
-                        ))}
+                        {sortedAvailableLists.map((list, index) => {
+                            // VERROUILLAGE : Index >= 1 et pas Premium
+                            const isLocked = !isPremium && index >= MAX_FREE_LISTS;
+                            
+                            return (
+                                <option 
+                                    key={list.id} 
+                                    value={list.id}
+                                    disabled={isLocked} // Empêche de sélectionner une liste verrouillée
+                                >
+                                    {list.name} {isLocked ? '(Verrouillé)' : ''}
+                                </option>
+                            );
+                        })}
                     </select>
                 </div>
             )}
 
-            {/* VERSION SELECTOR */}
             <div className={`w-full space-y-2 transition-opacity ${anyVersion ? 'opacity-50 pointer-events-none' : 'opacity-100'}`}>
                 <label className="text-xs text-muted uppercase font-bold tracking-wider">Edition / Set</label>
                 <div className="relative">
@@ -274,7 +307,6 @@ export default function CardVersionPickerModal({
             </div>
         </div>
 
-        {/* CONFIRM BUTTON */}
         <div className="p-4 bg-surface border-t border-border">
             <button 
                 onClick={handleConfirm}

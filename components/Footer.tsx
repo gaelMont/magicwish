@@ -1,3 +1,4 @@
+// components/Footer.tsx
 import React from 'react';
 import Link from 'next/link';
 
@@ -7,11 +8,6 @@ export default function Footer() {
     return (
         <footer className="w-full border-t border-border bg-card/50 mt-auto">
             <div className="container mx-auto px-4 py-12">
-                {/* Utilisation de 4 colonnes sur Desktop :
-                   - Colonne 1 & 2 (span-2) : Marque + Description (prend la moitié de la largeur)
-                   - Colonne 3 : Liens Légaux
-                   - Colonne 4 : Disclaimer WotC
-                */}
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-8 lg:gap-12 mb-8">
                     
                     {/* Bloc Marque : Prend 2 colonnes sur 4 */}
@@ -22,7 +18,7 @@ export default function Footer() {
                             </h3>
                             <p className="text-sm text-muted-foreground mt-2 max-w-md leading-relaxed">
                                 L&apos;outil de référence pour gérer vos collections de cartes Magic: The Gathering. 
-                                trouvez facilement les cartes que vous cherchez dans les collections de vos amis !
+                                Trouvez facilement les cartes que vous cherchez dans les collections de vos amis !
                             </p>
                         </div>
                     </div>
@@ -31,9 +27,15 @@ export default function Footer() {
                     <div className="flex flex-col gap-4">
                         <h3 className="font-semibold text-foreground">Informations</h3>
                         <ul className="space-y-2 text-sm text-muted-foreground">
+                            {/* AJOUT DU LIEN PREMIUM ICI */}
+                            <li>
+                                <Link href="/pricing" className="hover:text-primary transition-colors font-medium text-blue-600 dark:text-blue-400">
+                                    Offre Premium (1€)
+                                </Link>
+                            </li>
                             <li>
                                 <Link href="/mentions-legales" className="hover:text-primary transition-colors">
-                                    Mentions Légales
+                                    Mentions Légales & CGV
                                 </Link>
                             </li>
                             <li>
